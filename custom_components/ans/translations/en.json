@@ -1,0 +1,204 @@
+{
+    "title": "Advanced Notification System",
+    "description": "Advanced, identity-aware notification routing and delivery for Home Assistant.",
+    "config": {
+        "step": {
+            "system_settings": {
+                "title": "System Settings",
+                "description": "Configure global settings for the Advanced Notification System (rate limits, retries and enabled channels).",
+                "data": {
+                    "retry_attempts_max": "Maximum retry attempts",
+                    "rate_limit_max": "Global rate limit (max notifications per window)",
+                    "rate_limit_window": "Rate limit window (seconds)",
+                    "enabled_channels": "Enabled notification channels",
+                    "define_identity_default_settings": "Define default identity settings now"
+                }
+            },
+            "default_identity_basic_settings": {
+                "title": "Default Identity — Basic Settings",
+                "description": "Default per-identity settings used when creating new identities (rate limit, retry attempts, notification types, blocked sources).",
+                "data": {
+                    "rate_limit": "Identity rate limit (notifications per window)",
+                    "retry_attempts": "Retry attempts (per delivery)",
+                    "notification_types": "Notification types to receive",
+                    "blocked_sources_pattern": "Blocked sources (regular expression)"
+                }
+            },
+            "default_identity_channel_mapping": {
+                "title": "Default Identity — Channel Mapping",
+                "description": "Map notification criticality levels to default delivery channels for identities.",
+                "data": {
+                    "channels_low": "Channels for low criticality",
+                    "channels_medium": "Channels for medium criticality",
+                    "channels_high": "Channels for high criticality",
+                    "channels_critical": "Channels for critical criticality"
+                }
+            },
+            "default_identity_dnd_settings": {
+                "title": "Default Identity — Do Not Disturb (DND)",
+                "description": "Default Do Not Disturb settings for identities. You can allow exceptions by source pattern.",
+                "data": {
+                    "dnd_enabled": "Enable Do Not Disturb",
+                    "dnd_start": "DND start time (24-hour format)",
+                    "dnd_end": "DND end time (24-hour format)",
+                    "dnd_allowed_sources_pattern": "Allowed sources during DND (regular expression)"
+                }
+            },
+            "auto_ha_user_configuration": {
+                "title": "Auto-configure Home Assistant Users",
+                "description": "Select Home Assistant users to automatically create ANS identities for.",
+                "data": {
+                    "selected_ha_users": "Selected Home Assistant users"
+                }
+            },
+            "identity_selection": {
+                "title": "Identity Selection",
+                "description": "Choose an existing Home Assistant user or create a custom identity.",
+                "data": {
+                    "id": "Identity ID",
+                    "type": "Identity type",
+                    "name": "Display name",
+                    "email": "Email address (optional)",
+                    "phone": "Phone number (optional, E.164 format)"
+                }
+            },
+            "identity_channel_mapping": {
+                "title": "Identity — Channel Mapping",
+                "description": "Choose channels for each criticality level for this identity.",
+                "data": {
+                    "channels_low": "Channels for low criticality",
+                    "channels_medium": "Channels for medium criticality",
+                    "channels_high": "Channels for high criticality",
+                    "channels_critical": "Channels for critical criticality"
+                }
+            },
+            "identity_dnd_settings": {
+                "title": "Identity — Do Not Disturb (DND)",
+                "description": "Configure DND for this identity; use allowed-source patterns to exempt some sources.",
+                "data": {
+                    "dnd_enabled": "Enable Do Not Disturb",
+                    "dnd_start": "DND start time (24-hour format)",
+                    "dnd_end": "DND end time (24-hour format)",
+                    "dnd_allowed_sources_pattern": "Allowed sources during DND (regular expression)"
+                }
+            }
+        },
+        "error": {
+            "invalid_system_settings": "Invalid system settings.",
+            "invalid_identity_settings": "Invalid identity settings.",
+            "ha_user_detection_failed": "Failed to detect Home Assistant users.",
+            "invalid_ha_user_selection": "Invalid Home Assistant user selection.",
+            "create_entry_failed": "Failed to create integration entry. See logs for details.",
+            "reconfigure_entry_not_found": "Reconfiguration entry was not found.",
+            "reconfigure_changes_applied": "Configuration updated successfully.",
+            "base": "Unknown error — see logs for details.",
+            "retry_attempts_max": "Maximum retries must be an integer ≥ 0.",
+            "rate_limit_max": "Maximum rate limit must be an integer ≥ 0.",
+            "rate_limit_window": "Rate limit window must be a positive integer (seconds).",
+            "enabled_channels": "Select at least one enabled channel.",
+            "define_identity_default_settings": "Invalid selection.",
+            "rate_limit": "Rate limit must be an integer between {min} and {max}.",
+            "retry_attempts": "Retry attempts must be an integer between {min} and {max}.",
+            "notification_types": "Select at least one notification type.",
+            "blocked_sources_pattern": "Invalid regular expression for blocked sources.",
+            "channels_low": "One or more channels are invalid or unavailable.",
+            "channels_medium": "One or more channels are invalid or unavailable.",
+            "channels_high": "One or more channels are invalid or unavailable.",
+            "channels_critical": "One or more channels are invalid or unavailable.",
+            "dnd_enabled": "DND flag must be true or false.",
+            "dnd_start": "Invalid start time. Use 24-hour format (HH:MM:SS).",
+            "dnd_start_missing": "Start time must be defined when DND is enabled.",
+            "dnd_end": "Invalid end time. Use 24-hour format (HH:MM:SS).",
+            "dnd_end_missing": "End time must be defined when DND is enabled.",
+            "dnd_start_end_equals": "Start and end times cannot be the same.",
+            "dnd_allowed_sources_pattern": "Invalid regular expression for allowed DND sources.",
+            "selected_ha_users": "Invalid selection of HA users."
+        }
+    },
+    "options": {
+        "step": {
+            "default_identity_basic_settings": {
+                "title": "Edit Default Identity — Basic Settings",
+                "description": "Edit the identity defaults used when creating new identities.",
+                "data": {
+                    "rate_limit": "Identity rate limit (notifications per window)",
+                    "retry_attempts": "Retry attempts (per delivery)",
+                    "notification_types": "Notification types to receive",
+                    "blocked_sources_pattern": "Blocked sources (regular expression)"
+                }
+            },
+            "default_identity_channel_mapping": {
+                "title": "Edit Default Identity — Channel Mapping",
+                "description": "Edit default criticality → channel mappings for identities.",
+                "data": {
+                    "channels_low": "Channels for low criticality",
+                    "channels_medium": "Channels for medium criticality",
+                    "channels_high": "Channels for high criticality",
+                    "channels_critical": "Channels for critical criticality"
+                }
+            },
+            "default_identity_dnd_settings": {
+                "title": "Edit Default Identity — DND",
+                "description": "Edit default Do Not Disturb settings for identities.",
+                "data": {
+                    "dnd_enabled": "Enable Do Not Disturb",
+                    "dnd_start": "DND start time (24-hour format)",
+                    "dnd_end": "DND end time (24-hour format)",
+                    "dnd_allowed_sources_pattern": "Allowed sources during DND (regular expression)"
+                }
+            }
+        },
+        "error": {
+            "base": "Unknown error — see logs for details.",
+            "rate_limit": "Rate limit must be an integer between {min} and {max}.",
+            "retry_attempts": "Retry attempts must be an integer between {min} and {max}.",
+            "notification_types": "Select at least one notification type.",
+            "blocked_sources_pattern": "Invalid regular expression for blocked sources.",
+            "channels_low": "One or more channels are invalid or unavailable.",
+            "channels_medium": "One or more channels are invalid or unavailable.",
+            "channels_high": "One or more channels are invalid or unavailable.",
+            "channels_critical": "One or more channels are invalid or unavailable.",
+            "dnd_enabled": "DND flag must be true or false.",
+            "dnd_start": "Invalid start time. Use 24-hour format (HH:MM:SS).",
+            "dnd_start_missing": "Start time must be defined when DND is enabled.",
+            "dnd_end": "Invalid end time. Use 24-hour format (HH:MM:SS).",
+            "dnd_end_missing": "End time must be defined when DND is enabled.",
+            "dnd_start_end_equals": "Start and end times cannot be the same.",
+            "dnd_allowed_sources_pattern": "Invalid regular expression for allowed DND sources."
+        }
+    },
+    "entity": {},
+    "strings": {
+        "ID_CONFIG_ID_KEY": "ID cannot be empty.",
+        "ID_CONFIG_TYPE_KEY": "Invalid identity type.",
+        "ID_CONFIG_NAME_KEY": "Name cannot be empty.",
+        "ID_CONFIG_EMAIL_KEY": "Invalid email address.",
+        "ID_CONFIG_PHONE_KEY": "Invalid phone number (use E.164, e.g. +1234567890).",
+        "version": "Configuration version invalid.",
+        "rate_limit": "Rate limit must be an integer between {min} and {max}.",
+        "retry_attempts": "Retry attempts must be an integer between {min} and {max}.",
+        "notification_types": "Select at least one notification type.",
+        "blocked_sources_pattern": "Invalid regular expression for blocked sources{reason}.",
+        "channels_low": "One or more channels are invalid or unavailable.",
+        "channels_medium": "One or more channels are invalid or unavailable.",
+        "channels_high": "One or more channels are invalid or unavailable.",
+        "channels_critical": "One or more channels are invalid or unavailable.",
+        "dnd_enabled": "DND flag must be true or false.",
+        "dnd_start": "Invalid start time. Use 24-hour format (HH:MM).",
+        "dnd_end": "Invalid end time. Use 24-hour format (HH:MM).",
+        "dnd_allowed_sources_pattern": "Invalid regular expression for allowed DND sources{reason}.",
+        "retry_attempts_max": "Maximum retries must be an integer ≥ 0.",
+        "rate_limit_max": "Maximum rate limit must be an integer ≥ 0.",
+        "rate_limit_window": "Rate limit window must be a positive integer (seconds).",
+        "enabled_channels": "Select at least one enabled channel.",
+        "define_identity_default_settings": "Invalid selection.",
+        "identity_id": "Internal identity id invalid.",
+        "DND_same_times": "Start and end times cannot be the same.",
+        "duplicate_identity_id": "An identity with this ID already exists.",
+        "invalid_channel_format": "Channel IDs must be in the form notify.<service_name>.",
+        "invalid_time_range": "DND start must not equal end; or define appropriate start/end times.",
+        "invalid_notification_type_value": "Unknown notification type: '{value}'.",
+        "regex_too_complex": "Regular expression is too complex or unsupported.",
+        "base_unexpected_error": "Invalid configuration — see logs for details."
+    }
+}

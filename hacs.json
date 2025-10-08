@@ -1,0 +1,8 @@
+{
+    "name": "Advanced Notification System",
+    "hide_default_branch": true,
+    "homeassistant": "2025.7.0",
+    "render_readme": true,
+    "filename": "ans.zip",
+    "zip_release": true
+}

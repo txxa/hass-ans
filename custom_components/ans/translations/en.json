@@ -1,0 +1,216 @@
+{
+    "title": "Advanced Notification System",
+    "config": {
+        "step": {
+            "system_settings": {
+                "title": "System Settings",
+                "description": "Configure global settings for the Advanced Notification System (rate limits, retries and enabled channels).",
+                "data": {
+                    "retry_attempts_max": "Maximum retry attempts",
+                    "rate_limit_max": "Global rate limit (max notifications/min)",
+                    "enabled_channels": "Enabled notification channels",
+                    "persistent_notifications_enabled": "Enable persistent notifications (auto-configures system-wide channel)",
+                    "enable_audit_logging": "Enable audit logging (tracks notifications and delivery attempts)"
+                }
+            }
+        },
+        "error": {
+            "invalid_system_settings": "Invalid system settings.",
+            "invalid_identity_settings": "Invalid identity settings.",
+            "ha_user_detection_failed": "Failed to detect Home Assistant users.",
+            "invalid_ha_user_selection": "Invalid Home Assistant user selection.",
+            "create_entry_failed": "Failed to create integration entry. See logs for details.",
+            "reconfigure_entry_not_found": "Reconfiguration entry was not found.",
+            "base": "Unknown error — see logs for details.",
+            "retry_attempts_max": "Maximum retries must be an integer ≥ 0.",
+            "rate_limit_max": "Maximum rate limit must be an integer ≥ 0.",
+            "enabled_channels": "At least one channel must be enabled or persistent notifications must be enabled.",
+            "define_identity_default_settings": "Invalid selection.",
+            "rate_limit": "Rate limit must be an integer between {min} and {max}.",
+            "retry_attempts": "Retry attempts must be an integer between {min} and {max}.",
+            "notification_types": "Select at least one notification type."
+        },
+        "abort": {
+            "reconfigure_changes_applied": "Configuration updated successfully."
+        }
+    },
+    "options": {
+        "step": {
+            "init": {
+                "title": "System Configuration",
+                "description": "Configure system-wide settings for rate limiting, retry behavior, queue concurrency, and audit log retention.",
+                "data": {
+                    "global_rate_limit": "Global rate limit (max notifications/min)",
+                    "retry_base_delay": "Retry base delay (seconds)",
+                    "retry_backoff_factor": "Retry backoff multiplier",
+                    "retry_max_delay": "Retry maximum delay (seconds)",
+                    "queue_max_concurrency": "Queue max concurrency (parallel deliveries)",
+                    "storage_retention_days": "Audit log retention (days, only shown if audit logging enabled)"
+                }
+            },
+            "default_identity_basic_settings": {
+                "title": "System Channels — Basic Settings",
+                "description": "Configure basic settings for system-wide notification channels (like persistent notifications).",
+                "data": {
+                    "rate_limit": "Rate limit (notifications/min)",
+                    "retry_attempts": "Retry attempts (per delivery)",
+                    "notification_types": "Notification types to receive",
+                    "blocked_sources_regex": "Blocked sources (regular expression)"
+                }
+            },
+            "default_identity_channel_mapping": {
+                "title": "System Channels — Channel Mapping",
+                "description": "Map system-wide channels to notification criticality levels.",
+                "data": {
+                    "channels_low": "Channels for low criticality",
+                    "channels_medium": "Channels for medium criticality",
+                    "channels_high": "Channels for high criticality",
+                    "channels_critical": "Channels for critical criticality"
+                }
+            },
+            "default_identity_dnd_settings": {
+                "title": "System Channels — Do Not Disturb",
+                "description": "Configure Do Not Disturb settings for system-wide channels.",
+                "data": {
+                    "dnd_enabled": "Enable Do Not Disturb",
+                    "dnd_start": "DND start time (24-hour format)",
+                    "dnd_end": "DND end time (24-hour format)",
+                    "dnd_allowed_sources_regex": "Allowed sources during DND (regular expression)",
+                    "dnd_allowed_criticalities": "Criticality levels that bypass DND (select multiple to enable)",
+                    "dnd_allowed_types": "Notification types that bypass DND (select multiple to enable)"
+                }
+            }
+        },
+        "error": {
+            "base": "Unknown error — see logs for details.",
+            "rate_limit": "Rate limit must be an integer between {min} and {max}.",
+            "retry_attempts": "Retry attempts must be an integer between {min} and {max}.",
+            "retry_base_delay": "Retry base delay must be an integer between 1 and 3600 seconds.",
+            "retry_backoff_factor": "Retry backoff factor must be a number between 1.0 and 5.0.",
+            "retry_max_delay": "Retry max delay must be an integer between 60 and 86400 seconds.",
+            "queue_max_concurrency": "Queue concurrency must be an integer between 1 and 20.",
+            "storage_retention_days": "Audit log retention must be an integer between 0 and 365 days.",
+            "notification_types": "Select at least one notification type.",
+            "blocked_sources_regex": "Invalid regular expression for blocked sources.",
+            "channels_low": "One or more channels are invalid or unavailable.",
+            "channels_medium": "One or more channels are invalid or unavailable.",
+            "channels_high": "One or more channels are invalid or unavailable.",
+            "channels_critical": "One or more channels are invalid or unavailable.",
+            "dnd_enabled": "DND flag must be true or false.",
+            "dnd_start": "Invalid start time. Use 24-hour format (HH:MM:SS).",
+            "dnd_start_missing": "Start time must be defined when DND is enabled.",
+            "dnd_end": "Invalid end time. Use 24-hour format (HH:MM:SS).",
+            "dnd_end_missing": "End time must be defined when DND is enabled.",
+            "dnd_start_end_equals": "Start and end times cannot be the same.",
+            "dnd_allowed_sources_regex": "Invalid regular expression for allowed DND sources.",
+            "dnd_allowed_criticalities": "Invalid criticality level selection.",
+            "dnd_allowed_types": "Invalid notification type selection."
+        }
+    },
+    "config_subentries": {
+        "recipient": {
+            "entry_type": "Recipient",
+            "initiate_flow": {
+                "user": "Add Recipient",
+                "reconfigure": "Reconfigure Recipient"
+            },
+            "step": {
+                "recipient_selection": {
+                    "title": "Recipient — Selection",
+                    "description": "Select the type of recipient to create. System recipients handle system-wide channels, HA User recipients are linked to Home Assistant users, and Virtual recipients are custom entries.",
+                    "data": {
+                        "recipient_choice": "Select recipient to create"
+                    },
+                    "data_description": {
+                        "recipient_choice": "Choose from available system channels, Home Assistant users not yet configured, or create a custom virtual recipient."
+                    }
+                },
+                "recipient_definition": {
+                    "title": "Recipient — Definition",
+                    "description": "Define name, email address, phone number, and mobile device ID for the recipient.",
+                    "data": {
+                        "name": "Display name",
+                        "email": "Email address (optional)",
+                        "phone": "Phone number (optional)"
+                    },
+                    "data_description": {
+                        "email": "Note: Only needed if an email based notification channel is configured.",
+                        "phone": "Note: Only needed if a phone based notification channel is configured."
+                    }
+                },
+                "recipient_basic_settings": {
+                    "title": "Recipient — Basic Settings",
+                    "description": "Configure retry, rate limits and the notification types the recipient should receive.",
+                    "data": {
+                        "rate_limit": "Rate limit (notifications/min)",
+                        "retry_attempts": "Retry attempts (per delivery)",
+                        "notification_types": "Notification types to receive",
+                        "blocked_sources_regex": "Blocked sources (regular expression)"
+                    }
+                },
+                "recipient_channel_mapping": {
+                    "title": "Recipient — Channel Mapping",
+                    "description": "Map notification criticality levels to delivery channels.",
+                    "data": {
+                        "channels_low": "Channels for low criticality",
+                        "channels_medium": "Channels for medium criticality",
+                        "channels_high": "Channels for high criticality",
+                        "channels_critical": "Channels for critical criticality"
+                    }
+                },
+                "recipient_dnd_settings": {
+                    "title": "Recipient — Do Not Disturb (DND) Settings",
+                    "description": "Configure quiet hours and DND behavior for the recipient.",
+                    "data": {
+                        "dnd_enabled": "Enable Do Not Disturb",
+                        "dnd_start": "DND start time (24-hour format)",
+                        "dnd_end": "DND end time (24-hour format)",
+                        "dnd_allowed_sources_regex": "Allowed sources during DND (regular expression)",
+                        "dnd_allowed_criticalities": "Criticality levels that bypass DND (select multiple to enable)",
+                        "dnd_allowed_types": "Notification types that bypass DND (select multiple to enable)"
+                    }
+                }
+            },
+            "error": {
+                "base": "Unknown error — see logs for details.",
+                "unknown": "Unknown error occurred. Please check the logs.",
+                "no_main_entry": "No main ANS configuration entry found. Please set up the integration first.",
+                "missing_identity_id": "Missing recipient ID. Cannot create recipient.",
+                "system_recipient_already_exists": "A system recipient for this channel already exists. Please select a different channel.",
+                "invalid_selection": "Invalid recipient selection. Please try again.",
+                "invalid_definition": "Invalid recipient definition. Please check your input.",
+                "invalid_settings": "Invalid basic settings. Please check your input.",
+                "invalid_mapping": "Invalid channel mapping. Please check your input.",
+                "invalid_dnd_settings": "Invalid DND settings. Please check your input.",
+                "name_already_exists": "A recipient with this name already exists. Please choose a different name.",
+                "name": "Invalid or duplicate name.",
+                "email": "Invalid email address.",
+                "phone": "Invalid phone number.",
+                "email_or_phone_required": "Either an email address or a phone number is needed.",
+                "rate_limit": "Rate limit must be an integer between {min} and {max}.",
+                "retry_attempts": "Retry attempts must be an integer between {min} and {max}.",
+                "notification_types": "Select at least one notification type.",
+                "blocked_sources_regex": "Invalid regular expression for blocked sources.",
+                "invalid_channel_mapping": "At least one channel must be configured for a recipient.",
+                "channels_low": "One or more channels are invalid or unavailable.",
+                "channels_medium": "One or more channels are invalid or unavailable.",
+                "channels_high": "One or more channels are invalid or unavailable.",
+                "channels_critical": "One or more channels are invalid or unavailable.",
+                "dnd_enabled": "DND flag must be true or false.",
+                "dnd_start": "Invalid start time. Use 24-hour format (HH:MM:SS).",
+                "dnd_start_missing": "Start time must be defined when DND is enabled.",
+                "dnd_end": "Invalid end time. Use 24-hour format (HH:MM:SS).",
+                "dnd_end_missing": "End time must be defined when DND is enabled.",
+                "dnd_start_end_equals": "Start and end times cannot be the same.",
+                "dnd_allowed_sources_regex": "Invalid regular expression for allowed DND sources.",
+                "dnd_allowed_criticalities": "Invalid criticality level selection.",
+                "dnd_allowed_types": "Invalid notification type selection."
+            },
+            "abort": {
+                "no_main_entry": "No main ANS configuration found. Please set up the integration first.",
+                "no_subentry": "No recipient configuration found for reconfiguration.",
+                "missing_identity_id": "Missing recipient ID. Cannot create recipient."
+            }
+        }
+    }
+}

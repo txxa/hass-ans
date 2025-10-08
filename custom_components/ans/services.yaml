@@ -1,0 +1,70 @@
+send_notification:
+  name: Send Notification
+  description: Send a notification through the ANS (Advanced Notification System) with configurable criticality and delivery channels.
+  fields:
+    source:
+      name: Source
+      description: The source or originator of the notification (e.g., "home_assistant", "alarm", "security_system").
+      required: true
+      example: "home_assistant"
+      selector:
+        text:
+    title:
+      name: Title
+      description: The title or subject line of the notification.
+      required: true
+      example: "Door Opened"
+      selector:
+        text:
+    message:
+      name: Message
+      description: The main message body of the notification.
+      required: true
+      example: "Front door was opened at 3:45 PM"
+      selector:
+        text:
+    type:
+      name: Type
+      description: The type or category of the notification.
+      required: true
+      example: "security"
+      selector:
+        select:
+          options:
+            - label: Information
+              value: INFO
+            - label: Warning
+              value: WARNING
+            - label: Alert
+              value: ALERT
+            - label: Reminder
+              value: REMINDER
+            - label: Event
+              value: EVENT
+            - label: Security
+              value: SECURITY
+    criticality:
+      name: Criticality
+      description: The criticality or priority level of the notification.
+      required: true
+      example: "high"
+      selector:
+        select:
+          options:
+            - label: Low
+              value: LOW
+            - label: Medium
+              value: MEDIUM
+            - label: High
+              value: HIGH
+            - label: Critical
+              value: CRITICAL
+    metadata:
+      name: Metadata
+      description: Optional custom metadata associated with the notification (as a key-value dictionary).
+      required: false
+      example:
+        entity_id: binary_sensor.front_door
+        camera: front_entrance
+      selector:
+        object:

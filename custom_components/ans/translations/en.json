@@ -8,9 +8,9 @@
                 "description": "Configure global settings for the Advanced Notification System (rate limits, retries and enabled channels).",
                 "data": {
                     "retry_attempts_max": "Maximum retry attempts",
-                    "rate_limit_max": "Global rate limit (max notifications per window)",
-                    "rate_limit_window": "Rate limit window (seconds)",
-                    "enabled_channels": "Enabled notification channels"
+                    "rate_limit_max": "Global rate limit (max notifications/min)",
+                    "enabled_channels": "Enabled notification channels",
+                    "persistent_notifications_enabled": "Enable persistent notifications (auto-configures system-wide channel)"
                 }
             }
         },
@@ -21,33 +21,34 @@
             "invalid_ha_user_selection": "Invalid Home Assistant user selection.",
             "create_entry_failed": "Failed to create integration entry. See logs for details.",
             "reconfigure_entry_not_found": "Reconfiguration entry was not found.",
-            "reconfigure_changes_applied": "Configuration updated successfully.",
             "base": "Unknown error — see logs for details.",
             "retry_attempts_max": "Maximum retries must be an integer ≥ 0.",
             "rate_limit_max": "Maximum rate limit must be an integer ≥ 0.",
-            "rate_limit_window": "Rate limit window must be a positive integer (seconds).",
-            "enabled_channels": "Select at least one enabled channel.",
+            "enabled_channels": "At least one channel must be enabled or persistent notifications must be enabled.",
             "define_identity_default_settings": "Invalid selection.",
             "rate_limit": "Rate limit must be an integer between {min} and {max}.",
             "retry_attempts": "Retry attempts must be an integer between {min} and {max}.",
             "notification_types": "Select at least one notification type."
+        },
+        "abort": {
+            "reconfigure_changes_applied": "Configuration updated successfully."
         }
     },
     "options": {
         "step": {
             "default_identity_basic_settings": {
-                "title": "Receiver — Default Basic Settings",
-                "description": "Define the defaults used when adding a new receiver.",
+                "title": "System Channels — Basic Settings",
+                "description": "Configure basic settings for system-wide notification channels (like persistent notifications).",
                 "data": {
-                    "rate_limit": "Rate limit (notifications per window)",
+                    "rate_limit": "Rate limit (notifications/min)",
                     "retry_attempts": "Retry attempts (per delivery)",
                     "notification_types": "Notification types to receive",
-                    "blocked_sources_pattern": "Blocked sources (regular expression)"
+                    "blocked_sources_regex": "Blocked sources (regular expression)"
                 }
             },
             "default_identity_channel_mapping": {
-                "title": "Receiver — Default Channel Mapping",
-                "description": "Define the default delivery channels for the different notification criticality levels.",
+                "title": "System Channels — Channel Mapping",
+                "description": "Map system-wide channels to notification criticality levels.",
                 "data": {
                     "channels_low": "Channels for low criticality",
                     "channels_medium": "Channels for medium criticality",
@@ -56,13 +57,15 @@
                 }
             },
             "default_identity_dnd_settings": {
-                "title": "Receiver — Default Do Not Disturb (DND) Settings",
-                "description": "Define the default Do Not Disturb settings for receivers.",
+                "title": "System Channels — Do Not Disturb",
+                "description": "Configure Do Not Disturb settings for system-wide channels.",
                 "data": {
                     "dnd_enabled": "Enable Do Not Disturb",
                     "dnd_start": "DND start time (24-hour format)",
                     "dnd_end": "DND end time (24-hour format)",
-                    "dnd_allowed_sources_pattern": "Allowed sources during DND (regular expression)"
+                    "dnd_allowed_sources_regex": "Allowed sources during DND (regular expression)",
+                    "dnd_allowed_criticalities": "Criticality levels that bypass DND (select multiple to enable)",
+                    "dnd_allowed_types": "Notification types that bypass DND (select multiple to enable)"
                 }
             }
         },
@@ -71,7 +74,7 @@
             "rate_limit": "Rate limit must be an integer between {min} and {max}.",
             "retry_attempts": "Retry attempts must be an integer between {min} and {max}.",
             "notification_types": "Select at least one notification type.",
-            "blocked_sources_pattern": "Invalid regular expression for blocked sources.",
+            "blocked_sources_regex": "Invalid regular expression for blocked sources.",
             "channels_low": "One or more channels are invalid or unavailable.",
             "channels_medium": "One or more channels are invalid or unavailable.",
             "channels_high": "One or more channels are invalid or unavailable.",
@@ -82,31 +85,33 @@
             "dnd_end": "Invalid end time. Use 24-hour format (HH:MM:SS).",
             "dnd_end_missing": "End time must be defined when DND is enabled.",
             "dnd_start_end_equals": "Start and end times cannot be the same.",
-            "dnd_allowed_sources_pattern": "Invalid regular expression for allowed DND sources."
+            "dnd_allowed_sources_regex": "Invalid regular expression for allowed DND sources.",
+            "dnd_allowed_criticalities": "Invalid criticality level selection.",
+            "dnd_allowed_types": "Invalid notification type selection."
         }
     },
     "config_subentries": {
         "identity": {
             "initiate_flow": {
-                "user": "Add Receiver",
-                "reconfigure": "Reconfigure Receiver"
+                "user": "Add Recipient",
+                "reconfigure": "Reconfigure Recipient"
             },
             "step": {
                 "identity_selection": {
-                    "title": "Receiver — Selection",
+                    "title": "Recipient — Selection",
                     "description": "Choose an existing Home Assistant user as receiver or proceed to create a custom receiver.",
                     "data": {
-                        "type": "Receiver type",
+                        "type": "Recipient type",
                         "selected_ha_user": "Home Assistant user",
                         "define_identity_settings": "Define receiver settings now"
                     },
                     "data_description": {
                         "type": "Note: The option 'Home Assistant user' is only available if there are not yet configured Home Assistant users existing.",
-                        "selected_ha_user": "Note: Is only taken into account if 'Receiver type' is set to 'Home Assistant user'."
+                        "selected_ha_user": "Note: Is only taken into account if 'Recipient type' is set to 'Home Assistant user'."
                     }
                 },
                 "identity_definition": {
-                    "title": "Receiver — Definition",
+                    "title": "Recipient — Definition",
                     "description": "Define name, email address and phone number for the receiver.",
                     "data": {
                         "name": "Display name",
@@ -119,17 +124,17 @@
                     }
                 },
                 "identity_basic_settings": {
-                    "title": "Receiver — Basic Settings",
+                    "title": "Recipient — Basic Settings",
                     "description": "Configure retry, rate limits and the notification types the receiver should receive.",
                     "data": {
-                        "rate_limit": "Rate limit (notifications per window)",
+                        "rate_limit": "Rate limit (notifications/min)",
                         "retry_attempts": "Retry attempts (per delivery)",
                         "notification_types": "Notification types to receive",
-                        "blocked_sources_pattern": "Blocked sources (regular expression)"
+                        "blocked_sources_regex": "Blocked sources (regular expression)"
                     }
                 },
                 "identity_channel_mapping": {
-                    "title": "Receiver — Channel Mapping",
+                    "title": "Recipient — Channel Mapping",
                     "description": "Map notification criticality levels to delivery channels.",
                     "data": {
                         "channels_low": "Channels for low criticality",
@@ -139,13 +144,15 @@
                     }
                 },
                 "identity_dnd_settings": {
-                    "title": "Receiver — Do Not Disturb (DND) Settings",
+                    "title": "Recipient — Do Not Disturb (DND) Settings",
                     "description": "Configure quiet hours and DND behavior for the receiver.",
                     "data": {
                         "dnd_enabled": "Enable Do Not Disturb",
                         "dnd_start": "DND start time (24-hour format)",
                         "dnd_end": "DND end time (24-hour format)",
-                        "dnd_allowed_sources_pattern": "Allowed sources during DND (regular expression)"
+                        "dnd_allowed_sources_regex": "Allowed sources during DND (regular expression)",
+                        "dnd_allowed_criticalities": "Criticality levels that bypass DND (select multiple to enable)",
+                        "dnd_allowed_types": "Notification types that bypass DND (select multiple to enable)"
                     }
                 }
             },
@@ -158,7 +165,7 @@
                 "rate_limit": "Rate limit must be an integer between {min} and {max}.",
                 "retry_attempts": "Retry attempts must be an integer between {min} and {max}.",
                 "notification_types": "Select at least one notification type.",
-                "blocked_sources_pattern": "Invalid regular expression for blocked sources.",
+                "blocked_sources_regex": "Invalid regular expression for blocked sources.",
                 "invalid_channel_mapping": "At least one channel must be configured for a receiver.",
                 "channels_low": "One or more channels are invalid or unavailable.",
                 "channels_medium": "One or more channels are invalid or unavailable.",
@@ -170,7 +177,9 @@
                 "dnd_end": "Invalid end time. Use 24-hour format (HH:MM:SS).",
                 "dnd_end_missing": "End time must be defined when DND is enabled.",
                 "dnd_start_end_equals": "Start and end times cannot be the same.",
-                "dnd_allowed_sources_pattern": "Invalid regular expression for allowed DND sources."
+                "dnd_allowed_sources_regex": "Invalid regular expression for allowed DND sources.",
+                "dnd_allowed_criticalities": "Invalid criticality level selection.",
+                "dnd_allowed_types": "Invalid notification type selection."
             }
         }
     },

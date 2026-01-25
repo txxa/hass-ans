@@ -84,6 +84,27 @@ class FilterEngine:
                         reason=FilterReason.DND_BYPASS,
                     )
 
+                # DND bypass for allowed criticalities
+                if (
+                    task.policy.dnd.allowed_criticalities
+                    and task.payload.criticality
+                    in task.policy.dnd.allowed_criticalities
+                ):
+                    return FilterDecision(
+                        decision=FilterDecisionType.ALLOWED,
+                        reason=FilterReason.DND_BYPASS,
+                    )
+
+                # DND bypass for allowed types
+                if (
+                    task.policy.dnd.allowed_types
+                    and task.payload.type in task.policy.dnd.allowed_types
+                ):
+                    return FilterDecision(
+                        decision=FilterDecisionType.ALLOWED,
+                        reason=FilterReason.DND_BYPASS,
+                    )
+
                 return FilterDecision(
                     decision=FilterDecisionType.FILTERED,
                     reason=FilterReason.DND_ACTIVE,

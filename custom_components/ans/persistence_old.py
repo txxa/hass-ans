@@ -2,7 +2,6 @@
 
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Any
 from uuid import UUID
 
 from .models import Attempt, DeliveryStatus, FilterReason, NotificationDeliveryTask
@@ -86,10 +85,14 @@ class InMemoryAttemptStore(AttemptStore):
         """Save an attempt record."""
         if attempt.job_id not in self._attempts:
             self._attempts[attempt.job_id] = []
-        
+
         # Check if this attempt already exists and update it
         existing = next(
-            (a for a in self._attempts[attempt.job_id] if a.attempt_id == attempt.attempt_id),
+            (
+                a
+                for a in self._attempts[attempt.job_id]
+                if a.attempt_id == attempt.attempt_id
+            ),
             None,
         )
         if existing:

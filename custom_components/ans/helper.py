@@ -8,46 +8,53 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.core import HomeAssistant
 
-from .const import DOMAIN
-from .models import IntegrationInfo
+from .const import DEFAULT_RATE_LIMIT_MAX, DOMAIN, PERSISTENT_NOTIFICATION_CHANNEL
+from .models import ChannelInfo, ChannelScope, IntegrationInfo
 
 _LOGGER = logging.getLogger(__name__)
 
 
-async def async_detect_notification_integrations(
+async def async_detect_notification_channels(
     hass: HomeAssistant,
-) -> list[IntegrationInfo]:
+) -> list[ChannelInfo]:
     """Discover available notification channels (notify.* services).
 
-    Returns:
-        List of NotificationChannels:
-        {
-            "id": str,         # Full service name, e.g. "notify.mobile_app_john"
-            "label": str,      # Human-friendly label
-            "integration": str,# Integration domain, e.g. "mobile_app"
-            "service": str     # Service id, e.g. "mobile_app_john"
-        }
+    Returns
+    -------
+    list[ChannelInfo]
+        List of discovered notification channels with metadata.
 
     """
     services = hass.services.async_services()
     notify_services = services.get("notify", {})
 
-    results: list[IntegrationInfo] = []
+    results: list[ChannelInfo] = []
     for service_id in sorted(notify_services.keys()):
-        # integration = _guess_integration_from_service(service_id)
         if service_id in ("notify", "send_message"):
             continue  # Skip unsupported services
+
+        channel_id = f"notify.{service_id}"
         label = format_channel_label(service_id)
+
+        # Determine scope: persistent_notification is system-wide
+        scope = (
+            ChannelScope.SYSTEM_WIDE
+            if channel_id == PERSISTENT_NOTIFICATION_CHANNEL
+            else ChannelScope.RECIPIENT_SPECIFIC
+        )
+
         results.append(
-            IntegrationInfo(
-                f"notify.{service_id}",
-                label,
-                service_id,
+            ChannelInfo(
+                id=channel_id,
+                label=label,
+                scope=scope,
+                integration=service_id,
             )
         )
-        _LOGGER.debug("Notification service detected: %s", service_id)
+        _LOGGER.debug(
+            "Detected notification channel: %s (scope=%s)", channel_id, scope.value
+        )
 
-    # _LOGGER.debug("Detected notify services: %s", results)
     return results
 
 
@@ -196,3 +203,29 @@ async def get_not_configured_ha_users(hass: HomeAssistant) -> dict[str, Any]:
         return {u.id: u.name for u in users if u.id not in configured_users}
 
     return {u.id: u.name for u in users}
+
+
+def calculate_suggested_rate_limit(global_limit: int) -> int:
+    """Calculate a suggested per-recipient rate limit based on global limit.
+
+    Uses 20% of the global limit as the suggested per-recipient rate limit,
+    ensuring that the system can accommodate ~5 concurrent users at full capacity
+    before hitting the global limit. Capped at DEFAULT_RATE_LIMIT_MAX.
+
+    Args:
+        global_limit: The system-wide global rate limit (notifications/minute).
+
+    Returns:
+        Suggested per-recipient rate limit (notifications/minute).
+        - Minimum of 1 to ensure at least one notification per minute is possible
+        - Maximum of DEFAULT_RATE_LIMIT_MAX (system constraint)
+
+    Examples:
+        calculate_suggested_rate_limit(100) → 20
+        calculate_suggested_rate_limit(1000) → 200 (capped at 1000 max)
+        calculate_suggested_rate_limit(10) → 2 (20% of 10, minimum enforced)
+
+    """
+    # Use 20% as the suggested factor (allows ~5 concurrent users)
+    # Capped at system max to prevent excessive per-recipient limits
+    return max(1, min(int(global_limit * 0.2), DEFAULT_RATE_LIMIT_MAX))

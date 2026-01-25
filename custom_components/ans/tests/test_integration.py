@@ -100,8 +100,9 @@ class TestNotificationDeliveryFlow:
 
         filter_engine = FilterEngine()
         rate_limiter = RateLimiter()
-        from ..retry_scheduler import RetryPolicy
         from datetime import timedelta
+
+        from ..retry_scheduler import RetryPolicy
 
         processor = NotificationDeliveryProcessor(
             filter_engine=filter_engine,

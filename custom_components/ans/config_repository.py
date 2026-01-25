@@ -10,15 +10,20 @@ from uuid import uuid4
 from homeassistant.config_entries import ConfigSubentry
 from homeassistant.core import HomeAssistant
 
+from .channel_registry import ChannelRegistry
 from .const import (
     # CONFIG_IDENTITY_DEFAULT_SETTINGS_KEY,
     ID_CONFIG_ID_KEY,
+    SYS_RECIPIENT_CONFIG_KEY,
+    SYS_RECIPIENT_ID,
+    SYS_RECIPIENT_NAME,
 )
-from .helper import get_main_entry, get_subentries
+from .helper import async_detect_notification_channels, get_main_entry, get_subentries
 from .models import (
     ConfigSnapshot,
     RecipientConfig,
     RecipientData,
+    RecipientType,
     SystemConfig,
 )
 
@@ -34,9 +39,9 @@ class ConfigRepository:
 
         # Cached values
         self.system_config: SystemConfig | None = None
-        self.default_recipient_config: RecipientConfig | None = None
         self.recipients: dict[str, RecipientData] = {}
         self.recipient_configs: dict[str, RecipientConfig] = {}
+        self.channel_registry: ChannelRegistry = ChannelRegistry()
 
     # ---------------------------
     # Main entry helpers
@@ -61,28 +66,65 @@ class ConfigRepository:
     #     return entries[0] if entries else None
 
     def _load_main_entry(self) -> bool:
-        """Load the main config entry into the repository."""
-        # TODO: harden this code incl. error handling (try/except) and logging
-        # main_entry = self._get_main_entry()
+        """Load the main config entry into the repository.
+
+        Loads configuration exactly as stored without any transformations.
+        Business logic for defaults and channel configuration should be
+        handled in config flows, not in the repository.
+        """
         main_entry = get_main_entry(self.hass)
         if not main_entry:
             _LOGGER.error("No main ANS config entry found")
             return False
-        # Load system config
-        # sys_dict = main_entry.data.get(CONFIG_SYSTEM_SETTINGS_KEY, {})
+
+        # Load system config from entry data
         sys_dict = dict(main_entry.data or {})
         self.system_config = SystemConfig.from_dict(sys_dict)
-        # Load default receiver config
-        # def_id_dict = main_entry.options.get(CONFIG_IDENTITY_DEFAULT_SETTINGS_KEY, {})
-        def_id_dict = dict(main_entry.options or {})
-        self.default_recipient_config = RecipientConfig.from_dict(def_id_dict)
+
+        # Load system recipient config from entry options (or use defaults)
+        sys_recipient_dict = (main_entry.options or {}).get(
+            SYS_RECIPIENT_CONFIG_KEY, {}
+        )
+
+        if sys_recipient_dict:
+            sys_recipient_config = RecipientConfig.from_dict(sys_recipient_dict)
+            _LOGGER.debug(
+                "System recipient loaded from options: low=%s, medium=%s, high=%s, critical=%s",
+                sys_recipient_config.channels_low,
+                sys_recipient_config.channels_medium,
+                sys_recipient_config.channels_high,
+                sys_recipient_config.channels_critical,
+            )
+        else:
+            # No config stored - use model defaults
+            sys_recipient_config = RecipientConfig.system_default()
+            _LOGGER.info(
+                "System recipient not configured in options, using model defaults"
+            )
+
+        # Create system recipient data
+        sys_recipient_data = RecipientData(
+            id=SYS_RECIPIENT_ID,
+            name=SYS_RECIPIENT_NAME,
+            type=RecipientType.SYSTEM,
+            email=None,
+            phone=None,
+        )
+
+        # Store in repository cache
+        self.recipients[SYS_RECIPIENT_ID] = sys_recipient_data
+        self.recipient_configs[SYS_RECIPIENT_ID] = sys_recipient_config
+
+        _LOGGER.info("System recipient '%s' loaded successfully", SYS_RECIPIENT_ID)
         return True
 
     def _unload_main_entry(self) -> bool:
         """Unload the main config entry from the repository."""
         # TODO: harden this code incl. error handling (try/except) and logging
         self.system_config = None
-        self.default_recipient_config = None
+        # Remove system recipient if present
+        self.recipients.pop(SYS_RECIPIENT_ID, None)
+        self.recipient_configs.pop(SYS_RECIPIENT_ID, None)
         return True
 
     # ---------------------------
@@ -170,14 +212,16 @@ class ConfigRepository:
     # Loading & persistence
     # ---------------------------
 
-    def load(self) -> bool:
+    async def load(self) -> bool:
         """Reload configs from all entries into memory."""
         # TODO: harden this code incl. error handling (try/except) and logging
         # Load main entry data (system config, default receiver config)
         main_entry = self._load_main_entry()
         # Load sub-config entries (receivers, receiver configs)
         sub_entries = self._load_subentries()
-        return all([main_entry, sub_entries])
+        # Load available notification channels
+        channels = await self.load_channels()
+        return all([main_entry, sub_entries, channels])
 
     def unload(self) -> bool:
         """Clear all cached configs."""
@@ -192,6 +236,27 @@ class ConfigRepository:
     # Snapshot
     # ---------------------------
 
+    async def load_channels(self) -> bool:
+        """Load available notification channels into the registry.
+
+        Returns
+        -------
+        bool
+            True if channels were loaded successfully.
+
+        """
+        try:
+            channels = await async_detect_notification_channels(self.hass)
+            self.channel_registry.register_multiple(channels)
+            _LOGGER.info(
+                "Loaded %d notification channels into registry",
+                self.channel_registry.count(),
+            )
+            return True
+        except Exception as e:
+            _LOGGER.error("Failed to load notification channels: %s", e)
+            return False
+
     def snapshot(self) -> ConfigSnapshot:
         """Return an immutable ConfigSnapshot representing the current ANS configuration."""
         if not self.system_config:
@@ -205,4 +270,5 @@ class ConfigRepository:
             recipients=copy.deepcopy(self.recipients),
             recipient_configs=copy.deepcopy(self.recipient_configs),
             system_config=copy.deepcopy(self.system_config),
+            channel_registry=self.channel_registry,
         )

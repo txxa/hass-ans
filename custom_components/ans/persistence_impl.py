@@ -166,6 +166,23 @@ class InMemoryAttemptStore(AttemptStore):
         """Count total attempts for a job."""
         return len(self._attempts.get(job_id, []))
 
+    async def cleanup_old_attempts(self, before: datetime) -> int:
+        """Clean up old attempt records.
+
+        For in-memory store, this is a no-op since memory is freed on restart.
+        In practice, the housekeeping scheduler would rely on file-based stores
+        for actual cleanup.
+
+        Args:
+            before: (unused for in-memory store).
+
+        Returns:
+            0 (no cleanup performed).
+
+        """
+        # In-memory store doesn't persist, so no cleanup needed
+        return 0
+
     def get_attempts(self, job_id: UUID) -> list[Attempt]:
         """Get all attempts for a job (for debugging/audit).
 

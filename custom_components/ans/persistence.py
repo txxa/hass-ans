@@ -98,6 +98,18 @@ class DeliveryStateStore(ABC):
 
         """
 
+    @abstractmethod
+    async def cleanup_completed(self, before: datetime) -> int:
+        """Clean up old completed delivery records.
+
+        Args:
+            before: Delete records with timestamps before this datetime.
+
+        Returns:
+            Number of records deleted.
+
+        """
+
 
 class AttemptStore(ABC):
     """Abstracts delivery attempt persistence.
@@ -144,6 +156,22 @@ class AttemptStore(ABC):
 
         Returns:
             Total number of attempts.
+
+        """
+
+    @abstractmethod
+    async def cleanup_old_attempts(self, before: datetime) -> int:
+        """Clean up old attempt records.
+
+        Removes attempt history for jobs where all attempts are older than
+        the specified datetime. This helps manage disk space without losing
+        audit trails for recent deliveries.
+
+        Args:
+            before: Remove attempt records older than this datetime.
+
+        Returns:
+            Number of attempt records removed.
 
         """
 

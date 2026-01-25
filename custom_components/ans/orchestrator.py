@@ -15,6 +15,8 @@ from uuid import uuid4
 
 from .config_repository import ConfigRepository
 from .models import (
+    ChannelInfo,
+    ChannelScope,
     ConfigSnapshot,
     NotificationDeliveryTask,
     NotificationPayload,
@@ -63,7 +65,14 @@ class NotificationOrchestrator:
         Called exactly once per semantic notification.
         """
         snapshot = self._snapshot_config()
-        recipients = self._resolve_recipients(snapshot)
+        recipients = list(self._resolve_recipients(snapshot))
+
+        _LOGGER.debug(
+            "Notification %s: Resolved %d recipients: %s",
+            payload.notification_id,
+            len(recipients),
+            recipients,
+        )
 
         # Log warning if no recipients configured
         if not recipients:
@@ -76,7 +85,15 @@ class NotificationOrchestrator:
 
         tasks: list[NotificationDeliveryTask] = []
         for recipient_id in recipients:
-            channels = self._resolve_channels(recipient_id, payload, snapshot)
+            channels = list(self._resolve_channels(recipient_id, payload, snapshot))
+
+            _LOGGER.debug(
+                "Recipient '%s': Resolved %d channels for criticality '%s': %s",
+                recipient_id,
+                len(channels),
+                payload.criticality,
+                channels,
+            )
 
             # Log warning if no channels configured for this criticality level
             if not channels:
@@ -171,18 +188,33 @@ class NotificationOrchestrator:
             snapshot_id: ID of the config snapshot for this task
             recipient_id: Recipient identifier
             payload: Notification payload
-            channel: Delivery channel
+            channel: Delivery channel ID
             snapshot: Config snapshot containing policy and contact info
 
         """
         policy = snapshot.getRecipientNotificationPolicy(recipient_id)
         contact_info = snapshot.getRecipientContactInfo(recipient_id)
 
+        # Resolve channel ID to ChannelInfo from registry
+        channel_info = snapshot.channel_registry.get(channel)
+        if not channel_info:
+            _LOGGER.warning(
+                "Channel '%s' not found in registry, creating minimal ChannelInfo",
+                channel,
+            )
+            # Fallback: create a minimal ChannelInfo for unknown channels
+            channel_info = ChannelInfo(
+                id=channel,
+                label=channel,
+                scope=ChannelScope.RECIPIENT_SPECIFIC,  # Safe default
+                integration=None,
+            )
+
         return NotificationDeliveryTask(
             job_id=uuid4(),
             recipient_id=recipient_id,
             payload=payload,
-            channel=channel,
+            channel_info=channel_info,
             policy=policy,
             contact_info=contact_info,
             snapshot_id=snapshot_id,

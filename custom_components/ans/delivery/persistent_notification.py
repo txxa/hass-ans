@@ -25,6 +25,7 @@ class PersistentNotificationAdapter(DeliveryAdapter):
     """
 
     channel = "notify.persistent_notification"
+    is_system_channel = True  # Persistent notifications are system-wide
 
     def __init__(self, *, hass: HomeAssistant) -> None:
         """Initialize persistent notification adapter.
@@ -62,16 +63,20 @@ class PersistentNotificationAdapter(DeliveryAdapter):
 
         """
         try:
-            # Build notification data
-            data: TemplateVarsType = {
-                "title": payload.title,
-                "message": payload.message,
-                "notification_id": idempotency_key,
-            }
+            message = payload.message
 
             # Add metadata as notification data if present
             if payload.metadata:
-                data["data"] = payload.metadata
+                message += "\n\nMetadata:\n"
+                for key, value in payload.metadata.items():
+                    message += f"- {key}: {value}\n"
+
+            # Build notification data
+            data: TemplateVarsType = {
+                "title": payload.title,
+                "message": message,
+                "notification_id": idempotency_key,
+            }
 
             # Call persistent_notification.create service
             await self._hass.services.async_call(

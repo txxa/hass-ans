@@ -21,6 +21,7 @@ class SignalDeliveryAdapter(DeliveryAdapter):
     """
 
     channel = "notify.signal"
+    is_system_channel = False  # Signal delivers to specific recipients
 
     def __init__(self, *, api_url: str, timeout: float = 10.0) -> None:
         """Initialize Signal adapter with API endpoint and timeout.

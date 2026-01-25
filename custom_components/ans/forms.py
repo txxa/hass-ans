@@ -15,24 +15,26 @@ from .const import (
     DEFAULT_BLOCKED_SOURCES_PATTERN,
     DEFAULT_CONFIGURED_CHANNELS,
     DEFAULT_CRITICALITY_LEVELS,
+    DEFAULT_DND_ALLOWED_CRITICALITIES,
     DEFAULT_DND_ALLOWED_SOURCES_PATTERN,
+    DEFAULT_DND_ALLOWED_TYPES,
     DEFAULT_DND_ENABLED,
     DEFAULT_DND_END,
     DEFAULT_DND_START,
     DEFAULT_ENABLED_CHANNELS,
+    DEFAULT_GLOBAL_RATE_LIMIT_VALUE,
     DEFAULT_NOTIFICATION_TYPES,
-    DEFAULT_RATE_LIMIT,
-    DEFAULT_RATE_LIMIT_MAX,
-    DEFAULT_RATE_LIMIT_WINDOW,
+    DEFAULT_RATE_LIMIT_VALUE,
     # Integration metadata
-    DEFAULT_RETRIES_MAX,
     DEFAULT_RETRY_ATTEMPTS,
     # DEFAULT_TTS_INTEGRATION,
     ID_CONFIG_BLOCKED_SOURCES_PATTERN_KEY,
     ID_CONFIG_CHANNELS_KEY,
     ID_CONFIG_CONFIGURED_CHANNELS_KEY,
     ID_CONFIG_CRITICALITY_LEVELS_KEY,
+    ID_CONFIG_DND_ALLOWED_CRITICALITIES_KEY,
     ID_CONFIG_DND_ALLOWED_SOURCES_PATTERN_KEY,
+    ID_CONFIG_DND_ALLOWED_TYPES_KEY,
     ID_CONFIG_DND_ENABLED_KEY,
     ID_CONFIG_DND_END_KEY,
     ID_CONFIG_DND_START_KEY,
@@ -46,11 +48,16 @@ from .const import (
     SUBENTRY_FLOW_SELECTED_HA_USER_KEY,
     SYS_CONFIG_ENABLED_CHANNELS_KEY,
     SYS_CONFIG_RATE_LIMIT_MAX_KEY,
-    SYS_CONFIG_RATE_LIMIT_WINDOW_KEY,
-    SYS_CONFIG_RETRY_ATTEMPTS_MAX_KEY,
     # SYS_CONFIG_TTS_INTEGRATION_KEY,
+    SYSTEM_WIDE_CHANNELS,
 )
-from .models import RecipientType
+from .models import (
+    ChannelInfo,
+    ChannelScope,
+    NotificationCriticality,
+    NotificationType,
+    RecipientType,
+)
 
 
 def dict_to_select_options_list(dict: dict[str, str]) -> list[SelectOptionDict]:
@@ -64,6 +71,48 @@ def dict_to_select_options_list(dict: dict[str, str]) -> list[SelectOptionDict]:
     ]
 
 
+def channel_info_to_select_options(
+    channels: list[ChannelInfo],
+) -> list[SelectOptionDict]:
+    """Convert ChannelInfo objects to select options for forms.
+
+    Args:
+        channels: List of ChannelInfo objects.
+
+    Returns:
+        List of SelectOptionDict for use in form selectors.
+
+    """
+    return [
+        SelectOptionDict(
+            label=ch.label,
+            value=ch.id,
+        )
+        for ch in channels
+    ]
+
+
+def filter_channels_by_recipient_type(
+    channels: list[ChannelInfo], recipient_type: RecipientType
+) -> list[ChannelInfo]:
+    """Filter channels based on recipient type using channel metadata.
+
+    Args:
+        channels: List of ChannelInfo objects.
+        recipient_type: Type of recipient (SYSTEM, HA_USER, VIRTUAL).
+
+    Returns:
+        Filtered list of ChannelInfo appropriate for the recipient type.
+
+    """
+    if recipient_type == RecipientType.SYSTEM:
+        # System recipient: only system-wide channels
+        return [ch for ch in channels if ch.scope == ChannelScope.SYSTEM_WIDE]
+
+    # Regular recipients: exclude system-wide channels
+    return [ch for ch in channels if ch.scope == ChannelScope.RECIPIENT_SPECIFIC]
+
+
 # ---------------------------
 # System Config Schema
 # ---------------------------
@@ -75,40 +124,16 @@ def get_system_config_schema(defaults: dict | None, values: dict | None) -> vol.
     values = values or {}
 
     schema_dict = {
-        # Maximum number of retries allowed globally
-        vol.Required(
-            SYS_CONFIG_RETRY_ATTEMPTS_MAX_KEY,
-            # default=defaults.get(
-            #     SYS_CONFIG_RETRY_ATTEMPTS_MAX_KEY, DEFAULT_RETRIES_MAX
-            # ),
-            description={
-                "suggested_value": defaults.get(
-                    SYS_CONFIG_RETRY_ATTEMPTS_MAX_KEY, DEFAULT_RETRIES_MAX
-                ),
-            },
-        ): int,  # vol.All(int, vol.Range(min=0)),
         # Global rate limit (notifications per time window)
         vol.Required(
             SYS_CONFIG_RATE_LIMIT_MAX_KEY,
-            # default=defaults.get(SYS_CONFIG_RATE_LIMIT_MAX_KEY, DEFAULT_RATE_LIMIT_MAX),
+            # default=defaults.get(SYS_CONFIG_RATE_LIMIT_MAX_KEY, DEFAULT_GLOBAL_RATE_LIMIT_VALUE),
             description={
                 "suggested_value": defaults.get(
-                    SYS_CONFIG_RATE_LIMIT_MAX_KEY, DEFAULT_RATE_LIMIT_MAX
+                    SYS_CONFIG_RATE_LIMIT_MAX_KEY, DEFAULT_GLOBAL_RATE_LIMIT_VALUE
                 ),
             },
         ): int,  # vol.All(int, vol.Range(min=0)),
-        # Time window (in seconds) for rate limiting
-        vol.Required(
-            SYS_CONFIG_RATE_LIMIT_WINDOW_KEY,
-            # default=defaults.get(
-            #     SYS_CONFIG_RATE_LIMIT_WINDOW_KEY, DEFAULT_RATE_LIMIT_WINDOW
-            # ),
-            description={
-                "suggested_value": defaults.get(
-                    SYS_CONFIG_RATE_LIMIT_WINDOW_KEY, DEFAULT_RATE_LIMIT_WINDOW
-                ),
-            },
-        ): int,  # vol.All(int, vol.Range(min=1)),
         # Which notification channels are enabled system-wide
         vol.Required(
             SYS_CONFIG_ENABLED_CHANNELS_KEY,
@@ -183,6 +208,18 @@ def get_identity_basic_settings_schema(
     return vol.Schema(
         {
             vol.Required(
+                ID_CONFIG_RATE_LIMIT_KEY,
+                # default=defaults.get(ID_CONFIG_RATE_LIMIT_KEY, DEFAULT_RATE_LIMIT_VALUE),
+                description={
+                    "suggested_value": defaults.get(
+                        ID_CONFIG_RATE_LIMIT_KEY, DEFAULT_RATE_LIMIT_VALUE
+                    ),
+                },
+            ): vol.All(
+                int,
+                vol.Range(min=0, max=validation_context.get_max_recipient_rate_limit()),
+            ),
+            vol.Required(
                 ID_CONFIG_RETRY_ATTEMPTS_KEY,
                 # default=defaults.get(
                 #     ID_CONFIG_RETRY_ATTEMPTS_KEY, DEFAULT_RETRY_ATTEMPTS
@@ -192,20 +229,7 @@ def get_identity_basic_settings_schema(
                         ID_CONFIG_RETRY_ATTEMPTS_KEY, DEFAULT_RETRY_ATTEMPTS
                     ),
                 },
-            ): vol.All(
-                int, vol.Range(min=0, max=validation_context.get_max_retry_attempts())
-            ),
-            vol.Required(
-                ID_CONFIG_RATE_LIMIT_KEY,
-                # default=defaults.get(ID_CONFIG_RATE_LIMIT_KEY, DEFAULT_RATE_LIMIT),
-                description={
-                    "suggested_value": defaults.get(
-                        ID_CONFIG_RATE_LIMIT_KEY, DEFAULT_RATE_LIMIT
-                    ),
-                },
-            ): vol.All(
-                int, vol.Range(min=0, max=validation_context.get_max_rate_limit())
-            ),
+            ): vol.All(int, vol.Range(min=0, max=DEFAULT_RETRY_ATTEMPTS)),
             # Types of notifications that this identity should receive
             vol.Required(
                 ID_CONFIG_NOTIFICATION_TYPES_KEY,
@@ -244,16 +268,52 @@ def get_identity_basic_settings_schema(
 
 
 def get_identity_criticality_channel_mapping_schema(
-    defaults: dict | None, values: dict | None
+    defaults: dict | None,
+    values: dict | None,
+    recipient_type: RecipientType | None = None,
 ) -> vol.Schema:
-    """Return schema for criticality → channel mapping."""
+    """Return schema for criticality → channel mapping.
+
+    Args:
+        defaults: Default values for form fields.
+        values: Available options for select fields.
+        recipient_type: Type of recipient to filter channels (None = no filtering).
+
+    Returns:
+        Voluptuous schema for channel mapping form.
+
+    """
     defaults = defaults or {}
     values = values or {}
 
+    # Get channels - could be list[ChannelInfo] or list[SelectOptionDict]
     available_channels = values.get(
         ID_CONFIG_CONFIGURED_CHANNELS_KEY, DEFAULT_CONFIGURED_CHANNELS
     )
-    available_channels_list = [c["value"] for c in available_channels]
+
+    # If we have ChannelInfo objects, filter and convert them
+    if available_channels and isinstance(available_channels[0], ChannelInfo):
+        if recipient_type:
+            available_channels = filter_channels_by_recipient_type(
+                available_channels, recipient_type
+            )
+        # Convert to SelectOptionDict
+        available_channels_options = channel_info_to_select_options(available_channels)
+        available_channels_list = [ch.id for ch in available_channels]
+    else:
+        # Fallback: already SelectOptionDict format (backward compatibility)
+        available_channels_options = available_channels
+        available_channels_list = [c["value"] for c in available_channels]
+
+        # Filter by recipient type if needed (old string-based approach)
+        if recipient_type:
+            available_channels_list = filter_channels_by_recipient_type_legacy(
+                available_channels_list, recipient_type
+            )
+            available_channels_options = [
+                c for c in available_channels if c["value"] in available_channels_list
+            ]
+
     criticality_levels = values.get(
         ID_CONFIG_CRITICALITY_LEVELS_KEY, DEFAULT_CRITICALITY_LEVELS
     )
@@ -264,9 +324,6 @@ def get_identity_criticality_channel_mapping_schema(
         schema_dict[
             vol.Optional(
                 key,
-                # default=defaults.get(
-                #     key, available_channels_list
-                # ),  # default: all allowed
                 description={
                     "suggested_value": defaults.get(
                         key, available_channels_list
@@ -275,7 +332,7 @@ def get_identity_criticality_channel_mapping_schema(
             )
         ] = SelectSelector(
             SelectSelectorConfig(
-                options=available_channels,
+                options=available_channels_options,
                 translation_key=key,
                 multiple=True,
                 mode=SelectSelectorMode.DROPDOWN,
@@ -288,19 +345,45 @@ def get_identity_criticality_channel_mapping_schema(
     )
 
 
+def filter_channels_by_recipient_type_legacy(
+    channels: list[str], recipient_type: RecipientType
+) -> list[str]:
+    """Legacy string-based channel filtering (backward compatibility).
+
+    Args:
+        channels: List of channel ID strings.
+        recipient_type: Type of recipient.
+
+    Returns:
+        Filtered list of channel IDs.
+
+    """
+    if recipient_type == RecipientType.SYSTEM:
+        return [ch for ch in channels if ch in SYSTEM_WIDE_CHANNELS]
+    return [ch for ch in channels if ch not in SYSTEM_WIDE_CHANNELS]
+
+
 def get_identity_dnd_settings_schema(
     defaults: dict | None, values: dict | None
 ) -> vol.Schema:
-    """Return schema for base identity-level configuration."""
+    """Return schema for identity Do-Not-Disturb configuration."""
     defaults = defaults or {}
     values = values or {}
+
+    # Build criticality and type options
+    criticality_options: list[SelectOptionDict] = [
+        SelectOptionDict(label=c.value.title(), value=c.value)
+        for c in NotificationCriticality
+    ]
+    type_options: list[SelectOptionDict] = [
+        SelectOptionDict(label=t.value.title(), value=t.value) for t in NotificationType
+    ]
 
     # Return the schema
     return vol.Schema(
         {
             vol.Required(
                 ID_CONFIG_DND_ENABLED_KEY,
-                # default=defaults.get(ID_CONFIG_DND_ENABLED_KEY, DEFAULT_DND_ENABLED),
                 description={
                     "suggested_value": defaults.get(
                         ID_CONFIG_DND_ENABLED_KEY, DEFAULT_DND_ENABLED
@@ -309,7 +392,6 @@ def get_identity_dnd_settings_schema(
             ): bool,
             vol.Optional(
                 ID_CONFIG_DND_START_KEY,
-                # default=defaults.get(ID_CONFIG_DND_START_KEY, DEFAULT_DND_START),
                 description={
                     "suggested_value": defaults.get(
                         ID_CONFIG_DND_START_KEY, DEFAULT_DND_START
@@ -319,7 +401,6 @@ def get_identity_dnd_settings_schema(
             ): selector({"time": {}}),
             vol.Optional(
                 ID_CONFIG_DND_END_KEY,
-                # default=defaults.get(ID_CONFIG_DND_END_KEY, DEFAULT_DND_END),
                 description={
                     "suggested_value": defaults.get(
                         ID_CONFIG_DND_END_KEY, DEFAULT_DND_END
@@ -329,10 +410,6 @@ def get_identity_dnd_settings_schema(
             ): selector({"time": {}}),
             vol.Optional(
                 ID_CONFIG_DND_ALLOWED_SOURCES_PATTERN_KEY,
-                # default=defaults.get(
-                #     ID_CONFIG_DND_ALLOWED_SOURCES_PATTERN_KEY,
-                #     DEFAULT_DND_ALLOWED_SOURCES_PATTERN,
-                # ),
                 description={
                     "suggested_value": defaults.get(
                         ID_CONFIG_DND_ALLOWED_SOURCES_PATTERN_KEY,
@@ -341,7 +418,42 @@ def get_identity_dnd_settings_schema(
                     "description": "Regular expression pattern for explicitly allowed sources.",
                 },
             ): str,
+            vol.Optional(
+                ID_CONFIG_DND_ALLOWED_CRITICALITIES_KEY,
+                description={
+                    "suggested_value": defaults.get(
+                        ID_CONFIG_DND_ALLOWED_CRITICALITIES_KEY,
+                        DEFAULT_DND_ALLOWED_CRITICALITIES,
+                    ),
+                    "description": "Notification criticality levels that bypass DND.",
+                },
+            ): SelectSelector(
+                SelectSelectorConfig(
+                    options=criticality_options,
+                    translation_key=ID_CONFIG_DND_ALLOWED_CRITICALITIES_KEY,
+                    multiple=True,
+                    mode=SelectSelectorMode.DROPDOWN,
+                ),
+            ),
+            vol.Optional(
+                ID_CONFIG_DND_ALLOWED_TYPES_KEY,
+                description={
+                    "suggested_value": defaults.get(
+                        ID_CONFIG_DND_ALLOWED_TYPES_KEY,
+                        DEFAULT_DND_ALLOWED_TYPES,
+                    ),
+                    "description": "Notification types that bypass DND.",
+                },
+            ): SelectSelector(
+                SelectSelectorConfig(
+                    options=type_options,
+                    translation_key=ID_CONFIG_DND_ALLOWED_TYPES_KEY,
+                    multiple=True,
+                    mode=SelectSelectorMode.DROPDOWN,
+                ),
+            ),
         },
+        required=True,
         extra=vol.PREVENT_EXTRA,
     )
 

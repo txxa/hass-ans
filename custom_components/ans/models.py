@@ -6,22 +6,30 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, time
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
+
+if TYPE_CHECKING:
+    from .channel_registry import ChannelRegistry
 
 from .const import (
     # SYS_CONFIG_TTS_INTEGRATION_KEY,
     CONFIG_VERSION_KEY,
     DEFAULT_BLOCKED_SOURCES_PATTERN,
+    DEFAULT_DND_ALLOWED_CRITICALITIES,
     DEFAULT_DND_ALLOWED_SOURCES_PATTERN,
+    DEFAULT_DND_ALLOWED_TYPES,
     DEFAULT_DND_ENABLED,
     DEFAULT_DND_END,
     DEFAULT_DND_START,
-    DEFAULT_RATE_LIMIT,
+    DEFAULT_RATE_LIMIT_VALUE,
+    DEFAULT_RATE_LIMIT_WINDOW,
     DEFAULT_RETRY_ATTEMPTS,
     ID_CONFIG_BLOCKED_SOURCES_PATTERN_KEY,
     ID_CONFIG_CHANNELS_KEY,
+    ID_CONFIG_DND_ALLOWED_CRITICALITIES_KEY,
     ID_CONFIG_DND_ALLOWED_SOURCES_PATTERN_KEY,
+    ID_CONFIG_DND_ALLOWED_TYPES_KEY,
     ID_CONFIG_DND_ENABLED_KEY,
     ID_CONFIG_DND_END_KEY,
     ID_CONFIG_DND_START_KEY,
@@ -34,11 +42,55 @@ from .const import (
     ID_CONFIG_RATE_LIMIT_KEY,
     ID_CONFIG_RETRY_ATTEMPTS_KEY,
     ID_CONFIG_TYPE_KEY,
+    PERSISTENT_NOTIFICATION_CHANNEL,
     SYS_CONFIG_ENABLED_CHANNELS_KEY,
     SYS_CONFIG_RATE_LIMIT_MAX_KEY,
-    SYS_CONFIG_RATE_LIMIT_WINDOW_KEY,
-    SYS_CONFIG_RETRY_ATTEMPTS_MAX_KEY,
 )
+
+# ---------------------------------------------------------------------------
+# Channel primitives
+# ---------------------------------------------------------------------------
+
+
+class ChannelScope(str, Enum):
+    """Scope of a notification channel.
+
+    Values
+    ------
+    SYSTEM_WIDE : str
+        Channel delivers to the HA instance itself, not specific recipients.
+        Examples: persistent_notification, TTS
+    RECIPIENT_SPECIFIC : str
+        Channel delivers to individual recipients.
+        Examples: mobile_app, email, SMS
+    """
+
+    SYSTEM_WIDE = "SYSTEM_WIDE"
+    RECIPIENT_SPECIFIC = "RECIPIENT_SPECIFIC"
+
+
+@dataclass(frozen=True)
+class ChannelInfo:
+    """Immutable channel definition with scope and metadata.
+
+    Attributes
+    ----------
+    id : str
+        Unique channel identifier (e.g., "notify.persistent_notification")
+    label : str
+        Human-readable display name
+    scope : ChannelScope
+        Whether channel is system-wide or recipient-specific
+    integration : str | None
+        Source integration domain (e.g., "mobile_app", "persistent_notification")
+
+    """
+
+    id: str
+    label: str
+    scope: ChannelScope
+    integration: str | None = None
+
 
 # ---------------------------------------------------------------------------
 # Notification primitives
@@ -125,7 +177,7 @@ class NotificationDeliveryTask:
 
     job_id: UUID
     recipient_id: str
-    channel: str
+    channel_info: ChannelInfo
     payload: NotificationPayload
     policy: RecipientNotificationPolicy
     contact_info: RecipientContactInfo
@@ -234,6 +286,8 @@ class DoNotDisturbConfig:
     start: time | None
     end: time | None
     allowed_sources_regex: str | None  # re.Pattern
+    allowed_criticalities: list[NotificationCriticality] | None = None
+    allowed_types: list[NotificationType] | None = None
 
 
 @dataclass(frozen=True)
@@ -308,6 +362,7 @@ class RecipientType(str, Enum):
 
     HA_USER = "HA_USER"
     VIRTUAL = "VIRTUAL"
+    SYSTEM = "SYSTEM"
 
 
 @dataclass
@@ -390,6 +445,8 @@ class RecipientConfig:
     dnd_start: str | None
     dnd_end: str | None
     dnd_allowed_sources_regex: str | None
+    dnd_allowed_criticalities: list[str] | None = None
+    dnd_allowed_types: list[str] | None = None
     version: int = field(default=1)
 
     def __post_init__(self):
@@ -408,7 +465,7 @@ class RecipientConfig:
         return cls(
             identity_id=None,
             retry_attempts=DEFAULT_RETRY_ATTEMPTS,
-            rate_limit=DEFAULT_RATE_LIMIT,
+            rate_limit=DEFAULT_RATE_LIMIT_VALUE,
             notification_types=[
                 NotificationType.INFO,
                 NotificationType.WARNING,
@@ -425,6 +482,30 @@ class RecipientConfig:
             dnd_start=DEFAULT_DND_START,
             dnd_end=DEFAULT_DND_END,
             dnd_allowed_sources_regex=DEFAULT_DND_ALLOWED_SOURCES_PATTERN,
+            dnd_allowed_criticalities=DEFAULT_DND_ALLOWED_CRITICALITIES,
+            dnd_allowed_types=DEFAULT_DND_ALLOWED_TYPES,
+            blocked_sources_regex=DEFAULT_BLOCKED_SOURCES_PATTERN,
+            version=1,
+        )
+
+    @classmethod
+    def system_default(cls) -> RecipientConfig:
+        """Return a default config for the system recipient (with persistent_notification enabled)."""
+        return cls(
+            identity_id=None,
+            retry_attempts=DEFAULT_RETRY_ATTEMPTS,
+            rate_limit=DEFAULT_RATE_LIMIT_VALUE,
+            notification_types=list(NotificationType),
+            channels_low=[PERSISTENT_NOTIFICATION_CHANNEL],
+            channels_medium=[PERSISTENT_NOTIFICATION_CHANNEL],
+            channels_high=[PERSISTENT_NOTIFICATION_CHANNEL],
+            channels_critical=[PERSISTENT_NOTIFICATION_CHANNEL],
+            dnd_enabled=DEFAULT_DND_ENABLED,
+            dnd_start=DEFAULT_DND_START,
+            dnd_end=DEFAULT_DND_END,
+            dnd_allowed_sources_regex=DEFAULT_DND_ALLOWED_SOURCES_PATTERN,
+            dnd_allowed_criticalities=DEFAULT_DND_ALLOWED_CRITICALITIES,
+            dnd_allowed_types=DEFAULT_DND_ALLOWED_TYPES,
             blocked_sources_regex=DEFAULT_BLOCKED_SOURCES_PATTERN,
             version=1,
         )
@@ -490,8 +571,7 @@ class RecipientConfig:
             retry_attempts=data.get(
                 ID_CONFIG_RETRY_ATTEMPTS_KEY, DEFAULT_RETRY_ATTEMPTS
             ),
-            rate_limit=data.get(ID_CONFIG_RATE_LIMIT_KEY, DEFAULT_RATE_LIMIT),
-            # criticality_levels=criticality_levels,
+            rate_limit=data.get(ID_CONFIG_RATE_LIMIT_KEY, DEFAULT_RATE_LIMIT_VALUE),
             notification_types=notification_types,
             channels_low=channels_low,
             channels_medium=channels_medium,
@@ -503,6 +583,13 @@ class RecipientConfig:
             dnd_allowed_sources_regex=data.get(
                 ID_CONFIG_DND_ALLOWED_SOURCES_PATTERN_KEY
             ),
+            dnd_allowed_criticalities=data.get(
+                ID_CONFIG_DND_ALLOWED_CRITICALITIES_KEY,
+                DEFAULT_DND_ALLOWED_CRITICALITIES,
+            ),
+            dnd_allowed_types=data.get(
+                ID_CONFIG_DND_ALLOWED_TYPES_KEY, DEFAULT_DND_ALLOWED_TYPES
+            ),
             blocked_sources_regex=data.get(ID_CONFIG_BLOCKED_SOURCES_PATTERN_KEY),
             version=version,
         )
@@ -512,10 +599,12 @@ class RecipientConfig:
 class SystemConfig:
     """Configuration for the ANS system."""
 
-    retry_attempts_max: int
     rate_limit_max: int
-    rate_limit_window: int  # seconds
+    rate_limit_window: int  # seconds (hard-coded to 60)
     enabled_channels: list[str]
+    persistent_notifications_enabled: bool = (
+        False  # Enable/disable persistent notifications
+    )
     # tts_integration: str | None
     version: int = field(default=1)
 
@@ -542,9 +631,8 @@ class SystemConfig:
     def from_dict(data: dict) -> SystemConfig:
         """Create SystemConfig from a dictionary."""
         return SystemConfig(
-            retry_attempts_max=data[SYS_CONFIG_RETRY_ATTEMPTS_MAX_KEY],
             rate_limit_max=data[SYS_CONFIG_RATE_LIMIT_MAX_KEY],
-            rate_limit_window=data[SYS_CONFIG_RATE_LIMIT_WINDOW_KEY],
+            rate_limit_window=DEFAULT_RATE_LIMIT_WINDOW,
             enabled_channels=data.get(SYS_CONFIG_ENABLED_CHANNELS_KEY, []),
             # tts_integration=data.get(SYS_CONFIG_TTS_INTEGRATION_KEY),
             version=data.get(CONFIG_VERSION_KEY, 1),
@@ -553,13 +641,31 @@ class SystemConfig:
 
 @dataclass(frozen=True)
 class ConfigSnapshot:
-    """Immutable snapshot of all configuration required for notification delivery decisions."""
+    """Immutable snapshot of all configuration required for notification delivery decisions.
+
+    Attributes
+    ----------
+    snapshot_id : str
+        Unique identifier for this configuration snapshot.
+    created_at : datetime
+        Timestamp when snapshot was created.
+    recipients : dict[str, RecipientData]
+        Recipient identity data indexed by recipient ID.
+    recipient_configs : dict[str, RecipientConfig]
+        Recipient configuration indexed by recipient ID.
+    system_config : SystemConfig
+        System-wide configuration settings.
+    channel_registry : ChannelRegistry
+        Registry of available notification channels with metadata.
+
+    """
 
     snapshot_id: str
     created_at: datetime
     recipients: dict[str, RecipientData]
     recipient_configs: dict[str, RecipientConfig]
     system_config: SystemConfig
+    channel_registry: ChannelRegistry
 
     def getRecipients(self) -> list[str]:
         """Get list of configured recipient IDs.
@@ -614,6 +720,21 @@ class ConfigSnapshot:
             and recipient_config.dnd_start
             and recipient_config.dnd_end
         ):
+            # Convert allowed_criticalities and allowed_types from strings to enums
+            allowed_criticalities = []
+            if recipient_config.dnd_allowed_criticalities:
+                allowed_criticalities = [
+                    NotificationCriticality(c) if isinstance(c, str) else c
+                    for c in recipient_config.dnd_allowed_criticalities
+                ]
+
+            allowed_types = []
+            if recipient_config.dnd_allowed_types:
+                allowed_types = [
+                    NotificationType(t) if isinstance(t, str) else t
+                    for t in recipient_config.dnd_allowed_types
+                ]
+
             dnd = DoNotDisturbConfig(
                 start=datetime.strptime(recipient_config.dnd_start, "%H:%M:%S").time()
                 if recipient_config.dnd_start
@@ -622,6 +743,10 @@ class ConfigSnapshot:
                 if recipient_config.dnd_end
                 else None,
                 allowed_sources_regex=recipient_config.dnd_allowed_sources_regex,
+                allowed_criticalities=allowed_criticalities
+                if allowed_criticalities
+                else None,
+                allowed_types=allowed_types if allowed_types else None,
             )
 
         return RecipientNotificationPolicy(

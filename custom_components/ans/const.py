@@ -5,18 +5,32 @@ DOMAIN = "ans"
 NAME = "Advanced Notification System"
 VERSION = "0.1.0"
 
+PERSISTENT_NOTIFICATION_CHANNEL = "notify.persistent_notification"
+
 # Default values for system configuration
-DEFAULT_RETRIES_MAX = 5  # Default maximum retries for notifications
-DEFAULT_RATE_LIMIT_MAX = 20  # Default maximum rate limit for notifications
-DEFAULT_RATE_LIMIT_WINDOW = 60  # Default rate limit window in seconds
+# Note: Retry attempts are hard-coded system-wide (not configurable)
+DEFAULT_RETRIES_MAX = (
+    5  # Maximum retries for all notifications (hard-coded, not configurable)
+)
+DEFAULT_RATE_LIMIT_WINDOW = 60  # Rate limit window in seconds (hard-coded, shared by global and recipient limits)
+# Global rate limit defaults (system-wide across all recipients and channels)
+DEFAULT_GLOBAL_RATE_LIMIT_MAX = 10000  # Max value configurable in system settings
+DEFAULT_GLOBAL_RATE_LIMIT_VALUE = 100  # Pre-filled default value in form
 # DEFAULT_TTS_INTEGRATION = None  # Default TTS integration, None means no TTS
 DEFAULT_ENABLED_CHANNELS = [
-    "notify.persistent_notification"
+    PERSISTENT_NOTIFICATION_CHANNEL
 ]  # Default enabled channels for notifications
 
-# Default values for identity configurations
-DEFAULT_RATE_LIMIT = 10  # Default rate limit for notifications
-DEFAULT_RETRY_ATTEMPTS = 3  # Default retry attemts for notifications
+# Default values for recipient configurations
+DEFAULT_RATE_LIMIT_MAX = (
+    1000  # Max value configurable per recipient in identity settings
+)
+DEFAULT_RATE_LIMIT_VALUE = 20  # Pre-filled default value in form
+DEFAULT_RETRY_ATTEMPTS = 3  # Default retry attempts for notifications
+# Retry policy strategy (hard-coded for all recipients)
+DEFAULT_RETRY_BASE_DELAY_SECONDS = 60  # Base delay before first retry
+DEFAULT_RETRY_BACKOFF_FACTOR = 2.0  # Exponential backoff multiplier
+DEFAULT_RETRY_MAX_DELAY_SECONDS = 3600  # Maximum delay (1 hour)
 DEFAULT_CRITICALITY_LEVELS = []  # Default criticality levels for notifications
 DEFAULT_NOTIFICATION_TYPES = []  # Default notification types for users
 DEFAULT_CONFIGURED_CHANNELS = []  # Default configured channels for notifications
@@ -24,6 +38,8 @@ DEFAULT_DND_ENABLED = False  # Default Do Not Disturb setting
 DEFAULT_DND_START = "22:00:00"  # Default DND start time
 DEFAULT_DND_END = "06:00:00"  # Default DND end time
 DEFAULT_DND_ALLOWED_SOURCES_PATTERN = None  # Default allowed sources pattern
+DEFAULT_DND_ALLOWED_CRITICALITIES = ["CRITICAL"]  # Criticality levels that bypass DND
+DEFAULT_DND_ALLOWED_TYPES = []  # Notification types that bypass DND
 DEFAULT_BLOCKED_SOURCES_PATTERN = None  # Default blocked sources pattern
 
 # Persistent storage keys
@@ -33,6 +49,17 @@ DEFAULT_BLOCKED_SOURCES_PATTERN = None  # Default blocked sources pattern
 # CONFIG_SYSTEM_SETTINGS_KEY = "system_settings"
 # CONFIG_IDENTITY_DEFAULT_SETTINGS_KEY = "default_identity_settings"
 CONFIG_VERSION_KEY = "version"
+
+# System recipient (virtual recipient for system-wide channels)
+SYS_RECIPIENT_CONFIG_KEY = "system_recipient_config"
+SYS_RECIPIENT_ID = "_ans_system"
+SYS_RECIPIENT_NAME = "System Channels"
+
+# System-wide channels (channels that deliver to the HA instance, not specific recipients)
+SYSTEM_WIDE_CHANNELS = [
+    PERSISTENT_NOTIFICATION_CHANNEL,
+    # Future: "tts.*" patterns will go here
+]
 
 CONFIG_FLOW_STEP_SYS_SETTINGS_KEY = "system_settings"
 CONFIG_FLOW_STEP_CONFIG_FLOW_OPTIONS_KEY = "config_flow_options"
@@ -61,11 +88,11 @@ SUBENTRY_FLOW_ERROR_INVALID_IDENTITY_DEFINITION_KEY = "invalid_identity_definiti
 SUBENTRY_FLOW_ERROR_INVALID_CHANNEL_MAPPING_KEY = "invalid_channel_mapping"
 
 # System config keys
-SYS_CONFIG_RETRY_ATTEMPTS_MAX_KEY = "retry_attempts_max"
 SYS_CONFIG_RATE_LIMIT_MAX_KEY = "rate_limit_max"
-SYS_CONFIG_RATE_LIMIT_WINDOW_KEY = "rate_limit_window"
+# SYS_CONFIG_RATE_LIMIT_WINDOW_KEY = "rate_limit_window"  # Hard-coded to 60 seconds
 # SYS_CONFIG_TTS_INTEGRATION_KEY = "tts_integration"
 SYS_CONFIG_ENABLED_CHANNELS_KEY = "enabled_channels"
+# SYS_CONFIG_PERSISTENT_NOTIFICATIONS_ENABLED_KEY = "persistent_notifications_enabled"
 
 # Idenity keys
 ID_CONFIG_ID_KEY = "id"
@@ -92,6 +119,13 @@ ID_CONFIG_DND_END_KEY = "dnd_end"
 ID_CONFIG_DND_END_MISSING_KEY = "dnd_end_missing"
 ID_CONFIG_DND_START_END_EQUALS_KEY = "dnd_start_end_equals"
 ID_CONFIG_DND_ALLOWED_SOURCES_PATTERN_KEY = "dnd_allowed_sources_regex"
+ID_CONFIG_DND_ALLOWED_CRITICALITIES_KEY = "dnd_allowed_criticalities"
+ID_CONFIG_DND_ALLOWED_TYPES_KEY = "dnd_allowed_types"
 
+# Storage and persistence keys
+STORAGE_VERSION = 1
+STORAGE_DIR = ".storage"
+STORAGE_DELIVERY_STATES_FILE = "ans_delivery_states.json"
+STORAGE_DELIVERY_ATTEMPTS_FILE = "ans_delivery_attempts.json"
 
 SERVICE_SEND = "send_notification"

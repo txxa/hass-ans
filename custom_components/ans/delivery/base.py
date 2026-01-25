@@ -34,6 +34,9 @@ class DeliveryAdapter(ABC):
     """
 
     channel: str  # logical channel name, e.g. "signal", "email"
+    is_system_channel: bool = (
+        False  # True for system-wide channels like persistent_notification
+    )
 
     @abstractmethod
     async def deliver(

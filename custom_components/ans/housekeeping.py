@@ -1,23 +1,24 @@
 """Periodic housekeeping tasks for the notification system.
 
-Handles cleanup of old completed deliveries and memory management.
+Handles cleanup of old completed deliveries and attempt history.
 """
 
 import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 
-from .persistence_impl import InMemoryDeliveryStateStore
+from .persistence import AttemptStore, DeliveryStateStore
 
 _LOGGER = logging.getLogger(__name__)
 
 
 class HousekeepingScheduler:
-    """Manages periodic cleanup of old delivery records."""
+    """Manages periodic cleanup of old delivery records and attempt history."""
 
     def __init__(
         self,
-        state_store: InMemoryDeliveryStateStore,
+        state_store: DeliveryStateStore,
+        attempt_store: AttemptStore | None = None,
         interval: timedelta = timedelta(hours=1),
         retention_age: timedelta = timedelta(days=30),
     ) -> None:
@@ -25,11 +26,13 @@ class HousekeepingScheduler:
 
         Args:
             state_store: Delivery state store to clean.
+            attempt_store: Attempt store to clean (optional).
             interval: How often to run cleanup (default: hourly).
             retention_age: Keep records younger than this (default: 30 days).
 
         """
         self._state_store = state_store
+        self._attempt_store = attempt_store
         self._interval = interval
         self._retention_age = retention_age
         self._task: asyncio.Task | None = None
@@ -71,7 +74,19 @@ class HousekeepingScheduler:
     async def _cleanup(self) -> None:
         """Run cleanup operation."""
         cutoff = datetime.now(UTC) - self._retention_age
-        deleted = await self._state_store.cleanup_completed(cutoff)
 
-        if deleted > 0:
-            _LOGGER.debug("Housekeeping cleanup: deleted %d old records", deleted)
+        # Clean up old delivery states
+        deleted_states = await self._state_store.cleanup_completed(cutoff)
+
+        # Clean up old attempt records
+        deleted_attempts = 0
+        if self._attempt_store:
+            deleted_attempts = await self._attempt_store.cleanup_old_attempts(cutoff)
+
+        total_deleted = deleted_states + deleted_attempts
+        if total_deleted > 0:
+            _LOGGER.debug(
+                "Housekeeping cleanup: deleted %d delivery states, %d attempt records",
+                deleted_states,
+                deleted_attempts,
+            )

@@ -30,11 +30,10 @@ from .const import (
     ID_CONFIG_CRITICALITY_LEVELS_KEY,
     ID_CONFIG_NOTIFICATION_TYPES_KEY,
     ID_CONFIG_RATE_LIMIT_KEY,
-    ID_CONFIG_RETRY_ATTEMPTS_KEY,
     NAME,
     SYS_CONFIG_ENABLED_CHANNELS_KEY,
     SYS_CONFIG_RATE_LIMIT_MAX_KEY,
-    SYS_CONFIG_RETRY_ATTEMPTS_MAX_KEY,
+    SYS_RECIPIENT_CONFIG_KEY,
 )
 from .flow_base import ANSFlowBase, FlowSettings
 from .forms import (
@@ -44,12 +43,14 @@ from .forms import (
     get_identity_dnd_settings_schema,
     get_system_config_schema,
 )
-from .helper import async_detect_notification_integrations
+from .helper import async_detect_notification_channels
 from .identity_flow import IdentityConfigFlow
 from .models import (
+    ChannelInfo,
     NotificationCriticality,
     NotificationType,
     RecipientConfig,
+    RecipientType,
     SystemConfig,
 )
 
@@ -72,9 +73,135 @@ class ANSMainEntryFlowBase(ConfigEntryBaseFlow, ANSFlowBase):
         return dict(system_config.to_dict() or {})
 
     def _create_options_object(self) -> dict[str, Any]:
-        """Return structure to persist to entry.options."""
+        """Return structure to persist to entry.options with system recipient config."""
         identity_config = RecipientConfig.from_dict(self._identity_defaults or {})
-        return dict(identity_config.to_dict() or {})
+        return {SYS_RECIPIENT_CONFIG_KEY: dict(identity_config.to_dict() or {})}
+
+    def _ensure_identity_defaults_present(self) -> None:
+        """Ensure a canonical identity-defaults dict is present for system recipient config."""
+        if not isinstance(self._identity_defaults, dict) or not self._identity_defaults:
+            # store canonical defaults as dict
+            self._identity_defaults = RecipientConfig.default().to_dict()
+
+    def _get_recipient_type(self) -> RecipientType:
+        """Determine the recipient type for the current flow context.
+
+        Returns:
+            RecipientType.SYSTEM for main entry flows (system recipient)
+            RecipientType.HA_USER for identity flows (regular recipients)
+
+        """
+        # ANSMainEntryFlowBase is used for system recipient configuration
+        return RecipientType.SYSTEM
+
+    async def _get_available_channels(self) -> list[ChannelInfo]:
+        """Get available notification channels filtered by context.
+
+        Tries to get from config repository first (if integration is loaded),
+        falls back to runtime detection.
+
+        Filtering rules:
+        1. In options flow: only channels enabled in system config
+        2. For regular recipients: exclude system-wide channels
+        3. For system recipient: include all channels
+
+        Returns:
+            List of available ChannelInfo objects.
+
+        """
+        # Try to get from loaded integration's channel registry
+        if DOMAIN in self.hass.data:
+            for entry_data in self.hass.data[DOMAIN].values():
+                config_repo = entry_data.get("config_repository")
+                if config_repo and hasattr(config_repo, "channel_registry"):
+                    channels = config_repo.channel_registry.get_all()
+                    if channels:
+                        # Apply filters
+                        channels = self._filter_by_enabled_channels(channels)
+                        return self._filter_by_recipient_type(channels)
+
+        # Fallback: detect channels at runtime
+        from .helper import async_detect_notification_channels  # noqa: PLC0415
+
+        channels = await async_detect_notification_channels(self.hass)
+        channels = self._filter_by_enabled_channels(channels)
+        return self._filter_by_recipient_type(channels)
+
+    def _filter_by_enabled_channels(
+        self, channels: list[ChannelInfo]
+    ) -> list[ChannelInfo]:
+        """Filter channels to only those enabled in system config.
+
+        In options flow, only channels listed in system_config.enabled_channels
+        should be available for assignment to recipients.
+
+        Args:
+            channels: All available channels.
+
+        Returns:
+            Filtered list of channels (all channels if not in options flow).
+
+        """
+        # If we don't have system settings loaded, return all channels
+        # This happens during initial config flow before system settings are configured
+        if not self._system_settings:
+            return channels
+
+        # Get enabled channels from system config
+        enabled_channel_ids = self._system_settings.get(
+            SYS_CONFIG_ENABLED_CHANNELS_KEY, []
+        )
+        if not enabled_channel_ids:
+            # No filtering if no enabled channels configured
+            return channels
+
+        # Filter to only enabled channels
+        filtered = [ch for ch in channels if ch.id in enabled_channel_ids]
+        _LOGGER.debug(
+            "Filtered channels from %d to %d based on enabled channels: %s",
+            len(channels),
+            len(filtered),
+            enabled_channel_ids,
+        )
+        return filtered
+
+    def _filter_by_recipient_type(
+        self, channels: list[ChannelInfo]
+    ) -> list[ChannelInfo]:
+        """Filter channels based on recipient type.
+
+        System recipients can use all channels (including system-wide channels).
+        Regular recipients can only use recipient-specific channels.
+
+        Args:
+            channels: All available channels.
+
+        Returns:
+            Filtered list of channels appropriate for the recipient type.
+
+        """
+        recipient_type = self._get_recipient_type()
+
+        if recipient_type == RecipientType.SYSTEM:
+            # System recipient can use all channels
+            _LOGGER.debug(
+                "System recipient: no scope filtering, %d channels available",
+                len(channels),
+            )
+            return channels
+
+        # Regular recipients: filter out system-wide channels
+        from .models import ChannelScope  # noqa: PLC0415
+
+        filtered = [
+            ch for ch in channels if ch.scope == ChannelScope.RECIPIENT_SPECIFIC
+        ]
+        _LOGGER.debug(
+            "Regular recipient: filtered from %d to %d recipient-specific channels",
+            len(channels),
+            len(filtered),
+        )
+        return filtered
 
     async def async_step_default_identity_basic_settings(
         self, user_input: dict[str, Any] | None = None
@@ -89,10 +216,9 @@ class ANSMainEntryFlowBase(ConfigEntryBaseFlow, ANSFlowBase):
 
         # Build helper values
         notification_types = {t.name: t.value for t in NotificationType}
-        channel_options = {
-            ch: ch.split(".", 1)[1].replace("_", " ").title()
-            for ch in self._system_settings.get(SYS_CONFIG_ENABLED_CHANNELS_KEY, [])
-        }
+
+        # Get available channels as ChannelInfo objects
+        available_channels = await self._get_available_channels()
 
         # Prepare defaults: if reconfigure use existing entry's options; otherwise use in-flow defaults
         if self._is_reconfigure() and self._reconfigure_entry:
@@ -104,9 +230,8 @@ class ANSMainEntryFlowBase(ConfigEntryBaseFlow, ANSFlowBase):
         values[ID_CONFIG_NOTIFICATION_TYPES_KEY] = dict_to_select_options_list(
             notification_types
         )
-        values[ID_CONFIG_CONFIGURED_CHANNELS_KEY] = dict_to_select_options_list(
-            channel_options
-        )
+        # Store ChannelInfo objects directly
+        values[ID_CONFIG_CONFIGURED_CHANNELS_KEY] = available_channels
 
         # Validate and store user input
         if user_input is not None:
@@ -158,10 +283,9 @@ class ANSMainEntryFlowBase(ConfigEntryBaseFlow, ANSFlowBase):
 
         # Build helper values for the form
         criticality_levels = {c.name: c.value for c in NotificationCriticality}
-        channel_options = {
-            ch: ch.split(".", 1)[1].replace("_", " ").title()
-            for ch in self._system_settings.get(SYS_CONFIG_ENABLED_CHANNELS_KEY, [])
-        }
+
+        # Get available channels as ChannelInfo objects
+        available_channels = await self._get_available_channels()
 
         # Prepare defaults: if reconfigure use existing entry's options; otherwise use in-flow defaults
         if self._is_reconfigure() and self._reconfigure_entry:
@@ -173,9 +297,8 @@ class ANSMainEntryFlowBase(ConfigEntryBaseFlow, ANSFlowBase):
         values[ID_CONFIG_CRITICALITY_LEVELS_KEY] = dict_to_select_options_list(
             criticality_levels
         )
-        values[ID_CONFIG_CONFIGURED_CHANNELS_KEY] = dict_to_select_options_list(
-            channel_options
-        )
+        # Store ChannelInfo objects directly - will be filtered in schema function
+        values[ID_CONFIG_CONFIGURED_CHANNELS_KEY] = available_channels
 
         # Validate and store user input
         if user_input is not None:
@@ -207,7 +330,7 @@ class ANSMainEntryFlowBase(ConfigEntryBaseFlow, ANSFlowBase):
         return self.async_show_form(
             step_id=step_id,
             data_schema=get_identity_criticality_channel_mapping_schema(
-                defaults, values
+                defaults, values, recipient_type=RecipientType.SYSTEM
             ),
             errors=errors,
             description_placeholders=description_placeholders,
@@ -285,7 +408,7 @@ class ANSConfigFlow(ConfigFlow, ANSMainEntryFlowBase, domain=DOMAIN):
         """Return a dict of available notification integrations (id -> label)."""
         integrations: dict[str, str] = {}
         try:
-            available = await async_detect_notification_integrations(self.hass)
+            available = await async_detect_notification_channels(self.hass)
             for channel in available:
                 integrations[channel.id] = channel.label
         except Exception:  # noqa: BLE001
@@ -304,7 +427,7 @@ class ANSConfigFlow(ConfigFlow, ANSMainEntryFlowBase, domain=DOMAIN):
         """Ensure a canonical identity-defaults dict is present for options."""
         if not isinstance(self._identity_defaults, dict) or not self._identity_defaults:
             # store canonical defaults as dict
-            self._identity_defaults = RecipientConfig.default().to_dict()
+            self._identity_defaults = RecipientConfig.system_default().to_dict()
 
     def _is_reconfigure(self) -> bool:
         """Return True if this flow runs in reconfigure mode."""
@@ -413,23 +536,23 @@ class ANSConfigFlow(ConfigFlow, ANSMainEntryFlowBase, domain=DOMAIN):
         adapted_values = {}
         # Get limits from old system settings
         old_rate_limit_max = old_system_settings.get(SYS_CONFIG_RATE_LIMIT_MAX_KEY)
-        old_retries_max = old_system_settings.get(SYS_CONFIG_RETRY_ATTEMPTS_MAX_KEY)
+        # old_retries_max = old_system_settings.get(SYS_CONFIG_RETRY_ATTEMPTS_MAX_KEY)
         # Get limits from new system settings
         new_rate_limit_max = new_system_settings.get(SYS_CONFIG_RATE_LIMIT_MAX_KEY)
-        new_retries_max = new_system_settings.get(SYS_CONFIG_RETRY_ATTEMPTS_MAX_KEY)
+        # new_retries_max = new_system_settings.get(SYS_CONFIG_RETRY_ATTEMPTS_MAX_KEY)
 
         # Check if retry limit was lowered
-        if (
-            new_retries_max is not None
-            and old_retries_max is not None
-            and new_retries_max < old_retries_max
-        ):
-            adapted_values[ID_CONFIG_RETRY_ATTEMPTS_KEY] = new_retries_max
-            _LOGGER.info(
-                "Retries max lowered from %s to %s, affected identity settings will be adapted",
-                old_retries_max,
-                new_retries_max,
-            )
+        # if (
+        #     new_retries_max is not None
+        #     and old_retries_max is not None
+        #     and new_retries_max < old_retries_max
+        # ):
+        #     adapted_values[ID_CONFIG_RETRY_ATTEMPTS_KEY] = new_retries_max
+        #     _LOGGER.info(
+        #         "Retries max lowered from %s to %s, affected identity settings will be adapted",
+        #         old_retries_max,
+        #         new_retries_max,
+        #     )
         # Check if rate limit were lowered
         if (
             new_rate_limit_max is not None
@@ -511,7 +634,10 @@ class ANSConfigFlow(ConfigFlow, ANSMainEntryFlowBase, domain=DOMAIN):
         if user_input is not None:
             try:
                 # Import at runtime to avoid circular imports
-                from .config_validator import ConfigValidator  # noqa: PLC0415
+                from .config_validator import (  # noqa: PLC0415
+                    ConfigValidator,
+                    FieldValidationError,
+                )
 
                 # Validate system config and raise informative exceptions on invalid input
                 schema_validated = ConfigValidator.validate_system_settings_schema(
@@ -533,6 +659,9 @@ class ANSConfigFlow(ConfigFlow, ANSMainEntryFlowBase, domain=DOMAIN):
                 # Continue to the next step in initial setup
                 return await self._execute_next_step(step_id)
 
+            except FieldValidationError as e:
+                _LOGGER.debug("Field validation error: %s - %s", e.field, e.message)
+                errors[e.field] = e.message
             except vol.Invalid as e:
                 _LOGGER.debug(str(e))
                 errors[str(e.path[0])] = str(e.path[len(e.path) - 1])
@@ -579,7 +708,7 @@ class ANSConfigFlow(ConfigFlow, ANSMainEntryFlowBase, domain=DOMAIN):
 
 
 class ANSOptionsFlowHandler(OptionsFlow, ANSMainEntryFlowBase):
-    """Options flow to edit the default identity template."""
+    """Options flow to edit the system recipient configuration."""
 
     def __init__(self) -> None:
         """Initialize options flow with the config entry reference."""
@@ -590,7 +719,7 @@ class ANSOptionsFlowHandler(OptionsFlow, ANSMainEntryFlowBase):
                 CONFIG_FLOW_STEP_ID_DEFAULT_CHANNEL_MAPPING_KEY: self.async_step_default_identity_channel_mapping,
                 CONFIG_FLOW_STEP_ID_DEFAULT_DND_SETTINGS_KEY: self.async_step_default_identity_dnd_settings,
             },
-            force_steps=True,  # Always show identity steps in options
+            force_steps=True,  # Always show all system recipient config steps
         )
         super().__init__(flow_settings)
 
@@ -606,21 +735,26 @@ class ANSOptionsFlowHandler(OptionsFlow, ANSMainEntryFlowBase):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Entry point for options — redirect to first identity template step."""
+        """Entry point for options — redirect to first system recipient config step."""
         # Load system settings (works for dict or MappingProxyType)
         if isinstance(self.config_entry.data, (dict, MappingProxyType)):
             self._system_settings = dict(self.config_entry.data)
         else:
             self._system_settings = {}
 
-        # Load identity defaults from options
+        # Load system recipient config from options
         if isinstance(self.config_entry.options, (dict, MappingProxyType)):
-            self._identity_defaults = dict(self.config_entry.options)
+            options = dict(self.config_entry.options)
+            # Extract system recipient config (stored under SYS_RECIPIENT_CONFIG_KEY)
+            self._identity_defaults = options.get(SYS_RECIPIENT_CONFIG_KEY, {})
         else:
             self._identity_defaults = {}
+
+        # Ensure defaults are present (creates default config if empty)
+        self._ensure_identity_defaults_present()
 
         # Update validation context
         self._update_validation_context(self._system_settings)
 
-        # Start with the first default identity settings config step
+        # Start with the first system recipient config step
         return await self.async_step_default_identity_basic_settings()

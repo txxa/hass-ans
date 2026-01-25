@@ -13,11 +13,9 @@ from .config_validator import (
 )
 from .const import (
     DEFAULT_ENABLED_CHANNELS,
-    DEFAULT_RATE_LIMIT_MAX,
-    DEFAULT_RETRIES_MAX,
+    DEFAULT_GLOBAL_RATE_LIMIT_MAX,
     SYS_CONFIG_ENABLED_CHANNELS_KEY,
     SYS_CONFIG_RATE_LIMIT_MAX_KEY,
-    SYS_CONFIG_RETRY_ATTEMPTS_MAX_KEY,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -140,11 +138,8 @@ class ANSFlowBase(metaclass=ABCMeta):
         """Update the validation context with current system limits."""
         if system_settings:
             system_limits = {
-                SYS_CONFIG_RETRY_ATTEMPTS_MAX_KEY: system_settings.get(
-                    SYS_CONFIG_RETRY_ATTEMPTS_MAX_KEY, DEFAULT_RETRIES_MAX
-                ),
                 SYS_CONFIG_RATE_LIMIT_MAX_KEY: system_settings.get(
-                    SYS_CONFIG_RATE_LIMIT_MAX_KEY, DEFAULT_RATE_LIMIT_MAX
+                    SYS_CONFIG_RATE_LIMIT_MAX_KEY, DEFAULT_GLOBAL_RATE_LIMIT_MAX
                 ),
             }
             available_channels = list(

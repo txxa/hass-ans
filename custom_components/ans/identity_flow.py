@@ -36,7 +36,6 @@ from .const import (
     ID_CONFIG_PARENT_ENTRY_ID_KEY,
     ID_CONFIG_PHONE_KEY,
     ID_CONFIG_TYPE_KEY,
-    # SUBENTRY_FLOW_DEFINE_IDENTITY_SETTINGS_KEY,
     SUBENTRY_FLOW_ERROR_INVALID_CHANNEL_MAPPING_KEY,
     SUBENTRY_FLOW_ERROR_INVALID_IDENTITY_DEFINITION_KEY,
     SUBENTRY_FLOW_ERROR_INVALID_IDENTITY_SELECTION_KEY,
@@ -58,6 +57,7 @@ from .forms import (
 )
 from .helper import async_check_recipient_name_availability, get_main_entry
 from .models import (
+    ChannelInfo,
     NotificationCriticality,
     NotificationType,
     RecipientConfig,
@@ -101,8 +101,9 @@ class ANSSubEntryFlowBase(ConfigSubentryFlow, ANSFlowBase):
         # Get validation context (system limits)
         system_settings = dict(self._main_entry.data)
         self._update_validation_context(system_settings)
-        # Get default identity settings
-        self._identity_settings = dict(self._main_entry.options)
+        # Don't load defaults from options (now contains system recipient config)
+        # Regular recipients use hard-coded defaults from const.py
+        self._identity_settings = {}
 
     async def _init_subentry_context(self) -> SubentryFlowResult | None:
         # Get subentry
@@ -113,6 +114,77 @@ class ANSSubEntryFlowBase(ConfigSubentryFlow, ANSFlowBase):
         # Get identity definition and settings
         self._identity = dict(self._reconfigure_entry.data or {})
         self._identity_settings = dict(self._reconfigure_entry.data or {})
+
+    def _get_recipient_type(self) -> RecipientType:
+        """Determine the recipient type for identity flows.
+
+        Returns:
+            The configured recipient type from identity metadata,
+            defaults to HA_USER if not set.
+
+        """
+        # Get from identity metadata if available
+        from .const import ID_CONFIG_TYPE_KEY  # noqa: PLC0415
+
+        recipient_type_value = self._identity_meta.get(
+            ID_CONFIG_TYPE_KEY, RecipientType.HA_USER.value
+        )
+        return RecipientType(recipient_type_value)
+
+    async def _get_available_channels(self) -> list[ChannelInfo]:
+        """Get available notification channels for identity flows.
+
+        For identity flows, only recipient-specific channels are available.
+        System-wide channels (like persistent_notification) are excluded.
+
+        Returns:
+            List of available ChannelInfo objects filtered by:
+            1. System config enabled channels
+            2. Recipient type (excludes system-wide for regular recipients)
+
+        """
+        from .const import DOMAIN, SYS_CONFIG_ENABLED_CHANNELS_KEY  # noqa: PLC0415
+        from .models import ChannelScope  # noqa: PLC0415
+
+        # Get all enabled channels from system config
+        channels = []
+        if self._main_entry:
+            system_settings = dict(self._main_entry.data)
+            enabled_channel_ids = system_settings.get(
+                SYS_CONFIG_ENABLED_CHANNELS_KEY, []
+            )
+
+            # Try to get from loaded integration's channel registry
+            if DOMAIN in self.hass.data:
+                for entry_data in self.hass.data[DOMAIN].values():
+                    config_repo = entry_data.get("config_repository")
+                    if config_repo and hasattr(config_repo, "channel_registry"):
+                        # Get all channels and filter to enabled ones
+                        all_channels = config_repo.channel_registry.get_all()
+                        channels = [
+                            ch for ch in all_channels if ch.id in enabled_channel_ids
+                        ]
+                        break
+
+        # Fallback: detect channels at runtime
+        if not channels:
+            from .helper import async_detect_notification_channels  # noqa: PLC0415
+
+            channels = await async_detect_notification_channels(self.hass)
+
+        # Filter by recipient type (excludes system-wide channels for regular recipients)
+        recipient_type = self._get_recipient_type()
+        if recipient_type != RecipientType.SYSTEM:
+            channels = [
+                ch for ch in channels if ch.scope == ChannelScope.RECIPIENT_SPECIFIC
+            ]
+            _LOGGER.debug(
+                "Identity flow: filtered to %d recipient-specific channels for %s",
+                len(channels),
+                recipient_type.value,
+            )
+
+        return channels
 
     async def async_step_identity_basic_settings(
         self, user_input: dict[str, Any] | None = None
@@ -237,7 +309,7 @@ class ANSSubEntryFlowBase(ConfigSubentryFlow, ANSFlowBase):
         return self.async_show_form(
             step_id=step_id,
             data_schema=get_identity_criticality_channel_mapping_schema(
-                defaults, values
+                defaults, values, recipient_type=RecipientType.HA_USER
             ),
             errors=errors,
             last_step=last_step,

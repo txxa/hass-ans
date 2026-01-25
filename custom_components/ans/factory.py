@@ -11,12 +11,18 @@ from homeassistant.core import HomeAssistant
 
 from .adapter_registry import AdapterRegistry
 from .config_repository import ConfigRepository
+from .const import (
+    DEFAULT_RETRY_ATTEMPTS,
+    DEFAULT_RETRY_BACKOFF_FACTOR,
+    DEFAULT_RETRY_BASE_DELAY_SECONDS,
+    DEFAULT_RETRY_MAX_DELAY_SECONDS,
+)
 from .delivery.persistent_notification import PersistentNotificationAdapter
 from .delivery.signal import SignalDeliveryAdapter
 from .filter_engine import FilterEngine
 from .housekeeping import HousekeepingScheduler
 from .orchestrator import NotificationOrchestrator
-from .persistence_impl import InMemoryAttemptStore, InMemoryDeliveryStateStore
+from .persistence_file import JsonFileAttemptStore, JsonFileDeliveryStateStore
 from .processor import NotificationDeliveryProcessor
 from .queue import NotificationDeliveryTaskQueue
 from .rate_limiter import RateLimiter
@@ -124,18 +130,25 @@ class NotificationSystemSetup:
             - housekeeping_scheduler
 
         """
-        # Create persistence stores
-        state_store = InMemoryDeliveryStateStore()
-        attempt_store = InMemoryAttemptStore()
+        # Create persistence stores (file-based instead of in-memory)
+        state_store = JsonFileDeliveryStateStore(hass)
+        attempt_store = JsonFileAttemptStore(hass)
+
+        # Load system configuration for rate limiting
+        config_snapshot = config_repo.snapshot()
+        system_config = config_snapshot.system_config
 
         # Create stateless/shared components
         filter_engine = FilterEngine()
-        rate_limiter = RateLimiter()
+        rate_limiter = RateLimiter(
+            global_rate_limit=system_config.rate_limit_max,
+            rate_limit_window=system_config.rate_limit_window,  # Hard-coded to 60s
+        )
         retry_policy = RetryPolicy(
-            max_attempts=3,
-            base_delay=timedelta(seconds=60),
-            backoff_factor=2.0,
-            max_delay=timedelta(hours=1),
+            max_attempts=DEFAULT_RETRY_ATTEMPTS,  # Hard-coded: same for all, overridden by recipient config
+            base_delay=timedelta(seconds=DEFAULT_RETRY_BASE_DELAY_SECONDS),
+            backoff_factor=DEFAULT_RETRY_BACKOFF_FACTOR,
+            max_delay=timedelta(seconds=DEFAULT_RETRY_MAX_DELAY_SECONDS),
         )
 
         # Create and populate adapter registry
@@ -173,6 +186,7 @@ class NotificationSystemSetup:
         # Create housekeeping scheduler for cleanup
         housekeeping_scheduler = HousekeepingScheduler(
             state_store=state_store,
+            attempt_store=attempt_store,
             interval=timedelta(hours=1),
             retention_age=timedelta(days=30),
         )

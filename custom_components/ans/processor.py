@@ -18,6 +18,7 @@ from .delivery.base import DeliveryAdapter
 from .filter_engine import FilterEngine
 from .models import (
     Attempt,
+    ChannelScope,
     DeliveryResult,
     DeliveryStatus,
     FilterDecisionType,
@@ -89,7 +90,7 @@ class NotificationDeliveryProcessor:
             "Processing task job_id=%s recipient=%s channel=%s",
             task.job_id,
             task.recipient_id,
-            task.channel,
+            task.channel_info.id,
         )
 
         # Load current delivery state to check if already terminal
@@ -113,31 +114,52 @@ class NotificationDeliveryProcessor:
                 reason=filter_decision.reason,
             )
             _LOGGER.info(
-                "Task job_id=%s filtered (%s)",
+                "Task job_id=%s recipient_id=%s filtered (%s)",
                 task.job_id,
+                task.recipient_id,
                 filter_decision.reason,
             )
             return
 
         # RATE LIMITING (retryable decision)
-        if not self._rate_limiter.allow(task):
+        allowed, limit_type = self._rate_limiter.allow(task)
+        if not allowed:
             await self._state_store.persist_rate_limited(task.job_id)
-            await self._schedule_retry(task, reason="RATE_LIMITED")
+            if limit_type == "GLOBAL":
+                _LOGGER.debug(
+                    "Task job_id=%s recipient_id=%s hit global rate limit, scheduling retry",
+                    task.job_id,
+                    task.recipient_id,
+                )
+                await self._schedule_retry(task, reason="rate_limited")
+            else:  # RECIPIENT
+                _LOGGER.debug(
+                    "Task job_id=%s recipient_id=%s hit recipient rate limit, scheduling retry",
+                    task.job_id,
+                    task.recipient_id,
+                )
+                await self._schedule_retry(task, reason="rate_limited")
             return
 
         # CONTACT INFO VALIDATION (terminal decision if missing/invalid)
-        if not task.contact_info.email_address and not task.contact_info.phone_number:
-            await self._state_store.persist_permanent_failure(
-                task.job_id,
-                attempt=None,
-                error="No contact information available (email and phone both missing)",
-            )
-            _LOGGER.warning(
-                "Task job_id=%s skipped: no contact information for recipient %s",
-                task.job_id,
-                task.recipient_id,
-            )
-            return
+        # Skip validation for system-wide channels (e.g., persistent_notification)
+        # as they deliver to the HA instance, not to a person
+        if task.channel_info.scope == ChannelScope.RECIPIENT_SPECIFIC:
+            if (
+                not task.contact_info.email_address
+                and not task.contact_info.phone_number
+            ):
+                await self._state_store.persist_permanent_failure(
+                    task.job_id,
+                    attempt=None,
+                    error="No contact information available (email and phone both missing)",
+                )
+                _LOGGER.warning(
+                    "Task job_id=%s skipped: no contact information for recipient %s",
+                    task.job_id,
+                    task.recipient_id,
+                )
+                return
 
         # ATTEMPT CREATION & EXECUTION
         attempt = await self._create_attempt(task)
@@ -146,8 +168,9 @@ class NotificationDeliveryProcessor:
             await self._execute_delivery(task, attempt)
         except Exception as exc:  # defensive catch for unexpected errors
             _LOGGER.exception(
-                "Unhandled exception during delivery job_id=%s",
+                "Unhandled exception during delivery job_id=%s recipient_id=%s",
                 task.job_id,
+                task.recipient_id,
             )
             await self._handle_transient_failure(
                 task,
@@ -171,12 +194,12 @@ class NotificationDeliveryProcessor:
             attempt: Attempt record.
 
         """
-        adapter = self._adapters.get(task.channel)
+        adapter = self._adapters.get(task.channel_info.id)
         if not adapter:
             await self._handle_permanent_failure(
                 task,
                 attempt,
-                error=f"No adapter for channel {task.channel}",
+                error=f"No adapter for channel {task.channel_info.id}",
             )
             return
 
@@ -190,7 +213,7 @@ class NotificationDeliveryProcessor:
             _LOGGER.exception(
                 "Adapter exception job_id=%s channel=%s",
                 task.job_id,
-                task.channel,
+                task.channel_info.id,
             )
             result = DeliveryResult(
                 status=DeliveryStatus.TRANSIENT_FAIL,
@@ -266,10 +289,10 @@ class NotificationDeliveryProcessor:
         await self._state_store.persist_success(task.job_id, attempt)
 
         _LOGGER.info(
-            "Delivery succeeded job_id=%s attempt=%s remote_id=%s",
+            "Delivery succeeded job_id=%s recipient_id=%s attempt=%s",
             task.job_id,
+            task.recipient_id,
             attempt.attempt_number,
-            result.remote_id,
         )
 
     async def _handle_transient_failure(
@@ -319,8 +342,9 @@ class NotificationDeliveryProcessor:
         )
 
         _LOGGER.warning(
-            "Permanent failure job_id=%s attempt=%s error=%s",
+            "Permanent failure job_id=%s recipient_id=%s attempt=%s error=%s",
             task.job_id,
+            task.recipient_id,
             attempt.attempt_number,
             error,
         )
@@ -352,8 +376,9 @@ class NotificationDeliveryProcessor:
                 error="max_retries_exceeded",
             )
             _LOGGER.warning(
-                "Max retries exceeded job_id=%s attempts=%s",
+                "Max retries exceeded job_id=%s recipient_id=%s attempts=%s",
                 task.job_id,
+                task.recipient_id,
                 attempt_count,
             )
             return
@@ -391,8 +416,9 @@ class NotificationDeliveryProcessor:
         )
 
         _LOGGER.debug(
-            "Retry scheduled job_id=%s attempt=%s next_run=%s reason=%s",
+            "Retry scheduled job_id=%s recipient_id=%s attempt=%s next_run=%s reason=%s",
             task.job_id,
+            task.recipient_id,
             attempt_count + 1,
             retry_decision.next_run_at,
             reason,

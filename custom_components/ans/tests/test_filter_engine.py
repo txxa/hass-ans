@@ -1,14 +1,13 @@
 # tests/test_filter_engine.py
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
-from datetime import datetime, time
+from datetime import datetime
 
 import pytest
 from filter_engine import FilterEngine, FilterResult
 
-from ..models import RecipientData, RecipientConfig
+from ..models import RecipientConfig
 
 # -- Helper lightweight model stubs used by the tests --------------------------------
 

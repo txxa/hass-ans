@@ -9,12 +9,15 @@ import voluptuous as vol
 
 from .const import (
     CONFIG_VERSION_KEY,
+    DEFAULT_GLOBAL_RATE_LIMIT_MAX,
     DEFAULT_RATE_LIMIT_MAX,
     DEFAULT_RETRIES_MAX,
     ID_CONFIG_BLOCKED_SOURCES_PATTERN_KEY,
     # ID_CONFIG_CONFIGURED_CHANNELS_KEY,
     ID_CONFIG_CHANNELS_KEY,
+    ID_CONFIG_DND_ALLOWED_CRITICALITIES_KEY,
     ID_CONFIG_DND_ALLOWED_SOURCES_PATTERN_KEY,
+    ID_CONFIG_DND_ALLOWED_TYPES_KEY,
     ID_CONFIG_DND_ENABLED_KEY,
     ID_CONFIG_DND_END_KEY,
     ID_CONFIG_DND_END_MISSING_KEY,
@@ -34,11 +37,15 @@ from .const import (
     ID_CONFIG_TYPE_KEY,
     SYS_CONFIG_ENABLED_CHANNELS_KEY,
     SYS_CONFIG_RATE_LIMIT_MAX_KEY,
-    SYS_CONFIG_RATE_LIMIT_WINDOW_KEY,
-    SYS_CONFIG_RETRY_ATTEMPTS_MAX_KEY,
     # SYS_CONFIG_TTS_INTEGRATION_KEY,
 )
-from .models import RecipientConfig, RecipientData, SystemConfig
+from .models import (
+    NotificationCriticality,
+    NotificationType,
+    RecipientConfig,
+    RecipientData,
+    SystemConfig,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -69,20 +76,16 @@ class ValidationContext:
     system_limits: dict[str, Any] | None = None
     available_channels: list[str] = field(default_factory=list)
 
-    def get_max_retry_attempts(self) -> int:
-        """Get maximum retries from system limits."""
+    def get_max_global_rate_limit(self) -> int:
+        """Get maximum global rate limit from system limits."""
         if self.system_limits:
             return self.system_limits.get(
-                SYS_CONFIG_RETRY_ATTEMPTS_MAX_KEY, DEFAULT_RETRIES_MAX
+                SYS_CONFIG_RATE_LIMIT_MAX_KEY, DEFAULT_GLOBAL_RATE_LIMIT_MAX
             )
-        return DEFAULT_RETRIES_MAX
+        return DEFAULT_GLOBAL_RATE_LIMIT_MAX
 
-    def get_max_rate_limit(self) -> int:
-        """Get maximum rate limit from system limits."""
-        if self.system_limits:
-            return self.system_limits.get(
-                SYS_CONFIG_RATE_LIMIT_MAX_KEY, DEFAULT_RATE_LIMIT_MAX
-            )
+    def get_max_recipient_rate_limit(self) -> int:
+        """Get maximum recipient rate limit from system limits."""
         return DEFAULT_RATE_LIMIT_MAX
 
 
@@ -269,13 +272,10 @@ class ConfigValidator:
         validation_context: ValidationContext | None = None,
     ) -> None:
         """Validate basic identity settings consistency."""
-        # Validate retry attempts
+        # Validate retry attempts (hard-coded maximum)
         try:
-            max_val = None
-            placeholders = {"min": "0"}
-            if validation_context:
-                max_val = validation_context.get_max_retry_attempts()
-                placeholders["max"] = str(max_val)
+            max_val = DEFAULT_RETRIES_MAX
+            placeholders = {"min": "0", "max": str(max_val)}
             ConfigValidator._validate_non_negative_integer(retry_attempts, max_val)
         except ValueError as e:
             raise FieldValidationError(
@@ -289,7 +289,7 @@ class ConfigValidator:
             max_val = None
             placeholders = {"min": "0"}
             if validation_context:
-                max_val = validation_context.get_max_rate_limit()
+                max_val = validation_context.get_max_recipient_rate_limit()
                 placeholders["max"] = str(max_val)
             ConfigValidator._validate_non_negative_integer(rate_limit, max_val)
         except ValueError as e:
@@ -371,6 +371,8 @@ class ConfigValidator:
         dnd_start: str | None,
         dnd_end: str | None,
         dnd_allowed_sources_pattern: str | None,
+        dnd_allowed_criticalities: list[str] | None = None,
+        dnd_allowed_types: list[str] | None = None,
     ) -> None:
         """Validate DND settings consistency."""
         s_sec = None
@@ -444,6 +446,48 @@ class ConfigValidator:
                     ID_CONFIG_DND_ALLOWED_SOURCES_PATTERN_KEY, str(e)
                 ) from e
 
+        # Validate allowed criticalities if provided
+        if dnd_allowed_criticalities is not None:
+            if not isinstance(dnd_allowed_criticalities, list):
+                raise FieldValidationError(
+                    ID_CONFIG_DND_ALLOWED_CRITICALITIES_KEY,
+                    "Must be a list of criticality values.",
+                )
+            # Validate each criticality value exists in the enum
+            valid_criticalities = {c.value for c in NotificationCriticality}
+            for criticality in dnd_allowed_criticalities:
+                if not isinstance(criticality, str):
+                    raise FieldValidationError(
+                        ID_CONFIG_DND_ALLOWED_CRITICALITIES_KEY,
+                        "Each criticality must be a string.",
+                    )
+                if criticality not in valid_criticalities:
+                    raise FieldValidationError(
+                        ID_CONFIG_DND_ALLOWED_CRITICALITIES_KEY,
+                        f"Invalid criticality '{criticality}'. Must be one of: {', '.join(sorted(valid_criticalities))}.",
+                    )
+
+        # Validate allowed types if provided
+        if dnd_allowed_types is not None:
+            if not isinstance(dnd_allowed_types, list):
+                raise FieldValidationError(
+                    ID_CONFIG_DND_ALLOWED_TYPES_KEY,
+                    "Must be a list of notification types.",
+                )
+            # Validate each type value exists in the enum
+            valid_types = {t.value for t in NotificationType}
+            for notification_type in dnd_allowed_types:
+                if not isinstance(notification_type, str):
+                    raise FieldValidationError(
+                        ID_CONFIG_DND_ALLOWED_TYPES_KEY,
+                        "Each notification type must be a string.",
+                    )
+                if notification_type not in valid_types:
+                    raise FieldValidationError(
+                        ID_CONFIG_DND_ALLOWED_TYPES_KEY,
+                        f"Invalid notification type '{notification_type}'. Must be one of: {', '.join(sorted(valid_types))}.",
+                    )
+
     ########## Schema-based validation methods ##########
 
     @staticmethod
@@ -451,17 +495,11 @@ class ConfigValidator:
         """Validate the system configuration against a schema."""
         schema = vol.Schema(
             {
-                vol.Required(SYS_CONFIG_RETRY_ATTEMPTS_MAX_KEY): vol.All(
-                    int, vol.Range(min=0)
-                ),
                 vol.Required(SYS_CONFIG_RATE_LIMIT_MAX_KEY): vol.All(
                     int, vol.Range(min=0)
                 ),
-                vol.Required(SYS_CONFIG_RATE_LIMIT_WINDOW_KEY): vol.All(
-                    int, vol.Range(min=1)
-                ),
-                vol.Required(SYS_CONFIG_ENABLED_CHANNELS_KEY): vol.Any(
-                    vol.All([str], vol.Length(min=1)), vol.Length(min=0)
+                vol.Required(SYS_CONFIG_ENABLED_CHANNELS_KEY): vol.All(
+                    [str], vol.Length(min=1)
                 ),
                 # vol.Optional(SYS_CONFIG_TTS_INTEGRATION_KEY): vol.Any(str, None),
             },
@@ -514,11 +552,13 @@ class ConfigValidator:
             {
                 vol.Required(ID_CONFIG_RETRY_ATTEMPTS_KEY): vol.All(
                     int,
-                    vol.Range(min=0, max=validation_context.get_max_retry_attempts()),
+                    vol.Range(min=0, max=DEFAULT_RETRIES_MAX),
                 ),
                 vol.Required(ID_CONFIG_RATE_LIMIT_KEY): vol.All(
                     int,
-                    vol.Range(min=0, max=validation_context.get_max_rate_limit()),
+                    vol.Range(
+                        min=0, max=validation_context.get_max_recipient_rate_limit()
+                    ),
                 ),
                 vol.Required(ID_CONFIG_NOTIFICATION_TYPES_KEY): vol.All(
                     [vol.In([t.value for t in NotificationType])], vol.Length(min=1)
@@ -615,6 +655,13 @@ class ConfigValidator:
                 ),
                 vol.Optional(ID_CONFIG_DND_ALLOWED_SOURCES_PATTERN_KEY): vol.All(
                     str, ConfigValidator._validate_regex_pattern
+                ),
+                vol.Required(ID_CONFIG_DND_ALLOWED_CRITICALITIES_KEY): vol.All(
+                    [vol.In([c.value for c in NotificationCriticality])],
+                    vol.Length(min=0),
+                ),
+                vol.Required(ID_CONFIG_DND_ALLOWED_TYPES_KEY): vol.All(
+                    [vol.In([t.value for t in NotificationType])], vol.Length(min=0)
                 ),
             },
             extra=vol.PREVENT_EXTRA,
@@ -719,6 +766,8 @@ class ConfigValidator:
             config.dnd_start,
             config.dnd_end,
             config.dnd_allowed_sources_regex,
+            config.dnd_allowed_criticalities,
+            config.dnd_allowed_types,
         )
 
         # Validate config version
@@ -730,13 +779,7 @@ class ConfigValidator:
     @staticmethod
     def validate_system_config(config: SystemConfig) -> None:
         """Validate the system configuration."""
-        # Validate retry attempts
-        try:
-            ConfigValidator._validate_non_negative_integer(config.retry_attempts_max)
-        except ValueError as e:
-            raise FieldValidationError(SYS_CONFIG_RETRY_ATTEMPTS_MAX_KEY, str(e)) from e
-        except TypeError as e:
-            raise FieldValidationError(SYS_CONFIG_RETRY_ATTEMPTS_MAX_KEY, str(e)) from e
+        # Note: retry_attempts_max is hard-coded and not configurable
 
         # Validate rate limit
         try:
@@ -746,25 +789,34 @@ class ConfigValidator:
         except TypeError as e:
             raise FieldValidationError(SYS_CONFIG_RATE_LIMIT_MAX_KEY, str(e)) from e
 
-        # Validate rate limit window
-        try:
-            ConfigValidator._validate_positive_integer(config.rate_limit_window)
-        except ValueError as e:
-            raise FieldValidationError(SYS_CONFIG_RATE_LIMIT_WINDOW_KEY, str(e)) from e
-        except TypeError as e:
-            raise FieldValidationError(SYS_CONFIG_RATE_LIMIT_WINDOW_KEY, str(e)) from e
+        # Validate enabled channels - must have at least one channel OR persistent notifications enabled
+        has_channels = config.enabled_channels and len(config.enabled_channels) > 0
+        has_persistent_notifications = getattr(
+            config, "persistent_notifications_enabled", False
+        )
 
-        # Validate enabled channels
-        try:
-            ConfigValidator._validate_string_list(
-                config.enabled_channels,
-                min_length=1,
-                regex_pattern="^notify\\.[a-zA-Z0-9_]+$",
+        if not has_channels and not has_persistent_notifications:
+            raise FieldValidationError(
+                SYS_CONFIG_ENABLED_CHANNELS_KEY,
+                "At least one channel must be enabled or persistent notifications must be enabled.",
             )
-        except ValueError as e:
-            raise FieldValidationError(SYS_CONFIG_ENABLED_CHANNELS_KEY, str(e)) from e
-        except TypeError as e:
-            raise FieldValidationError(SYS_CONFIG_ENABLED_CHANNELS_KEY, str(e)) from e
+
+        # Validate channel format if any are present
+        if has_channels:
+            try:
+                ConfigValidator._validate_string_list(
+                    config.enabled_channels,
+                    min_length=1,
+                    regex_pattern="^notify\\.[a-zA-Z0-9_]+$",
+                )
+            except ValueError as e:
+                raise FieldValidationError(
+                    SYS_CONFIG_ENABLED_CHANNELS_KEY, str(e)
+                ) from e
+            except TypeError as e:
+                raise FieldValidationError(
+                    SYS_CONFIG_ENABLED_CHANNELS_KEY, str(e)
+                ) from e
 
         # Validate config version
         if not isinstance(config.version, int) or config.version < 1:

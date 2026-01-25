@@ -11,6 +11,7 @@ from homeassistant.exceptions import ConfigEntryNotReady
 from .config_repository import ConfigRepository
 from .const import DOMAIN
 from .factory import NotificationSystemSetup
+from .persistence_recovery import async_initialize_persistence
 from .service import async_setup_services
 
 _LOGGER = logging.getLogger(__name__)
@@ -90,7 +91,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         config_repo = ConfigRepository(hass)
 
         # Load the main entry configuration into the repository
-        if not config_repo.load():
+        if not await config_repo.load():
             _LOGGER.error("Failed to load main entry configuration")
             raise ConfigEntryNotReady("Failed to load main entry configuration")
 
@@ -118,6 +119,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         # Store system components in entry data
         entry_data.update(system)
+
+        # Initialize persistence and recover pending retries
+        _, _, pending_retries = await async_initialize_persistence(hass)
+        _LOGGER.debug(
+            "ANS persistence initialized with %d pending retries", len(pending_retries)
+        )
+
+        # Schedule pending retries from persistent storage
+        for job_id, _scheduled_time in pending_retries:
+            _LOGGER.debug("Scheduling pending retry: job_id=%s", job_id)
+            # TODO: Enqueue pending retries with correct scheduled time
+            # This requires fetching the task state and re-enqueueing
 
         # Start background tasks
         task_queue = system["task_queue"]
@@ -198,10 +211,40 @@ async def update_listener(hass: HomeAssistant, config_entry: ConfigEntry):
     if config_repository:
         if config_repository.unload() and config_repository.load():
             _LOGGER.debug("Config repository successfully applied the latest changes")
+
+            # Update rate limiter with new global rate limits
+            snapshot = config_repository.snapshot()
+            system_config = snapshot.system_config
+            rate_limiter = get_rate_limiter(hass)
+            if rate_limiter:
+                rate_limiter.update_limits(
+                    global_rate_limit=system_config.rate_limit_max,
+                    rate_limit_window=system_config.rate_limit_window,
+                )
+                _LOGGER.debug(
+                    "Rate limiter updated with new limits: max=%s, window=%s",
+                    system_config.rate_limit_max,
+                    system_config.rate_limit_window,
+                )
+            else:
+                _LOGGER.warning("Rate limiter not found, unable to update limits")
         else:
             _LOGGER.error("Config repository was unable to apply the latest changes")
     else:
         _LOGGER.error("Config repository not found")
+
+
+def get_rate_limiter(hass: HomeAssistant):
+    """Retrieve the rate limiter from the main entry data."""
+    if DOMAIN not in hass.data:
+        return None
+
+    # Find main entry data
+    for entry_data in hass.data[DOMAIN].values():
+        if isinstance(entry_data, dict) and "rate_limiter" in entry_data:
+            return entry_data["rate_limiter"]
+
+    return None
 
 
 def get_config_repository(hass: HomeAssistant) -> ConfigRepository | None:

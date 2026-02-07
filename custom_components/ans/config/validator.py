@@ -7,7 +7,7 @@ from typing import Any
 
 import voluptuous as vol
 
-from .const import (
+from ..const import (
     CONFIG_VERSION_KEY,
     RCPT_CONFIG_BLOCKED_SOURCES_PATTERN_KEY,
     # ID_CONFIG_CONFIGURED_CHANNELS_KEY,
@@ -39,7 +39,7 @@ from .const import (
     # SYS_CONFIG_TTS_INTEGRATION_KEY,
     SYS_MAX_GLOBAL_RATE_LIMIT,
 )
-from .models import (
+from ..models import (
     NotificationCriticality,
     NotificationType,
     RecipientConfig,
@@ -300,7 +300,7 @@ class ConfigValidator:
             raise FieldValidationError(RCPT_CONFIG_RATE_LIMIT_KEY, str(e)) from e
 
         # Validate notification types
-        from .models import NotificationType  # noqa: PLC0415
+        from ..models import NotificationType  # noqa: PLC0415
 
         for notification_type in notification_types:
             if isinstance(notification_type, str):
@@ -339,7 +339,7 @@ class ConfigValidator:
         available_channels: list[str] | None = None,
     ) -> None:
         """Validate channel mapping consistency."""
-        from .models import NotificationCriticality  # noqa: PLC0415
+        from ..models import NotificationCriticality  # noqa: PLC0415
 
         # Validate each channel list
         for channels, level in [
@@ -366,7 +366,7 @@ class ConfigValidator:
                     ) from e
 
     @staticmethod
-    def _validate_recipient_dnd_settings(
+    def _validate_recipient_dnd_settings(  # noqa: C901
         dnd_enabled: bool,
         dnd_start: str | None,
         dnd_end: str | None,
@@ -547,7 +547,7 @@ class ConfigValidator:
         settings: dict, validation_context: ValidationContext
     ) -> dict:
         """Validate the basic identity settings against a schema."""
-        from .models import NotificationType  # noqa: PLC0415
+        from ..models import NotificationType  # noqa: PLC0415
 
         # Voluptuous based form validation
         schema = vol.Schema(
@@ -592,7 +592,7 @@ class ConfigValidator:
         settings: dict, validation_context: ValidationContext
     ) -> dict:
         """Validate the identity channel mapping against a schema."""
-        from .models import NotificationCriticality  # noqa: PLC0415
+        from ..models import NotificationCriticality  # noqa: PLC0415
 
         criticality_levels = [c.value for c in NotificationCriticality]
 
@@ -706,7 +706,7 @@ class ConfigValidator:
             raise FieldValidationError(RCPT_CONFIG_ID_KEY, str(e)) from e
 
         # Validate type
-        from .models import RecipientType  # noqa: PLC0415
+        from ..models import RecipientType  # noqa: PLC0415
 
         if not isinstance(recipient.type, RecipientType):
             raise FieldValidationError(

@@ -6,6 +6,15 @@ Responsible for:
 - resolving channels per recipient
 - fan-out task creation
 - task enqueueing
+
+Error Handling Policy:
+- Missing channel in registry: HARD FAILURE (orchestrator validates before task creation)
+- Missing adapter for channel: PERMANENT FAILURE (processor logs and marks as failed)
+
+This ensures:
+- Configuration errors are caught early (orchestrator)
+- Runtime adapter issues don't crash processing (processor)
+- Users get clear feedback about misconfigured channels
 """
 
 import logging
@@ -13,8 +22,8 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from .config_repository import ConfigRepository
-from .models import (
+from ..config.repository import ConfigRepository
+from ..models import (
     ConfigSnapshot,
     NotificationDeliveryTask,
     NotificationPayload,
@@ -67,28 +76,22 @@ class NotificationOrchestrator:
         # Check if system_config is loaded before processing
         # (it might be temporarily unavailable during config reload)
         if not self._config_repo.system_config:
-            _LOGGER.warning(
-                "System config not available for notification %s. "
-                "Notification will be dropped. This can happen during config reload.",
+            _LOGGER.error(
+                "Cannot process notification %s: System config not loaded. "
+                "This indicates a system configuration error.",
                 payload.notification_id,
             )
             return
 
-        # If channel registry is empty, try to reload channels
-        # (this can happen if ANS loaded before notify integrations)
+        # Validate channel registry is populated (critical error if empty)
         if self._config_repo.channel_registry.count() == 0:
-            _LOGGER.warning(
-                "Channel registry is empty, attempting to reload channels for notification %s",
+            _LOGGER.error(
+                "Cannot process notification %s: No channels registered. "
+                "This indicates a system configuration error. "
+                "Please check that notify integrations are properly configured.",
                 payload.notification_id,
             )
-            await self._config_repo.load_channels()
-            if self._config_repo.channel_registry.count() == 0:
-                _LOGGER.error(
-                    "Channel registry still empty after reload. No notify services available. "
-                    "Notification %s will be dropped.",
-                    payload.notification_id,
-                )
-                return
+            return
 
         snapshot = self._snapshot_config()
         recipients = list(self._resolve_recipients(snapshot))

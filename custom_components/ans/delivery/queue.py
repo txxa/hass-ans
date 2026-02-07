@@ -8,7 +8,7 @@ import logging
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
-from .models import NotificationDeliveryTask
+from ..models import NotificationDeliveryTask
 from .processor import NotificationDeliveryProcessor
 
 _LOGGER = logging.getLogger(__name__)

@@ -11,3 +11,7 @@ class ANSConfigError(ANSException):
 
 class IdentityNotFoundError(ANSConfigError):
     """Exception raised when an identity is not found in the system."""
+
+
+class ConfigEntryNotFoundError(ANSConfigError):
+    """Exception raised when a config entry is not found."""

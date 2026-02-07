@@ -8,13 +8,13 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 
-from .config_repository import ConfigRepository
+from .config.repository import ConfigRepository
 from .const import (
     DOMAIN,
     SYS_DEFAULT_QUEUE_CONCURRENCY,
 )
-from .factory import NotificationSystemSetup
-from .persistence_recovery import async_initialize_persistence
+from .delivery.factory import NotificationSystemSetup
+from .persistence.recovery import async_initialize_persistence
 from .service import async_setup_services
 
 _LOGGER = logging.getLogger(__name__)
@@ -100,6 +100,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         _LOGGER.debug("Config repository loaded successfully")
 
+        # Validate channels were loaded
+        channel_count = config_repo.channel_registry.count()
+        if channel_count == 0:
+            _LOGGER.error(
+                "No notification channels detected. "
+                "Please ensure at least one notify integration is configured before setting up ANS."
+            )
+            raise ConfigEntryNotReady(
+                "No notification channels available. Configure notify integrations first."
+            )
+
+        _LOGGER.info("Loaded %d notification channels", channel_count)
+
         # Store the config repository in the entry data
         entry_data["config_repository"] = config_repo
 
@@ -123,6 +136,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         # Store system components in entry data
         entry_data.update(system)
+
+        # Validate channel-adapter consistency
+        validation_result = config_repo.channel_registry.validate_adapters(
+            system["adapter_registry"]
+        )
+
+        # Log warnings for inconsistencies
+        if validation_result["missing_adapters"]:
+            _LOGGER.warning(
+                "Channels without adapters (will fail delivery): %s",
+                validation_result["missing_adapters"],
+            )
+
+        if validation_result["orphaned_adapters"]:
+            _LOGGER.debug(
+                "Adapters without registered channels: %s",
+                validation_result["orphaned_adapters"],
+            )
+
+        # Store validation result for diagnostics
+        entry_data["channel_adapter_validation"] = validation_result
 
         # Initialize persistence and recover pending retries
         (

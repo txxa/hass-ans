@@ -14,9 +14,8 @@ from uuid import uuid4
 
 from homeassistant.util import dt
 
-from .adapter_registry import AdapterRegistry
-from .filter_engine import FilterEngine
-from .models import (
+from ..channels.adapter_registry import AdapterRegistry
+from ..models import (
     Attempt,
     ChannelScope,
     DeliveryResult,
@@ -24,7 +23,8 @@ from .models import (
     FilterDecisionType,
     NotificationDeliveryTask,
 )
-from .persistence_file import DeliveryAttemptLog, NotificationRegistry, RetryQueue
+from ..persistence.file import DeliveryAttemptLog, NotificationRegistry, RetryQueue
+from .filter_engine import FilterEngine
 from .rate_limiter import RateLimiter
 from .retry_scheduler import RetryPolicy, RetryReason
 
@@ -206,11 +206,25 @@ class NotificationDeliveryProcessor:
 
         """
         adapter = self._adapters.get(task.channel_info.id)
+
         if not adapter:
+            error_msg = (
+                f"No adapter registered for channel '{task.channel_info.id}'. "
+                f"This channel may not be properly configured. "
+                f"Expected adapter type: {task.channel_info.integration}"
+            )
+            _LOGGER.error(
+                "%s (job_id=%s, recipient=%s)",
+                error_msg,
+                task.job_id,
+                task.recipient_id,
+            )
+
+            # Permanent failure - no retry (adapter won't magically appear)
             await self._handle_permanent_failure(
                 task,
                 attempt,
-                error=f"No adapter for channel {task.channel_info.id}",
+                error=error_msg,
             )
             return
 

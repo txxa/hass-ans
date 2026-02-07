@@ -3,8 +3,8 @@
 from datetime import datetime
 from uuid import UUID
 
-from .models import Attempt, DeliveryStatus
-from .persistence import AttemptStore, DeliveryState, DeliveryStateStore
+from ..models import Attempt, DeliveryStatus
+from .base import AttemptStore, DeliveryState, DeliveryStateStore
 
 
 class InMemoryDeliveryStateStore(DeliveryStateStore):

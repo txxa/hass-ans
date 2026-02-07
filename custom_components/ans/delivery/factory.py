@@ -9,20 +9,22 @@ from datetime import timedelta
 
 from homeassistant.core import HomeAssistant
 
-from .adapter_lifecycle import AdapterFactory, AdapterLifecycleManager, AdapterType
-from .adapter_registry import AdapterRegistry
-from .config_repository import ConfigRepository
-from .const import (
+from ..channels.adapter_lifecycle import (
+    AdapterLifecycleManager,
+)
+from ..channels.adapter_registry import AdapterRegistry
+from ..channels.mobile_app import MobileAppDeliveryAdapter
+from ..channels.persistent_notification import PersistentNotificationAdapter
+from ..channels.signal import SignalDeliveryAdapter
+from ..config.repository import ConfigRepository
+from ..const import (
     RCPT_DEFAULT_RETRY_ATTEMPTS,
     SYS_STORAGE_HOUSEKEEPING_INTERVAL_HOURS,
 )
-from .delivery.mobile_app import MobileAppDeliveryAdapter
-from .delivery.persistent_notification import PersistentNotificationAdapter
-from .delivery.signal import SignalDeliveryAdapter
+from ..persistence.file import DeliveryAttemptLog, NotificationRegistry, RetryQueue
+from ..persistence.housekeeping import HousekeepingScheduler
 from .filter_engine import FilterEngine
-from .housekeeping import HousekeepingScheduler
 from .orchestrator import NotificationOrchestrator
-from .persistence_file import DeliveryAttemptLog, NotificationRegistry, RetryQueue
 from .processor import NotificationDeliveryProcessor
 from .queue import NotificationDeliveryTaskQueue
 from .rate_limiter import RateLimiter
@@ -79,20 +81,12 @@ class NotificationSystemSetup:
         # ----------------------------------------------------------------
         # STATIC ADAPTERS - Always available, no config needed
         # ----------------------------------------------------------------
-        # Persistent notification is a HA built-in, zero-cost to register
-        manager.register_factory(
-            AdapterFactory(
-                adapter_type=AdapterType.STATIC,
-                channel_prefix="notify.persistent_notification",
-                factory_fn=lambda h, _: PersistentNotificationAdapter(hass=h),
-            )
-        )
+        manager.register_factory(PersistentNotificationAdapter.create_factory())
 
         # ----------------------------------------------------------------
         # DYNAMIC_MULTI ADAPTERS - Created per enabled device
         # ----------------------------------------------------------------
         # Mobile App: Device-specific instances, created only for enabled devices
-        # Memory savings: No unused device adapters
         def _create_mobile_app_adapter(
             h: HomeAssistant, device_id: str | None
         ) -> MobileAppDeliveryAdapter:
@@ -101,27 +95,15 @@ class NotificationSystemSetup:
             return MobileAppDeliveryAdapter(hass=h, device_id=device_id)
 
         manager.register_factory(
-            AdapterFactory(
-                adapter_type=AdapterType.DYNAMIC_MULTI,
-                channel_prefix="notify.mobile_app",
-                factory_fn=_create_mobile_app_adapter,
+            MobileAppDeliveryAdapter.create_factory(
+                factory_fn=_create_mobile_app_adapter
             )
         )
 
         # ----------------------------------------------------------------
         # DYNAMIC_SINGLE ADAPTERS - Created only when enabled
         # ----------------------------------------------------------------
-        # Signal: Single instance, created only when enabled
-        manager.register_factory(
-            AdapterFactory(
-                adapter_type=AdapterType.DYNAMIC_SINGLE,
-                channel_prefix="notify.signal",
-                factory_fn=lambda h, _: SignalDeliveryAdapter(
-                    hass=h,
-                    service_name="signal",  # Default service name
-                ),
-            )
-        )
+        manager.register_factory(SignalDeliveryAdapter.create_factory())
 
         _LOGGER.info(
             "Adapter lifecycle manager configured with %d factories (memory-efficient mode)",

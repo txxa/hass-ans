@@ -1,7 +1,17 @@
 """define the delivery adapter contract and shared error semantics."""
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
+from collections.abc import Callable
+from dataclasses import dataclass
 from enum import Enum
+from typing import TYPE_CHECKING, ClassVar
+
+if TYPE_CHECKING:
+    from homeassistant.core import HomeAssistant
+
+    from ..channels.adapter_lifecycle import AdapterFactory, AdapterType
 
 from ..models import (
     DeliveryResult,
@@ -27,16 +37,42 @@ class AdapterFailureType(str, Enum):
     PERMANENT = "PERMANENT"
 
 
+@dataclass
+class AdapterMetadata:
+    """Metadata for adapter registration.
+
+    Attributes
+    ----------
+    adapter_type : AdapterType
+        Lifecycle type (STATIC, DYNAMIC_SINGLE, DYNAMIC_MULTI).
+    channel_prefix : str
+        Channel identifier or prefix.
+    integration : str | None
+        Integration name (for logging/diagnostics).
+
+    """
+
+    adapter_type: AdapterType
+    channel_prefix: str
+    integration: str | None = None
+
+
 class DeliveryAdapter(ABC):
     """Base class for all channel delivery adapters.
 
     One adapter = one physical channel implementation.
+
+    Subclasses should define ADAPTER_METADATA as a class variable
+    to enable automatic factory registration.
     """
 
     channel: str  # logical channel name, e.g. "signal", "email"
     is_system_channel: bool = (
         False  # True for system-wide channels like persistent_notification
     )
+
+    # Optional: Subclasses can define this for auto-registration
+    ADAPTER_METADATA: ClassVar[AdapterMetadata | None] = None
 
     @abstractmethod
     async def deliver(
@@ -106,3 +142,49 @@ class DeliveryAdapter(ABC):
 
         """
         return DeliveryResult(status=DeliveryStatus.PERMANENT_FAIL, error=error)
+
+    @classmethod
+    def create_factory(
+        cls,
+        factory_fn: Callable[[HomeAssistant, str | None], DeliveryAdapter]
+        | None = None,
+        cleanup_fn: Callable[[DeliveryAdapter], None] | None = None,
+    ) -> AdapterFactory:
+        """Create an AdapterFactory for this adapter class.
+
+        Parameters
+        ----------
+        factory_fn : Callable, optional
+            Custom factory function (defaults to standard constructor).
+        cleanup_fn : Callable, optional
+            Optional cleanup function.
+
+        Returns
+        -------
+        AdapterFactory
+            AdapterFactory configured for this adapter.
+
+        Raises
+        ------
+        ValueError
+            If ADAPTER_METADATA is not defined.
+
+        """
+        # Import here to avoid circular dependency
+        from ..channels.adapter_lifecycle import AdapterFactory
+
+        if cls.ADAPTER_METADATA is None:
+            raise ValueError(
+                f"{cls.__name__} must define ADAPTER_METADATA for auto-registration"
+            )
+
+        # Default factory: call constructor with hass
+        if factory_fn is None:
+            factory_fn = lambda hass, _: cls(hass=hass)
+
+        return AdapterFactory(
+            adapter_type=cls.ADAPTER_METADATA.adapter_type,
+            channel_prefix=cls.ADAPTER_METADATA.channel_prefix,
+            factory_fn=factory_fn,
+            cleanup_fn=cleanup_fn,
+        )

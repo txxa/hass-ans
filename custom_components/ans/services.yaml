@@ -68,3 +68,9 @@ send_notification:
         camera: front_entrance
       selector:
         object:
+refresh_channels:
+  name: Refresh Channels
+  description: >
+    Reload notification channels and re-sync delivery adapters.
+    Use this after adding new notify integrations or if channels aren't appearing.
+  fields: {}

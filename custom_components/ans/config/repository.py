@@ -10,16 +10,18 @@ from uuid import uuid4
 from homeassistant.config_entries import ConfigSubentry
 from homeassistant.core import HomeAssistant
 
-from .channel_registry import ChannelRegistry
-from .const import (
+from ..channels.channel_registry import ChannelRegistry
+from ..const import (
     # CONFIG_IDENTITY_DEFAULT_SETTINGS_KEY,
     RCPT_CONFIG_ID_KEY,
 )
-from .helper import async_detect_notification_channels, get_main_entry, get_subentries
-from .models import (
+from ..helper import get_main_entry, get_subentries
+from ..models import (
+    ChannelInfo,
     ConfigSnapshot,
     RecipientConfig,
     RecipientData,
+    RecipientType,
     SystemConfig,
 )
 
@@ -207,8 +209,38 @@ class ConfigRepository:
         return all([main_entry, sub_entries])
 
     # ---------------------------
-    # Snapshot
+    # Channel Management
     # ---------------------------
+
+    async def refresh_channels(self) -> int:
+        """Refresh channel registry from current HA services.
+
+        Returns
+        -------
+        int
+            Number of channels registered.
+
+        """
+        _LOGGER.debug("Refreshing channel registry...")
+
+        # Clear existing channels
+        self.channel_registry.clear()
+
+        # Re-detect channels
+        channels = await ChannelRegistry.detect_notification_channels(self.hass)
+
+        if not channels:
+            _LOGGER.warning("No notification channels detected")
+            return 0
+
+        # Register fresh set
+        self.channel_registry.register_multiple(channels)
+
+        _LOGGER.info(
+            "Refreshed channel registry: %d channels registered", len(channels)
+        )
+
+        return len(channels)
 
     async def load_channels(self) -> bool:
         """Load available notification channels into the registry.
@@ -216,20 +248,44 @@ class ConfigRepository:
         Returns
         -------
         bool
-            True if channels were loaded successfully.
+            True if at least one channel was loaded, False otherwise.
 
         """
-        try:
-            channels = await async_detect_notification_channels(self.hass)
-            self.channel_registry.register_multiple(channels)
-            _LOGGER.info(
-                "Loaded %d notification channels into registry",
-                self.channel_registry.count(),
+        count = await self.refresh_channels()
+
+        if count == 0:
+            _LOGGER.error(
+                "No notification channels available. "
+                "Ensure notify integrations are configured."
             )
-            return True
-        except Exception as e:
-            _LOGGER.error("Failed to load notification channels: %s", e)
             return False
+
+        return True
+
+    def get_channels_for_ui(
+        self, recipient_type: RecipientType | None = None
+    ) -> list[ChannelInfo]:
+        """Get channels for UI display, optionally filtered by recipient type.
+
+        Parameters
+        ----------
+        recipient_type : RecipientType, optional
+            Filter by recipient type (None = all channels).
+
+        Returns
+        -------
+        list[ChannelInfo]
+            List of channel info objects.
+
+        """
+        if recipient_type is None:
+            return self.channel_registry.get_all()
+
+        return self.channel_registry.get_channels_for_recipient_type(recipient_type)
+
+    # ---------------------------
+    # Snapshot
+    # ---------------------------
 
     def snapshot(self) -> ConfigSnapshot:
         """Return an immutable ConfigSnapshot representing the current ANS configuration."""

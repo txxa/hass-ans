@@ -22,10 +22,9 @@ from homeassistant.config_entries import (
     SubentryFlowResult,
 )
 
-from .config_validator import ConfigValidator, FieldValidationError, ValidationContext
-from .const import (
+from ..channels.channel_registry import ChannelRegistry
+from ..const import (
     CONFIG_FLOW_SELECTED_HA_USERS_KEY,
-    DOMAIN,
     PERSISTENT_NOTIFICATION_CHANNEL,
     RCPT_CONFIG_CONFIGURED_CHANNELS_KEY,
     RCPT_CONFIG_CRITICALITY_LEVELS_KEY,
@@ -49,22 +48,13 @@ from .const import (
     SUBENTRY_FLOW_STEP_RECIPIENT_SELECTION_KEY,
     SYS_DEFAULT_SYSTEM_RECIPIENT_NAME,
 )
-from .forms import (
-    get_recipient_basic_settings_schema,
-    get_recipient_criticality_channel_mapping_schema,
-    get_recipient_definition_schema,
-    get_recipient_dnd_settings_schema,
-    get_recipient_selection_schema,
-)
-from .helper import (
+from ..helper import (
     async_check_recipient_name_availability,
-    async_detect_notification_channels,
     channel_info_to_select_options,
     dict_to_select_options_list,
-    filter_channels_by_recipient_type,
     get_main_entry,
 )
-from .models import (
+from ..models import (
     ChannelInfo,
     NotificationCriticality,
     NotificationType,
@@ -73,6 +63,14 @@ from .models import (
     RecipientType,
     SystemConfig,
 )
+from .forms import (
+    get_recipient_basic_settings_schema,
+    get_recipient_criticality_channel_mapping_schema,
+    get_recipient_definition_schema,
+    get_recipient_dnd_settings_schema,
+    get_recipient_selection_schema,
+)
+from .validator import ConfigValidator, FieldValidationError, ValidationContext
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -397,7 +395,7 @@ class RecipientConfigFlow(ConfigSubentryFlow):
 
         # Get available channels filtered by recipient type
         available_channels = await self._get_available_channels()
-        filtered_channels = filter_channels_by_recipient_type(
+        filtered_channels = ChannelRegistry.filter_channels_by_recipient_type(
             available_channels, recipient_type
         )
 
@@ -736,8 +734,8 @@ class RecipientConfigFlow(ConfigSubentryFlow):
     async def _get_available_channels(self) -> list[ChannelInfo]:
         """Get available notification channels from system config.
 
-        Tries to load from the integration's channel registry first,
-        falls back to fresh detection if registry is not available.
+        Uses the main entry's config repository as the source of truth.
+        Falls back to detection only if repository is unavailable.
 
         Returns:
             List of ChannelInfo objects for enabled channels only
@@ -749,30 +747,42 @@ class RecipientConfigFlow(ConfigSubentryFlow):
 
         all_channels: list[ChannelInfo] = []
 
-        # Try to get from loaded integration's channel registry
-        if DOMAIN in self.hass.data:
-            _LOGGER.debug("Checking hass.data[%s] for channel registry", DOMAIN)
-            for entry_id, entry_data in self.hass.data[DOMAIN].items():
-                _LOGGER.debug("Checking entry %s: %s", entry_id, entry_data.keys())
-                config_repo = entry_data.get("config_repository")
-                if config_repo and hasattr(config_repo, "channel_registry"):
-                    all_channels = config_repo.channel_registry.get_all()
-                    _LOGGER.debug(
-                        "Found %d channels in registry: %s",
-                        len(all_channels),
-                        [ch.id for ch in all_channels],
-                    )
-                    break
+        # Try to get from config repository (preferred)
+        # Local import to avoid circular dependency
+        from .. import get_config_repository  # noqa: PLC0415
 
-        # Fallback: detect channels fresh if registry didn't have any
-        if not all_channels:
-            _LOGGER.debug("Channel registry empty or unavailable, detecting channels")
+        config_repo = get_config_repository(self.hass)
+        if config_repo and config_repo.channel_registry.count() > 0:
+            # Get channels filtered by recipient type if available
+            recipient_type = self._recipient_meta.get(RCPT_CONFIG_TYPE_KEY)
+            if recipient_type:
+                all_channels = config_repo.get_channels_for_ui(
+                    RecipientType(recipient_type)
+                )
+            else:
+                all_channels = config_repo.get_channels_for_ui()
 
-            all_channels = await async_detect_notification_channels(self.hass)
             _LOGGER.debug(
-                "Detected %d channels: %s",
+                "Loaded %d channels from config repository",
                 len(all_channels),
-                [ch.id for ch in all_channels],
+            )
+        else:
+            # Fallback: Direct detection (less preferred, logs warning)
+            _LOGGER.warning(
+                "Config repository unavailable or empty, falling back to direct channel detection"
+            )
+            all_channels = await ChannelRegistry.detect_notification_channels(self.hass)
+
+            # Apply recipient type filtering manually if needed
+            recipient_type = self._recipient_meta.get(RCPT_CONFIG_TYPE_KEY)
+            if recipient_type:
+                all_channels = ChannelRegistry.filter_channels_by_recipient_type(
+                    all_channels, RecipientType(recipient_type)
+                )
+
+            _LOGGER.debug(
+                "Detected %d channels directly",
+                len(all_channels),
             )
 
         # Filter to only enabled channels from system config

@@ -6,8 +6,9 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
+from ..channels.adapter_lifecycle import AdapterType
 from ..models import DeliveryResult, NotificationPayload, RecipientContactInfo
-from .base import DeliveryAdapter
+from .base import AdapterMetadata, DeliveryAdapter
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -28,6 +29,13 @@ class MobileAppDeliveryAdapter(DeliveryAdapter):
     """
 
     is_system_channel = False  # Mobile app delivers to specific devices
+
+    # Metadata for auto-registration
+    ADAPTER_METADATA = AdapterMetadata(
+        adapter_type=AdapterType.DYNAMIC_MULTI,
+        channel_prefix="notify.mobile_app",
+        integration="mobile_app",
+    )
 
     def __init__(self, *, hass: HomeAssistant, device_id: str) -> None:
         """Initialize mobile app adapter for a specific device.

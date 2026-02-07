@@ -6,7 +6,7 @@ Adapters can be registered once during setup and retrieved as needed.
 
 import logging
 
-from .delivery.base import DeliveryAdapter
+from .base import DeliveryAdapter
 
 _LOGGER = logging.getLogger(__name__)
 

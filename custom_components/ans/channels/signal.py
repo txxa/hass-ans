@@ -6,8 +6,9 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
+from ..channels.adapter_lifecycle import AdapterType
 from ..models import DeliveryResult, NotificationPayload, RecipientContactInfo
-from .base import DeliveryAdapter
+from .base import AdapterMetadata, DeliveryAdapter
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -32,6 +33,13 @@ class SignalDeliveryAdapter(DeliveryAdapter):
 
     channel = "notify.signal"
     is_system_channel = False  # Signal delivers to specific recipients
+
+    # Metadata for auto-registration
+    ADAPTER_METADATA = AdapterMetadata(
+        adapter_type=AdapterType.DYNAMIC_SINGLE,
+        channel_prefix="notify.signal",
+        integration="signal_messenger",
+    )
 
     def __init__(self, *, hass: HomeAssistant, service_name: str = "signal") -> None:
         """Initialize Signal adapter with Home Assistant service.

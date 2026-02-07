@@ -7,7 +7,7 @@ import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 
-from .persistence_file import DeliveryAttemptLog, NotificationRegistry, RetryQueue
+from .file import DeliveryAttemptLog, NotificationRegistry, RetryQueue
 
 _LOGGER = logging.getLogger(__name__)
 

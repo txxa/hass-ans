@@ -3,6 +3,8 @@
 Provides the `ans.send_notification` service for sending notifications through
 the ANS notification delivery system with configurable criticality and delivery
 channel selection.
+
+Also provides `ans.refresh_channels` for reloading notification channels.
 """
 
 import logging
@@ -13,12 +15,14 @@ from uuid import uuid4
 from homeassistant.core import HomeAssistant, ServiceCall
 
 from .const import DOMAIN, SERVICE_SEND
+from .delivery.orchestrator import NotificationOrchestrator
 from .models import (
     NotificationCriticality,
     NotificationPayload,
     NotificationType,
 )
-from .orchestrator import NotificationOrchestrator
+
+SERVICE_REFRESH_CHANNELS = "refresh_channels"
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -56,6 +60,70 @@ async def async_setup_services(
         _handle_notify,
     )
     _LOGGER.debug("ANS service '%s.%s' registered", DOMAIN, SERVICE_SEND)
+
+    async def _handle_refresh_channels(call: ServiceCall) -> None:
+        """Refresh notification channels and adapters.
+
+        Service: ans.refresh_channels
+
+        Use this if:
+        - You added a new notify integration
+        - Channels aren't appearing in ANS
+        - Diagnostics show channel-adapter mismatches
+        """
+        # Local import to avoid circular dependency
+        from . import get_config_repository  # noqa: PLC0415
+
+        config_repo = get_config_repository(hass)
+        if not config_repo:
+            _LOGGER.error("ANS not initialized, cannot refresh channels")
+            return
+
+        # Refresh channel registry
+        channel_count = await config_repo.refresh_channels()
+
+        # Get delivery system components and re-sync adapters
+        if DOMAIN in hass.data:
+            for entry_data in hass.data[DOMAIN].values():
+                if "adapter_lifecycle" in entry_data:
+                    lifecycle_manager = entry_data["adapter_lifecycle"]
+
+                    # Re-sync adapters with updated channels
+                    system_config = config_repo.system_config
+                    if not system_config:
+                        _LOGGER.warning(
+                            "ANS system configuration not available; skipping adapter sync."
+                        )
+                        return
+                    enabled_channels = system_config.enabled_channels
+                    lifecycle_manager.sync_with_config(enabled_channels)
+
+                    # Validate consistency
+                    adapter_registry = entry_data["adapter_registry"]
+                    validation = config_repo.channel_registry.validate_adapters(
+                        adapter_registry
+                    )
+
+                    _LOGGER.info(
+                        "Channels refreshed: %d channels, %d adapters",
+                        channel_count,
+                        len(adapter_registry.channels()),
+                    )
+
+                    if validation["missing_adapters"]:
+                        _LOGGER.warning(
+                            "Missing adapters for channels: %s",
+                            validation["missing_adapters"],
+                        )
+
+                    break
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_REFRESH_CHANNELS,
+        _handle_refresh_channels,
+    )
+    _LOGGER.debug("ANS service '%s.%s' registered", DOMAIN, SERVICE_REFRESH_CHANNELS)
 
 
 # ---------------------------------------------------------------------------

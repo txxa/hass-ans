@@ -9,7 +9,7 @@ Evaluates notification eligibility based on recipient policies:
 import re
 from datetime import UTC, datetime, time
 
-from .models import (
+from ..models import (
     FilterDecision,
     FilterDecisionType,
     FilterReason,

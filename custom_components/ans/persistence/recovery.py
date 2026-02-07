@@ -13,7 +13,7 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 
-from .models import NotificationDeliveryTask
+from ..models import NotificationDeliveryTask
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ class PersistenceRecovery:
         """
         self._hass = hass
         # Lazy import to avoid circular dependencies
-        from .persistence_file import (
+        from .file import (  # noqa: PLC0415
             DeliveryAttemptLog,
             NotificationRegistry,
             RetryQueue,

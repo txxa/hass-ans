@@ -1,4 +1,14 @@
-"""Service detection helpers for Advanced Notification System."""
+"""Helper utilities for Advanced Notification System.
+
+This module contains general-purpose helper functions for:
+- UI formatting and label generation
+- Config entry management
+- Validation utilities
+- Form data conversion
+
+Note: Channel detection has been moved to ChannelRegistry for better
+architectural consistency.
+"""
 
 from __future__ import annotations
 
@@ -11,96 +21,16 @@ from homeassistant.helpers.selector import (
     SelectOptionDict,
 )
 
-from .const import DOMAIN, PERSISTENT_NOTIFICATION_CHANNEL, RCPT_MAX_RATE_LIMIT
-from .models import ChannelInfo, ChannelScope, IntegrationInfo, RecipientType
+from .const import DOMAIN, RCPT_MAX_RATE_LIMIT
+from .exceptions import ConfigEntryNotFoundError
+from .models import ChannelInfo
 
 _LOGGER = logging.getLogger(__name__)
 
 
-async def async_detect_notification_channels(
-    hass: HomeAssistant,
-) -> list[ChannelInfo]:
-    """Discover available notification channels (notify.* services).
-
-    Returns
-    -------
-    list[ChannelInfo]
-        List of discovered notification channels with metadata.
-
-    """
-
-    services = hass.services.async_services()
-    notify_services = services.get("notify", {})
-
-    if not notify_services:
-        _LOGGER.warning(
-            "No notify services found during channel detection. "
-            "This can happen if ANS loads before notify integrations. "
-            "Channels will be detected on next config reload."
-        )
-
-    results: list[ChannelInfo] = []
-    for service_id in sorted(notify_services.keys()):
-        if service_id in ("notify", "send_message"):
-            continue  # Skip unsupported services
-
-        channel_id = f"notify.{service_id}"
-        label = format_channel_label(service_id)
-
-        # Determine scope based on channel nature:
-        # - persistent_notification: delivers to HA instance (SYSTEM)
-        # - all others: deliver to specific recipients (RECIPIENT)
-        # Future: TTS channels will also be SYSTEM
-        scope = (
-            ChannelScope.SYSTEM
-            if channel_id == PERSISTENT_NOTIFICATION_CHANNEL
-            else ChannelScope.RECIPIENT
-        )
-
-        results.append(
-            ChannelInfo(
-                id=channel_id,
-                label=label,
-                scope=scope,
-                integration=service_id,
-            )
-        )
-        _LOGGER.debug(
-            "Detected notification channel: %s (scope=%s)", channel_id, scope.value
-        )
-
-    return results
-
-
-async def async_detect_tts_integrations(hass: HomeAssistant) -> list[IntegrationInfo]:
-    """Discover available TTS integrations.
-
-    Returns:
-        List of dicts:
-        {
-            "id": str,         # TTS service id
-            "label": str,      # Human-friendly label
-            "integration": str # Integration domain
-        }
-
-    """
-    services = hass.services.async_services()
-    tts_services = services.get("tts", {})
-
-    results: list[IntegrationInfo] = []
-    for service_id in sorted(tts_services.keys()):
-        # integration = _guess_integration_from_service(service_id)
-        label = format_channel_label(service_id)
-        results.append(
-            IntegrationInfo(
-                f"tts.{service_id}",
-                label,
-                service_id,
-            )
-        )
-
-    _LOGGER.debug("Detected TTS integrations: %s", results)
-    return results
+# Note: async_detect_notification_channels() and async_detect_tts_integrations()
+# have been moved to ChannelRegistry.detect_notification_channels() and
+# ChannelRegistry.detect_tts_integrations() for better architectural consistency.
 
 
 def format_channel_label(service_id: str) -> str:
@@ -109,34 +39,17 @@ def format_channel_label(service_id: str) -> str:
     The label should be human-friendly, e.g., "Mobile App (John)" or "Email (Work)".
     Falls back to service_id if no better info is available.
     """
-    # friendly_integration = integration.replace("_", " ").title()
-    # friendly_service = service_id.replace("_", " ").title()
-
-    # if integration and integration != service_id:
-    #     label = f"{friendly_integration} ({friendly_service})"
-    # else:
-    #     label = friendly_service
-
-    # return label
+    # Split on first underscore to separate integration from specific identifier
+    if "_" in service_id:
+        parts = service_id.split("_", 1)
+        integration = parts[0].replace("_", " ").title()
+        specific = parts[1].replace("_", " ").title()
+        return f"{integration} ({specific})"
     return service_id.replace("_", " ").title()
 
 
-def pretty_channel_name(channel_id: str) -> str:
-    """Return a pretty name for a channel based on its service ID.
-
-    Example:
-        mobile_app_john -> Mobile App (John)
-        email_work -> Email (Work)
-
-    """
-    channel_id = channel_id.removeprefix("notify.")
-    # if "_" in service_id:
-    #     parts = service_id.split("_", 1)
-    #     integration = parts[0].replace("_", " ").title()
-    #     specific = parts[1].replace("_", " ").title()
-    #     return f"{integration} ({specific})"
-    return channel_id.replace("_", " ").title()
-
+# Commented-out helper functions kept for reference
+# These may be needed in future implementations
 
 # def _guess_integration_from_service(service_id: str) -> str:
 #     """Attempt to guess the integration domain from a service name.
@@ -169,27 +82,34 @@ def get_main_entry(hass: HomeAssistant) -> ConfigEntry | None:
     entries = list(hass.config_entries.async_entries(DOMAIN))
     # Prefer the entry that has unique_id == DOMAIN (main entry created in main flow)
     for entry in entries:
-        try:
-            if getattr(entry, "unique_id", None) == DOMAIN:
-                return entry
-        except Exception:
-            continue
+        if getattr(entry, "unique_id", None) == DOMAIN:
+            return entry
     # Fallback to first if present
     return entries[0] if entries else None
 
 
 def get_subentries(hass: HomeAssistant) -> list[ConfigSubentry]:
-    """Return all ANS subentries or an empty list if none found."""
+    """Return all ANS subentries.
+
+    Raises:
+        ConfigEntryNotFoundError: If the main ANS config entry is not found.
+
+    """
     main_entry = get_main_entry(hass)
     if main_entry:
         return list(main_entry.subentries.values())
-    raise  # TODO: raise a proper exception
+    raise ConfigEntryNotFoundError("ANS main config entry not found")
 
 
 async def async_check_recipient_name_availability(
     hass: HomeAssistant, name: str
 ) -> bool:
-    """Check if the receiver name is already used."""
+    """Check if the receiver name is already used.
+
+    Raises:
+        ConfigEntryNotFoundError: If the main ANS config entry is not found.
+
+    """
     # Get all config entries for ANS domain
     main_entry = get_main_entry(hass)
     # Check if name is already used
@@ -198,8 +118,7 @@ async def async_check_recipient_name_availability(
             if subentry.data["name"] == name:
                 return False
     else:
-        # TODO: raise a proper exception
-        raise
+        raise ConfigEntryNotFoundError("ANS main config entry not found")
     return True
 
 
@@ -275,21 +194,6 @@ def channel_info_to_select_options(
     return [SelectOptionDict(label=ch.label, value=ch.id) for ch in channels]
 
 
-def filter_channels_by_recipient_type(
-    channels: list[ChannelInfo], recipient_type: RecipientType
-) -> list[ChannelInfo]:
-    """Filter channels based on recipient type using channel metadata.
-
-    Args:
-        channels: List of ChannelInfo objects.
-        recipient_type: Type of recipient (SYSTEM, HA_USER, VIRTUAL).
-
-    Returns:
-        Filtered list of ChannelInfo appropriate for the recipient type.
-
-    """
-
-    if recipient_type == RecipientType.SYSTEM:
-        return [ch for ch in channels if ch.id == PERSISTENT_NOTIFICATION_CHANNEL]
-
-    return [ch for ch in channels if ch.id != PERSISTENT_NOTIFICATION_CHANNEL]
+# Note: filter_channels_by_recipient_type has been moved to
+# ChannelRegistry.filter_channels_by_recipient_type() for better
+# architectural consistency with other channel filtering methods.

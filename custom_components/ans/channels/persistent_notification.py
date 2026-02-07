@@ -5,8 +5,9 @@ import logging
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.typing import TemplateVarsType
 
+from ..channels.adapter_lifecycle import AdapterType
 from ..models import DeliveryResult, NotificationPayload, RecipientContactInfo
-from .base import DeliveryAdapter
+from .base import AdapterMetadata, DeliveryAdapter
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -26,6 +27,13 @@ class PersistentNotificationAdapter(DeliveryAdapter):
 
     channel = "notify.persistent_notification"
     is_system_channel = True  # Persistent notifications are system-wide
+
+    # Metadata for auto-registration
+    ADAPTER_METADATA = AdapterMetadata(
+        adapter_type=AdapterType.STATIC,
+        channel_prefix="notify.persistent_notification",
+        integration="persistent_notification",
+    )
 
     def __init__(self, *, hass: HomeAssistant) -> None:
         """Initialize persistent notification adapter.

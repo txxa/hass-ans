@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
     from .adapter_registry import AdapterRegistry
-    from .delivery.base import DeliveryAdapter
+    from .base import DeliveryAdapter
 
 _LOGGER = logging.getLogger(__name__)
 

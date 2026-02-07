@@ -5,10 +5,10 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from .models import Attempt, DeliveryStatus
+from ..models import Attempt, DeliveryStatus
 
 if TYPE_CHECKING:
-    from .models import NotificationDeliveryTask
+    from ..models import NotificationDeliveryTask
 
 
 class DeliveryStateStore(ABC):

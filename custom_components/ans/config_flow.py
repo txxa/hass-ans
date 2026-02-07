@@ -21,8 +21,14 @@ from homeassistant.config_entries import (
 )
 from homeassistant.core import callback
 
-from custom_components.ans.config_validator import FieldValidationError
+from custom_components.ans.config.validator import FieldValidationError
 
+from .channels.channel_registry import ChannelRegistry
+from .config.forms import get_system_config_schema, get_system_options_schema
+
+# Import sub-entry flow for Home Assistant to discover
+# pyright: reportUnusedImport=false
+from .config.recipient_flow import RecipientConfigFlow  # noqa: F401
 from .const import (
     CONFIG_FLOW_ERROR_INVALID_SYSTEM_SETTINGS_KEY,
     CONFIG_FLOW_STEP_SYS_SETTINGS_KEY,
@@ -46,13 +52,8 @@ from .const import (
     SYS_DEFAULT_RETRY_MAX_DELAY_SECONDS,
     SYS_STORAGE_DEFAULT_FILE_RETENTION_DAYS,
 )
-from .forms import get_system_config_schema, get_system_options_schema
-from .helper import async_detect_notification_channels, channel_info_to_select_options
-from .models import ChannelInfo, SystemConfig
-
-# Import sub-entry flow for Home Assistant to discover
-# pyright: reportUnusedImport=false
-from .recipient_flow import RecipientConfigFlow  # noqa: F401
+from .helper import channel_info_to_select_options
+from .models import SystemConfig
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -107,7 +108,7 @@ class ANSConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             try:
                 # Validate system configuration
-                from .config_validator import ConfigValidator  # noqa: PLC0415
+                from .config.validator import ConfigValidator  # noqa: PLC0415
 
                 if is_reconfigure:
                     # In reconfigure mode, preserve existing options (rate limits)
@@ -219,9 +220,27 @@ class ANSConfigFlow(ConfigFlow, domain=DOMAIN):
             defaults = user_input or {}
 
         # Detect available notification channels
-        available_channels: list[
-            ChannelInfo
-        ] = await async_detect_notification_channels(self.hass)
+        # For reconfigure, use repository if available; otherwise detect fresh
+        if is_reconfigure:
+            # Local import to avoid circular dependency
+            from . import get_config_repository  # noqa: PLC0415
+
+            config_repo = get_config_repository(self.hass)
+            if config_repo and config_repo.channel_registry.count() > 0:
+                available_channels = config_repo.get_channels_for_ui()
+            else:
+                # Fallback to direct detection (shouldn't happen during reconfigure)
+                _LOGGER.warning(
+                    "Config repository not available during reconfigure, detecting channels directly"
+                )
+                available_channels = await ChannelRegistry.detect_notification_channels(
+                    self.hass
+                )
+        else:
+            # Initial setup - detect directly (no repository yet)
+            available_channels = await ChannelRegistry.detect_notification_channels(
+                self.hass
+            )
 
         channel_options = channel_info_to_select_options(available_channels)
 
@@ -303,7 +322,7 @@ class ANSOptionsFlow(ConfigFlow):
         if user_input is not None:
             try:
                 # Validate only the tunable parameters
-                from .config_validator import ConfigValidator  # noqa: PLC0415
+                from .config.validator import ConfigValidator  # noqa: PLC0415
 
                 # Merge with existing data (enabled_channels from data)
                 full_config = {

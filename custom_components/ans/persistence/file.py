@@ -27,10 +27,10 @@ from custom_components.ans.const import (
     SYS_STORAGE_RETRIES_FILE,
 )
 
-from .models import Attempt
+from ..models import Attempt
 
 if TYPE_CHECKING:
-    from .models import NotificationDeliveryTask
+    from ..models import NotificationDeliveryTask
 
 _LOGGER = logging.getLogger(__name__)
 

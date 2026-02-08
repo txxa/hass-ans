@@ -212,22 +212,26 @@ class RecipientConfigFlow(ConfigSubentryFlow):
 
                 # Check name availability
                 name = validated[RCPT_CONFIG_NAME_KEY]
-                if not await async_check_recipient_name_availability(self.hass, name):
+
+                # During reconfiguration, allow keeping the same name
+                current_name = (
+                    self._recipient_meta.get(RCPT_CONFIG_NAME_KEY)
+                    if self._reconfigure_entry
+                    else None
+                )
+
+                # Only check availability if the name has changed (or for new recipients)
+                if (
+                    name != current_name
+                    and not await async_check_recipient_name_availability(
+                        self.hass, name
+                    )
+                ):
                     # errors[ID_CONFIG_NAME_KEY] = "name_already_exists"
                     raise vol.Invalid(
                         message=f"Name '{name}' is already used.",
                         path=[RCPT_CONFIG_NAME_KEY],
                     )
-
-                # Additional validation: For HA_USER and VIRTUAL, require email or phone
-                if recipient_type in (RecipientType.HA_USER, RecipientType.VIRTUAL):
-                    email = validated.get(RCPT_CONFIG_EMAIL_KEY)
-                    phone = validated.get(RCPT_CONFIG_PHONE_KEY)
-                    if not email and not phone:
-                        raise vol.Invalid(
-                            "Either email address or phone number must be provided",
-                            path=["base", "email_or_phone_required"],
-                        )
 
                 # Store recipient definition
                 self._recipient_meta.update(validated)
@@ -399,15 +403,40 @@ class RecipientConfigFlow(ConfigSubentryFlow):
             available_channels, recipient_type
         )
 
+        # Further filter channels based on available contact information
+        # Extract channel IDs for filtering
+        all_channel_ids = [ch.id for ch in filtered_channels]
+
+        # Determine what contact info is available
+        has_email = bool(self._recipient_meta.get(RCPT_CONFIG_EMAIL_KEY))
+        has_phone = bool(self._recipient_meta.get(RCPT_CONFIG_PHONE_KEY))
+        has_ha_user = recipient_type == RecipientType.HA_USER
+
+        # Filter channels by contact info requirements using ChannelRegistry
+        available_channel_ids, unavailable_channels = (
+            ChannelRegistry.filter_channels_by_contact_info(
+                all_channel_ids,
+                has_email=has_email,
+                has_phone=has_phone,
+                has_ha_user=has_ha_user,
+            )
+        )
+
+        # Build list of available channel info objects
+        available_channel_info = [
+            ch for ch in filtered_channels if ch.id in available_channel_ids
+        ]
+
         # Build form values
         criticality_levels = {c.name: c.value for c in NotificationCriticality}
-        channel_options = channel_info_to_select_options(filtered_channels)
+        channel_options = channel_info_to_select_options(available_channel_info)
 
         values = {
             RCPT_CONFIG_CRITICALITY_LEVELS_KEY: dict_to_select_options_list(
                 criticality_levels
             ),
             RCPT_CONFIG_CONFIGURED_CHANNELS_KEY: channel_options,
+            "unavailable_channels": unavailable_channels,  # Pass unavailable channels with reasons
         }
 
         # Show channel mapping form
@@ -486,6 +515,8 @@ class RecipientConfigFlow(ConfigSubentryFlow):
             RCPT_CONFIG_ID_KEY: entry_data.get(RCPT_CONFIG_ID_KEY),
             RCPT_CONFIG_NAME_KEY: entry_data.get(RCPT_CONFIG_NAME_KEY),
             RCPT_CONFIG_TYPE_KEY: entry_data.get(RCPT_CONFIG_TYPE_KEY),
+            RCPT_CONFIG_EMAIL_KEY: entry_data.get(RCPT_CONFIG_EMAIL_KEY),
+            RCPT_CONFIG_PHONE_KEY: entry_data.get(RCPT_CONFIG_PHONE_KEY),
         }
         self._recipient_settings = entry_data
 
@@ -497,9 +528,12 @@ class RecipientConfigFlow(ConfigSubentryFlow):
 
         self.system_config = SystemConfig.from_dict(dict(self._main_entry.data))
 
-        # Start reconfiguration from basic settings
-        # (skip selection and definition as those are immutable)
-        return await self.async_step_recipient_basic_settings(user_input)
+        # # Start reconfiguration from basic settings
+        # # (skip selection and definition as those are immutable)
+        # return await self.async_step_recipient_basic_settings(user_input)
+
+        # Start reconfiguration from definition step to allow changing contact info
+        return await self.async_step_recipient_definition(user_input)
 
     async def _setup_system_recipient(self) -> SubentryFlowResult:
         """Set up the Home Assistant system recipient.

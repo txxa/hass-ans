@@ -153,24 +153,43 @@ class NotificationDeliveryProcessor:
         # Skip validation for system-wide channels (e.g., persistent_notification)
         # as they deliver to the HA instance, not to a person
         if task.channel_info.scope == ChannelScope.RECIPIENT:
-            if (
-                not task.contact_info.email_address
-                and not task.contact_info.phone_number
-            ):
-                # Log attempt with validation failure
-                attempt = await self._create_attempt(task)
-                attempt.status = DeliveryStatus.PERMANENT_FAIL
-                attempt.ended_at = datetime.now(UTC)
-                attempt.error = "no_contact_information"
+            # Get adapter to check its requirements
+            adapter = self._adapters.get(task.channel_info.id)
 
-                await self._attempt_log.log_attempt(attempt, task)
+            if adapter:
+                requirements = adapter.get_requirements()
 
-                _LOGGER.warning(
-                    "Task job_id=%s skipped: no contact information for recipient %s",
-                    task.job_id,
-                    task.recipient_id,
-                )
-                return
+                # Build list of missing requirements
+                missing_requirements: list[str] = []
+
+                if (
+                    requirements.get("requires_email", False)
+                    and not task.contact_info.email_address
+                ):
+                    missing_requirements.append("email address")
+                if (
+                    requirements.get("requires_phone", False)
+                    and not task.contact_info.phone_number
+                ):
+                    missing_requirements.append("phone number")
+
+                if missing_requirements:
+                    # Log attempt with validation failure
+                    attempt = await self._create_attempt(task)
+                    attempt.status = DeliveryStatus.PERMANENT_FAIL
+                    attempt.ended_at = datetime.now(UTC)
+                    attempt.error = f"missing_required_contact_info: {', '.join(missing_requirements)}"
+
+                    await self._attempt_log.log_attempt(attempt, task)
+
+                    _LOGGER.warning(
+                        "Task job_id=%s skipped: missing required contact information for recipient %s on channel %s: %s",
+                        task.job_id,
+                        task.recipient_id,
+                        task.channel_info.id,
+                        ", ".join(missing_requirements),
+                    )
+                    return
 
         # ATTEMPT CREATION & EXECUTION
         attempt = await self._create_attempt(task)

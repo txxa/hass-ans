@@ -28,55 +28,6 @@ from .models import ChannelInfo
 _LOGGER = logging.getLogger(__name__)
 
 
-# Note: async_detect_notification_channels() and async_detect_tts_integrations()
-# have been moved to ChannelRegistry.detect_notification_channels() and
-# ChannelRegistry.detect_tts_integrations() for better architectural consistency.
-
-
-def format_channel_label(service_id: str) -> str:
-    """Return a readable label for a channel.
-
-    The label should be human-friendly, e.g., "Mobile App (John)" or "Email (Work)".
-    Falls back to service_id if no better info is available.
-    """
-    # Split on first underscore to separate integration from specific identifier
-    if "_" in service_id:
-        parts = service_id.split("_", 1)
-        integration = parts[0].replace("_", " ").title()
-        specific = parts[1].replace("_", " ").title()
-        return f"{integration} ({specific})"
-    return service_id.replace("_", " ").title()
-
-
-# Commented-out helper functions kept for reference
-# These may be needed in future implementations
-
-# def _guess_integration_from_service(service_id: str) -> str:
-#     """Attempt to guess the integration domain from a service name.
-
-#     Example:
-#         mobile_app_john -> mobile_app
-#         email_work -> email
-
-#     """
-#     if "_" in service_id:
-#         return service_id.split("_", 1)[0]
-#     return service_id
-
-
-# async def get_all_ha_users(hass: HomeAssistant) -> list[dict[str, Any]]:
-#     """Return all HA users (id + name)."""
-#     # TODO: harden this code incl. error handling (try/except) and logging
-#     users = await hass.auth.async_get_users()
-#     return [
-#         {
-#             "id": u.id,
-#             "name": u.name or "Unnamed User",
-#         }
-#         for u in users
-#     ]
-
-
 def get_main_entry(hass: HomeAssistant) -> ConfigEntry | None:
     """Return the main ANS config entry or None if not found."""
     entries = list(hass.config_entries.async_entries(DOMAIN))
@@ -192,8 +143,3 @@ def channel_info_to_select_options(
     """
 
     return [SelectOptionDict(label=ch.label, value=ch.id) for ch in channels]
-
-
-# Note: filter_channels_by_recipient_type has been moved to
-# ChannelRegistry.filter_channels_by_recipient_type() for better
-# architectural consistency with other channel filtering methods.

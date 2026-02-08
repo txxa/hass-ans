@@ -17,6 +17,7 @@ from ..models import ChannelInfo, ChannelScope, IntegrationInfo, RecipientType
 
 if TYPE_CHECKING:
     from .adapter_registry import AdapterRegistry
+    from .base import ChannelRequirement, DeliveryAdapter
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -31,12 +32,210 @@ class ChannelRegistry:
     ----------
     _channels : dict[str, ChannelInfo]
         Internal mapping of channel ID to channel information.
+    _adapter_classes : dict[str, Type[DeliveryAdapter]]
+        Class-level registry mapping channel patterns to adapter classes.
 
     """
+
+    # Class-level adapter registry for requirement lookups
+    _adapter_classes: dict[str, type[DeliveryAdapter]] = {}
 
     def __init__(self) -> None:
         """Initialize an empty channel registry."""
         self._channels: dict[str, ChannelInfo] = {}
+
+    @classmethod
+    def register_adapter_class(
+        cls, channel_pattern: str, adapter_class: type[DeliveryAdapter]
+    ) -> None:
+        """Register an adapter class for requirement lookups.
+
+        Parameters
+        ----------
+        channel_pattern : str
+            Channel ID or pattern (e.g., "notify.signal", "notify.mobile_app").
+        adapter_class : Type[DeliveryAdapter]
+            Adapter class implementing get_requirements().
+
+        """
+        cls._adapter_classes[channel_pattern] = adapter_class
+        _LOGGER.debug(
+            "Registered adapter class for pattern '%s': %s",
+            channel_pattern,
+            adapter_class.__name__,
+        )
+
+    @classmethod
+    def get_adapter_class(cls, channel_id: str) -> type[DeliveryAdapter] | None:
+        """Get adapter class for a channel ID.
+
+        Parameters
+        ----------
+        channel_id : str
+            Channel identifier (e.g., "notify.signal", "notify.mobile_app_sm_s911b").
+
+        Returns
+        -------
+        Type[DeliveryAdapter] | None
+            Adapter class if found, None otherwise.
+
+        """
+        # Direct match
+        if channel_id in cls._adapter_classes:
+            return cls._adapter_classes[channel_id]
+
+        # Pattern match for dynamic channels (e.g., notify.mobile_app_*)
+        for pattern, adapter_class in cls._adapter_classes.items():
+            if cls._matches_channel_pattern(channel_id, pattern):
+                return adapter_class
+
+        return None
+
+    @classmethod
+    def get_channel_requirements(cls, channel_id: str) -> ChannelRequirement | None:
+        """Get contact information requirements for a channel.
+
+        Parameters
+        ----------
+        channel_id : str
+            Channel identifier.
+
+        Returns
+        -------
+        ChannelRequirement | None
+            Requirements dict if adapter found, None otherwise.
+
+        """
+        adapter_class = cls.get_adapter_class(channel_id)
+        if adapter_class:
+            return adapter_class.get_requirements()
+        return None
+
+    @classmethod
+    def filter_channels_by_contact_info(
+        cls,
+        channel_ids: list[str],
+        *,
+        has_email: bool = False,
+        has_phone: bool = False,
+        has_ha_user: bool = False,
+    ) -> tuple[list[str], dict[str, str]]:
+        """Filter channels based on available recipient contact information.
+
+        Parameters
+        ----------
+        channel_ids : list[str]
+            List of channel IDs to filter.
+        has_email : bool, optional
+            Whether recipient has email configured, by default False.
+        has_phone : bool, optional
+            Whether recipient has phone configured, by default False.
+        has_ha_user : bool, optional
+            Whether recipient is linked to HA user, by default False.
+
+        Returns
+        -------
+        tuple[list[str], dict[str, str]]
+            Tuple of (available_channels, unavailable_reasons).
+            - available_channels: List of channel IDs that can be used
+            - unavailable_reasons: Dict mapping unavailable channel IDs to reason strings
+
+        """
+        available: list[str] = []
+        unavailable: dict[str, str] = {}
+
+        for channel_id in channel_ids:
+            requirements = cls.get_channel_requirements(channel_id)
+
+            # Unknown channel - allow it (conservative approach for custom channels)
+            if requirements is None:
+                available.append(channel_id)
+                continue
+
+            # Check requirements
+            missing_requirements: list[str] = []
+
+            if requirements.get("requires_email", False) and not has_email:
+                missing_requirements.append("email address")
+            if requirements.get("requires_phone", False) and not has_phone:
+                missing_requirements.append("phone number")
+            if requirements.get("requires_ha_user", False) and not has_ha_user:
+                missing_requirements.append("Home Assistant user")
+
+            if missing_requirements:
+                # Build reason message
+                if len(missing_requirements) == 1:
+                    reason = f"Missing {missing_requirements[0]}"
+                else:
+                    reason = f"Missing {' and '.join(missing_requirements)}"
+                unavailable[channel_id] = reason
+            else:
+                # All requirements met
+                available.append(channel_id)
+
+        return available, unavailable
+
+    @staticmethod
+    def _matches_channel_pattern(channel_id: str, pattern: str) -> bool:
+        """Check if a channel ID matches a requirement pattern.
+
+        Supports prefix matching for dynamic channels (e.g., "notify.mobile_app"
+        matches "notify.mobile_app_device123").
+
+        Parameters
+        ----------
+        channel_id : str
+            The full channel ID (e.g., "notify.mobile_app_sm_s911b").
+        pattern : str
+            The pattern to match against (e.g., "notify.mobile_app").
+
+        Returns
+        -------
+        bool
+            True if the channel matches the pattern.
+
+        """
+        # Exact match
+        if channel_id == pattern:
+            return True
+
+        # Prefix match for dynamic channels (e.g., notify.mobile_app_*)
+        if channel_id.startswith(f"{pattern}_"):
+            return True
+
+        return False
+
+    @staticmethod
+    def _get_channel_label_with_fallback(channel_id: str, service_id: str) -> str:
+        """Get channel label from adapter or fallback to generic formatting.
+
+        Attempts to get a human-friendly label from the channel's adapter class.
+        If no adapter is found, falls back to generic string formatting.
+
+        Parameters
+        ----------
+        channel_id : str
+            Full channel identifier (e.g., "notify.mobile_app_sm_s911b").
+        service_id : str
+            Service identifier without domain prefix (e.g., "mobile_app_sm_s911b").
+
+        Returns
+        -------
+        str
+            Human-friendly label for the channel.
+
+        """
+        # Try to get label from adapter class
+        adapter_class = ChannelRegistry.get_adapter_class(channel_id)
+        if adapter_class:
+            return adapter_class.get_channel_label(channel_id)
+
+        # Fallback to generic formatting for channels without dedicated adapters
+        _LOGGER.debug(
+            "No adapter found for channel %s, using generic label formatting",
+            channel_id,
+        )
+        return service_id.replace("_", " ").title()
 
     def register(self, channel_info: ChannelInfo) -> None:
         """Register a channel with its metadata.
@@ -303,9 +502,6 @@ class ChannelRegistry:
             List of discovered notification channels with metadata.
 
         """
-        # Import here to avoid circular dependency
-        from ..helper import format_channel_label  # noqa: PLC0415
-
         services = hass.services.async_services()
         notify_services = services.get("notify", {})
 
@@ -322,7 +518,9 @@ class ChannelRegistry:
                 continue  # Skip unsupported services
 
             channel_id = f"notify.{service_id}"
-            label = format_channel_label(service_id)
+            label = ChannelRegistry._get_channel_label_with_fallback(
+                channel_id, service_id
+            )
 
             # Determine scope based on channel nature:
             # - persistent_notification: delivers to HA instance (SYSTEM)
@@ -343,7 +541,10 @@ class ChannelRegistry:
                 )
             )
             _LOGGER.debug(
-                "Detected notification channel: %s (scope=%s)", channel_id, scope.value
+                "Detected notification channel: %s (label=%s, scope=%s)",
+                channel_id,
+                label,
+                scope.value,
             )
 
         return results
@@ -369,18 +570,18 @@ class ChannelRegistry:
             - integration: Integration domain
 
         """
-        # Import here to avoid circular dependency
-        from ..helper import format_channel_label  # noqa: PLC0415
-
         services = hass.services.async_services()
         tts_services = services.get("tts", {})
 
         results: list[IntegrationInfo] = []
         for service_id in sorted(tts_services.keys()):
-            label = format_channel_label(service_id)
+            channel_id = f"tts.{service_id}"
+            label = ChannelRegistry._get_channel_label_with_fallback(
+                channel_id, service_id
+            )
             results.append(
                 IntegrationInfo(
-                    f"tts.{service_id}",
+                    channel_id,
                     label,
                     service_id,
                 )

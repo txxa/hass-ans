@@ -8,7 +8,7 @@ from homeassistant.exceptions import HomeAssistantError
 
 from ..channels.adapter_lifecycle import AdapterType
 from ..models import DeliveryResult, NotificationPayload, RecipientContactInfo
-from .base import AdapterMetadata, DeliveryAdapter
+from .base import AdapterMetadata, ChannelRequirement, DeliveryAdapter
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -36,6 +36,51 @@ class MobileAppDeliveryAdapter(DeliveryAdapter):
         channel_prefix="notify.mobile_app",
         integration="mobile_app",
     )
+
+    @classmethod
+    def get_requirements(cls) -> ChannelRequirement:
+        """Mobile app requires Home Assistant user linkage.
+
+        Returns
+        -------
+        ChannelRequirement
+            Requirements dict specifying HA user is needed.
+
+        """
+        return ChannelRequirement(
+            requires_email=False,
+            requires_phone=False,
+            requires_ha_user=True,
+            description="Requires Home Assistant user for mobile app push notifications",
+        )
+
+    @classmethod
+    def get_channel_label(cls, channel_id: str) -> str:
+        """Generate label showing device name.
+
+        Parameters
+        ----------
+        channel_id : str
+            Full channel identifier (e.g., "notify.mobile_app_sm_s911b").
+
+        Returns
+        -------
+        str
+            Label with device name (e.g., "Mobile App (SM S911B)").
+
+        Examples
+        --------
+        >>> MobileAppDeliveryAdapter.get_channel_label("notify.mobile_app_sm_s911b")
+        "Mobile App (SM S911B)"
+        >>> MobileAppDeliveryAdapter.get_channel_label("notify.mobile_app_iphone")
+        "Mobile App (iPhone)"
+
+        """
+        # Extract device ID from channel_id
+        device_id = channel_id.replace("notify.mobile_app_", "")
+        # Format device name nicely
+        device_name = device_id.replace("_", " ").title()
+        return f"Mobile App ({device_name})"
 
     def __init__(self, *, hass: HomeAssistant, device_id: str) -> None:
         """Initialize mobile app adapter for a specific device.

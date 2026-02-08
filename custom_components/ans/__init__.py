@@ -310,6 +310,21 @@ async def update_listener(hass: HomeAssistant, config_entry: ConfigEntry):
                     )
                 else:
                     _LOGGER.warning("Rate limiter not found, unable to update limits")
+
+                # Update task queue concurrency
+                task_queue = get_task_queue(hass)
+                if task_queue:
+                    await task_queue.update_concurrency(
+                        system_config.queue_max_concurrency
+                    )
+                    _LOGGER.debug(
+                        "Task queue concurrency updated to %d",
+                        system_config.queue_max_concurrency,
+                    )
+                else:
+                    _LOGGER.warning(
+                        "Task queue not found, unable to update concurrency"
+                    )
             else:
                 _LOGGER.debug(
                     "System config not yet loaded, skipping rate limiter update"
@@ -329,6 +344,19 @@ def get_rate_limiter(hass: HomeAssistant):
     for entry_data in hass.data[DOMAIN].values():
         if isinstance(entry_data, dict) and "rate_limiter" in entry_data:
             return entry_data["rate_limiter"]
+
+    return None
+
+
+def get_task_queue(hass: HomeAssistant):
+    """Retrieve the task queue from the main entry data."""
+    if DOMAIN not in hass.data:
+        return None
+
+    # Find main entry data
+    for entry_data in hass.data[DOMAIN].values():
+        if isinstance(entry_data, dict) and "task_queue" in entry_data:
+            return entry_data["task_queue"]
 
     return None
 

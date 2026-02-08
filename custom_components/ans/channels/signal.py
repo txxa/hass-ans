@@ -8,7 +8,7 @@ from homeassistant.exceptions import HomeAssistantError
 
 from ..channels.adapter_lifecycle import AdapterType
 from ..models import DeliveryResult, NotificationPayload, RecipientContactInfo
-from .base import AdapterMetadata, DeliveryAdapter
+from .base import AdapterMetadata, ChannelRequirement, DeliveryAdapter
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -40,6 +40,40 @@ class SignalDeliveryAdapter(DeliveryAdapter):
         channel_prefix="notify.signal",
         integration="signal_messenger",
     )
+
+    @classmethod
+    def get_requirements(cls) -> ChannelRequirement:
+        """Signal requires phone number for delivery.
+
+        Returns
+        -------
+        ChannelRequirement
+            Requirements dict specifying phone number is needed.
+
+        """
+        return ChannelRequirement(
+            requires_email=False,
+            requires_phone=True,
+            requires_ha_user=False,
+            description="Requires phone number for Signal messaging",
+        )
+
+    @classmethod
+    def get_channel_label(cls, channel_id: str) -> str:
+        """Generate label for Signal channel.
+
+        Parameters
+        ----------
+        channel_id : str
+            Channel identifier ("notify.signal").
+
+        Returns
+        -------
+        str
+            Human-friendly label.
+
+        """
+        return "Signal Messenger"
 
     def __init__(self, *, hass: HomeAssistant, service_name: str = "signal") -> None:
         """Initialize Signal adapter with Home Assistant service.

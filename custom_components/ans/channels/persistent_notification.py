@@ -7,7 +7,7 @@ from homeassistant.helpers.typing import TemplateVarsType
 
 from ..channels.adapter_lifecycle import AdapterType
 from ..models import DeliveryResult, NotificationPayload, RecipientContactInfo
-from .base import AdapterMetadata, DeliveryAdapter
+from .base import AdapterMetadata, ChannelRequirement, DeliveryAdapter
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -34,6 +34,40 @@ class PersistentNotificationAdapter(DeliveryAdapter):
         channel_prefix="notify.persistent_notification",
         integration="persistent_notification",
     )
+
+    @classmethod
+    def get_requirements(cls) -> ChannelRequirement:
+        """Persistent notification requires no contact information.
+
+        Returns
+        -------
+        ChannelRequirement
+            Requirements dict with all flags set to False.
+
+        """
+        return ChannelRequirement(
+            requires_email=False,
+            requires_phone=False,
+            requires_ha_user=False,
+            description="No contact information required (system-wide notification)",
+        )
+
+    @classmethod
+    def get_channel_label(cls, channel_id: str) -> str:
+        """Generate label for persistent notification.
+
+        Parameters
+        ----------
+        channel_id : str
+            Channel identifier (always "notify.persistent_notification").
+
+        Returns
+        -------
+        str
+            Human-friendly label.
+
+        """
+        return "Persistent Notification"
 
     def __init__(self, *, hass: HomeAssistant) -> None:
         """Initialize persistent notification adapter.

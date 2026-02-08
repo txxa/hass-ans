@@ -36,15 +36,21 @@ _LOGGER = logging.getLogger(__name__)
 def format_channel_label(service_id: str) -> str:
     """Return a readable label for a channel.
 
+    .. deprecated::
+        Channel label formatting has been moved to DeliveryAdapter.get_channel_label()
+        for better architectural consistency. Each adapter now provides its own
+        channel-specific formatting. This function is kept for backward compatibility
+        and as a fallback for unknown channels.
+
     The label should be human-friendly, e.g., "Mobile App (John)" or "Email (Work)".
     Falls back to service_id if no better info is available.
     """
     # Split on first underscore to separate integration from specific identifier
-    if "_" in service_id:
-        parts = service_id.split("_", 1)
-        integration = parts[0].replace("_", " ").title()
-        specific = parts[1].replace("_", " ").title()
-        return f"{integration} ({specific})"
+    # if "_" in service_id:
+    #     parts = service_id.split("_", 1)
+    #     integration = parts[0].replace("_", " ").title()
+    #     specific = parts[1].replace("_", " ").title()
+    #     return f"{integration} ({specific})"
     return service_id.replace("_", " ").title()
 
 

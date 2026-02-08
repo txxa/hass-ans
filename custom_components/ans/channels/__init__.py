@@ -20,3 +20,12 @@ __all__ = [
     "PersistentNotificationAdapter",
     "SignalDeliveryAdapter",
 ]
+
+
+# Register adapter classes for requirement lookups
+# This allows the ChannelRegistry to query requirements without instantiating adapters
+ChannelRegistry.register_adapter_class("notify.signal", SignalDeliveryAdapter)
+ChannelRegistry.register_adapter_class("notify.mobile_app", MobileAppDeliveryAdapter)
+ChannelRegistry.register_adapter_class(
+    "notify.persistent_notification", PersistentNotificationAdapter
+)

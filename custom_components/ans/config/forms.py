@@ -320,37 +320,54 @@ def get_recipient_definition_schema(
 ) -> vol.Schema:
     """Return schema for defining recipient basics.
 
-    - If linked to an HA user → lock id, pre-fill name.
-    - If custom recipient → require name, and derive id from name later.
+    Args:
+        defaults: Default values for form fields
+        values: Available options for select fields (currently unused)
+
+    Note:
+        Contact information (email, phone) is optional. Channels that require
+        specific contact info will be filtered in the channel mapping step.
+        Users can provide minimal info upfront and will see which channels
+        are available based on what they've configured.
+
     """
     defaults = defaults or {}
     values = values or {}
 
     return vol.Schema(
         {
-            # Default name is HA username, still editable for friendliness
             vol.Required(
                 RCPT_CONFIG_NAME_KEY,
-                # default=values["name"],
                 description={
                     "suggested_value": defaults.get(RCPT_CONFIG_NAME_KEY),
                 },
             ): str,
-            # Contact information optional
             vol.Optional(
                 RCPT_CONFIG_EMAIL_KEY,
-                # default=defaults.get(ID_CONFIG_EMAIL_KEY),
                 description={
                     "suggested_value": defaults.get(RCPT_CONFIG_EMAIL_KEY),
                 },
-            ): str,
+            ): selector(
+                {
+                    "text": {
+                        "type": "email",
+                        "autocomplete": "email",
+                    }
+                }
+            ),
             vol.Optional(
                 RCPT_CONFIG_PHONE_KEY,
-                # default=defaults.get(ID_CONFIG_PHONE_KEY),
                 description={
                     "suggested_value": defaults.get(RCPT_CONFIG_PHONE_KEY),
                 },
-            ): str,
+            ): selector(
+                {
+                    "text": {
+                        "type": "tel",
+                        "autocomplete": "tel",
+                    }
+                }
+            ),
         },
         extra=vol.PREVENT_EXTRA,
     )
@@ -445,7 +462,12 @@ def get_recipient_criticality_channel_mapping_schema(
 
     Args:
         defaults: Default values for form fields.
-        values: Available options for select fields (channels already filtered).
+        values: Available options for select fields including:
+            - RCPT_CONFIG_CONFIGURED_CHANNELS_KEY: Available channels (SelectOptionDict)
+                These channels are already filtered based on:
+                - System-wide enabled channels
+                - Recipient type (system vs recipient-specific)
+                - Contact information availability (email, phone, HA user)
 
     Returns:
         Voluptuous schema for channel mapping form.
@@ -454,7 +476,7 @@ def get_recipient_criticality_channel_mapping_schema(
     defaults = defaults or {}
     values = values or {}
 
-    # Get channels - these are already SelectOptionDict objects from the caller
+    # Get available channels (already filtered based on contact info)
     available_channels_options = values.get(RCPT_CONFIG_CONFIGURED_CHANNELS_KEY, [])
 
     # Extract channel IDs from SelectOptionDict objects
@@ -467,6 +489,10 @@ def get_recipient_criticality_channel_mapping_schema(
 
     for crit in criticality_levels:
         key = f"{RCPT_CONFIG_CHANNELS_KEY}_{crit['value'].lower()}"
+
+        # Note: Unavailable channels are not currently displayed in the UI
+        # They are available in values["unavailable_channels"] if needed for future enhancements
+
         schema_dict[
             vol.Optional(
                 key,
@@ -482,6 +508,7 @@ def get_recipient_criticality_channel_mapping_schema(
                 translation_key=key,
                 multiple=True,
                 mode=SelectSelectorMode.DROPDOWN,
+                custom_value=False,
             )
         )
 

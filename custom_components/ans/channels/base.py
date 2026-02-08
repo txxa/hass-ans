@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, ClassVar, TypedDict
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -19,6 +19,28 @@ from ..models import (
     NotificationPayload,
     RecipientContactInfo,
 )
+
+
+class ChannelRequirement(TypedDict, total=False):
+    """Channel contact information requirements.
+
+    Attributes
+    ----------
+    requires_email : bool
+        Whether this channel requires an email address
+    requires_phone : bool
+        Whether this channel requires a phone number
+    requires_ha_user : bool
+        Whether this channel requires linkage to a Home Assistant user
+    description : str
+        Human-readable description of the requirement
+
+    """
+
+    requires_email: bool
+    requires_phone: bool
+    requires_ha_user: bool
+    description: str
 
 
 class AdapterFailureType(str, Enum):
@@ -73,6 +95,46 @@ class DeliveryAdapter(ABC):
 
     # Optional: Subclasses can define this for auto-registration
     ADAPTER_METADATA: ClassVar[AdapterMetadata | None] = None
+
+    @classmethod
+    @abstractmethod
+    def get_requirements(cls) -> ChannelRequirement:
+        """Return contact information requirements for this channel.
+
+        Returns
+        -------
+        ChannelRequirement
+            Dictionary specifying what contact information is needed for delivery.
+            If a channel requires no contact info, return an empty dict or set
+            all requirement flags to False.
+
+        """
+        raise NotImplementedError
+
+    @classmethod
+    def get_channel_label(cls, channel_id: str) -> str:
+        """Generate human-friendly label for a channel.
+
+        Parameters
+        ----------
+        channel_id : str
+            Full channel identifier (e.g., "notify.mobile_app_sm_s911b").
+
+        Returns
+        -------
+        str
+            Human-friendly label for display in UI.
+
+        Notes
+        -----
+        Subclasses can override to provide adapter-specific formatting.
+        Default implementation does basic string cleanup.
+
+        """
+        # Remove domain prefix if present
+        label = channel_id.replace("notify.", "").replace("tts.", "")
+        # Basic cleanup: underscores to spaces, title case
+        return label.replace("_", " ").title()
 
     @abstractmethod
     async def deliver(
@@ -170,17 +232,22 @@ class DeliveryAdapter(ABC):
             If ADAPTER_METADATA is not defined.
 
         """
-        # Import here to avoid circular dependency
-        from ..channels.adapter_lifecycle import AdapterFactory
+        # Import here to avoid circular dependency between base and adapter_lifecycle
+        from ..channels.adapter_lifecycle import AdapterFactory  # noqa: PLC0415
 
         if cls.ADAPTER_METADATA is None:
             raise ValueError(
                 f"{cls.__name__} must define ADAPTER_METADATA for auto-registration"
             )
 
-        # Default factory: call constructor with hass
+        # Default factory: call constructor with hass parameter
         if factory_fn is None:
-            factory_fn = lambda hass, _: cls(hass=hass)
+
+            def _default_factory(hass: HomeAssistant, _device_id: str | None):
+                """Create adapter instance with hass parameter."""
+                return cls(hass=hass)  # type: ignore[call-arg]
+
+            factory_fn = _default_factory
 
         return AdapterFactory(
             adapter_type=cls.ADAPTER_METADATA.adapter_type,

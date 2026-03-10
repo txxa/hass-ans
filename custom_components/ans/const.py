@@ -87,6 +87,9 @@ SUBENTRY_FLOW_STEP_RECIPIENT_DEFINITION_KEY = "recipient_definition"
 SUBENTRY_FLOW_STEP_RECIPIENT_BASIC_SETTINGS_KEY = "recipient_basic_settings"
 SUBENTRY_FLOW_STEP_RECIPIENT_CHANNEL_MAPPING_KEY = "recipient_channel_mapping"
 SUBENTRY_FLOW_STEP_RECIPIENT_DND_SETTINGS_KEY = "recipient_dnd_settings"
+SUBENTRY_FLOW_STEP_RECIPIENT_TTS_SETTINGS_KEY = (
+    "recipient_tts_settings"  # NEW: TTS settings step
+)
 # SUBENTRY_FLOW_STEP_ID_IDENTITY_SELECTION_KEY = "recipient_selection"
 # SUBENTRY_FLOW_IDENTITY_TYPE_SELECTION_KEY = "recipient_type_selection"
 SUBENTRY_FLOW_SELECTED_HA_USER_KEY = "selected_ha_user"
@@ -105,7 +108,7 @@ SYS_CONFIG_RETRY_MAX_DELAY_KEY = "retry_max_delay"
 SYS_CONFIG_QUEUE_CONCURRENCY_KEY = "queue_max_concurrency"
 SYS_CONFIG_STORAGE_RETENTION_DAYS_KEY = "storage_retention_days"
 SYS_CONFIG_ENABLE_AUDIT_LOGGING_KEY = "enable_audit_logging"
-# SYS_CONFIG_TTS_INTEGRATION_KEY = "tts_integration"
+SYS_CONFIG_TTS_SERVICE_KEY = "tts_service"  # NEW: TTS service configuration
 
 # Recipient keys
 RCPT_CONFIG_ID_KEY = "id"
@@ -135,3 +138,27 @@ RCPT_CONFIG_DND_ALLOWED_SOURCES_PATTERN_KEY = "dnd_allowed_sources_regex"
 RCPT_CONFIG_DND_ALLOWED_CRITICALITIES_KEY = "dnd_allowed_criticalities"
 RCPT_CONFIG_DND_ALLOWED_TYPES_KEY = "dnd_allowed_types"
 RCPT_CONFIG_RECIPIENT_CHOICE_KEY = "recipient_choice"
+
+# Recipient choice values
+RECIPIENT_CHOICE_SYSTEM_HA = "system_home_assistant"
+RECIPIENT_CHOICE_HA_USER_PREFIX = "ha_user_"
+RECIPIENT_CHOICE_TTS = "tts_new"
+RECIPIENT_CHOICE_VIRTUAL = "virtual_new"
+
+# TTS Recipient Settings Keys
+RCPT_CONFIG_TTS_SETTINGS_KEY = "tts_settings"
+RCPT_CONFIG_TTS_VOLUME_MORNING_KEY = "volume_morning"
+RCPT_CONFIG_TTS_VOLUME_DAYTIME_KEY = "volume_daytime"
+RCPT_CONFIG_TTS_VOLUME_EVENING_KEY = "volume_evening"
+RCPT_CONFIG_TTS_VOLUME_NIGHT_KEY = "volume_night"
+RCPT_CONFIG_TTS_VOLUME_OVERRIDE_CRITICALITIES_KEY = "volume_override_criticalities"
+RCPT_CONFIG_TTS_VOLUME_OVERRIDE_LEVEL_KEY = "volume_override_level"
+RCPT_CONFIG_TTS_MESSAGE_FORMAT_KEY = "message_format"
+
+# TTS Defaults
+TTS_DEFAULT_VOLUME_MORNING = 40
+TTS_DEFAULT_VOLUME_DAYTIME = 50
+TTS_DEFAULT_VOLUME_EVENING = 40
+TTS_DEFAULT_VOLUME_NIGHT = 20
+TTS_DEFAULT_VOLUME_OVERRIDE_LEVEL = 80
+TTS_DEFAULT_MESSAGE_FORMAT = "title_and_message"

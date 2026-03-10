@@ -21,10 +21,10 @@ from homeassistant.config_entries import (
     ConfigSubentryFlow,
     SubentryFlowResult,
 )
+from homeassistant.helpers.selector import SelectOptionDict
 
 from ..channels.channel_registry import ChannelRegistry
 from ..const import (
-    CONFIG_FLOW_SELECTED_HA_USERS_KEY,
     PERSISTENT_NOTIFICATION_CHANNEL,
     RCPT_CONFIG_CONFIGURED_CHANNELS_KEY,
     RCPT_CONFIG_CRITICALITY_LEVELS_KEY,
@@ -36,7 +36,12 @@ from ..const import (
     RCPT_CONFIG_PHONE_KEY,
     RCPT_CONFIG_RECIPIENT_CHOICE_KEY,
     RCPT_CONFIG_RECIPIENT_ID_KEY,
+    RCPT_CONFIG_TTS_SETTINGS_KEY,
     RCPT_CONFIG_TYPE_KEY,
+    RECIPIENT_CHOICE_HA_USER_PREFIX,
+    RECIPIENT_CHOICE_SYSTEM_HA,
+    RECIPIENT_CHOICE_TTS,
+    RECIPIENT_CHOICE_VIRTUAL,
     SUBENTRY_FLOW_ERROR_INVALID_CHANNEL_MAPPING_KEY,
     SUBENTRY_FLOW_ERROR_INVALID_RECIPIENT_DEFINITION_KEY,
     SUBENTRY_FLOW_ERROR_INVALID_RECIPIENT_SELECTION_KEY,
@@ -69,6 +74,7 @@ from .forms import (
     get_recipient_definition_schema,
     get_recipient_dnd_settings_schema,
     get_recipient_selection_schema,
+    get_recipient_tts_settings_schema,
 )
 from .validator import ConfigValidator, FieldValidationError, ValidationContext
 
@@ -118,7 +124,7 @@ class RecipientConfigFlow(ConfigSubentryFlow):
                 # Parse the user's choice
                 choice = user_input.get(RCPT_CONFIG_RECIPIENT_CHOICE_KEY, "")
 
-                if choice == "system_home_assistant":
+                if choice == RECIPIENT_CHOICE_SYSTEM_HA:
                     # System recipient selected
                     if await self._system_recipient_exists():
                         errors[RCPT_CONFIG_RECIPIENT_CHOICE_KEY] = (
@@ -128,9 +134,9 @@ class RecipientConfigFlow(ConfigSubentryFlow):
                         # Set up the Home Assistant system recipient
                         return await self._setup_system_recipient()
 
-                elif choice.startswith("ha_user_"):
+                elif choice.startswith(RECIPIENT_CHOICE_HA_USER_PREFIX):
                     # HA user selected
-                    user_id = choice.replace("ha_user_", "")
+                    user_id = choice[len(RECIPIENT_CHOICE_HA_USER_PREFIX) :]
 
                     # Pre-fill HA user data
                     user_data = await self._get_ha_user_data(user_id)
@@ -146,11 +152,20 @@ class RecipientConfigFlow(ConfigSubentryFlow):
                     # Skip to definition step (to allow editing/adding phone)
                     return await self.async_step_recipient_definition(None)
 
-                elif choice == "virtual_new":
+                elif choice == RECIPIENT_CHOICE_VIRTUAL:
                     # Virtual recipient - user will enter all details
                     self._recipient_meta.update(
                         {
                             RCPT_CONFIG_TYPE_KEY: RecipientType.VIRTUAL.value,
+                        }
+                    )
+                    return await self.async_step_recipient_definition(None)
+
+                elif choice == RECIPIENT_CHOICE_TTS:
+                    # TTS recipient - user will enter name only (no contact info needed)
+                    self._recipient_meta.update(
+                        {
+                            RCPT_CONFIG_TYPE_KEY: RecipientType.TTS.value,
                         }
                     )
                     return await self.async_step_recipient_definition(None)
@@ -179,18 +194,42 @@ class RecipientConfigFlow(ConfigSubentryFlow):
             [u["value"] for u in not_configured_ha_users],
         )
 
-        values = {
-            "system_recipient_available": system_recipient_available,
-            CONFIG_FLOW_SELECTED_HA_USERS_KEY: not_configured_ha_users,
-        }
+        # Build the options list here so the schema function stays pure
+        options: list[SelectOptionDict] = []
+        if system_recipient_available:
+            options.append(
+                SelectOptionDict(
+                    value=RECIPIENT_CHOICE_SYSTEM_HA,
+                    label=RECIPIENT_CHOICE_SYSTEM_HA,
+                )
+            )
+        # HA user labels are runtime names — cannot come from translations
+        options.extend(
+            [
+                SelectOptionDict(
+                    label=f"HA User: {user['label']}",
+                    value=f"{RECIPIENT_CHOICE_HA_USER_PREFIX}{user['value']}",
+                )
+                for user in not_configured_ha_users
+            ]
+        )
+        options.append(
+            SelectOptionDict(value=RECIPIENT_CHOICE_TTS, label=RECIPIENT_CHOICE_TTS)
+        )
+        options.append(
+            SelectOptionDict(
+                value=RECIPIENT_CHOICE_VIRTUAL, label=RECIPIENT_CHOICE_VIRTUAL
+            )
+        )
 
         return self.async_show_form(
             step_id=SUBENTRY_FLOW_STEP_RECIPIENT_SELECTION_KEY,
             data_schema=get_recipient_selection_schema(
                 defaults=user_input or {},
-                values=values,
+                options=options,
             ),
             errors=errors,
+            last_step=False,
             description_placeholders={
                 "info": "Select the recipient you want to create"
             },
@@ -270,6 +309,7 @@ class RecipientConfigFlow(ConfigSubentryFlow):
             data_schema=get_recipient_definition_schema(
                 defaults=defaults,
                 values={SUBENTRY_FLOW_SELECTED_HA_USER_KEY: ha_users},
+                recipient_type=recipient_type,
             ),
             errors=errors,
             last_step=False,
@@ -308,7 +348,14 @@ class RecipientConfigFlow(ConfigSubentryFlow):
                 # Store settings
                 self._recipient_settings.update(validated)
 
-                # Proceed to channel mapping
+                # Conditional branching based on recipient type
+                recipient_type = RecipientType(
+                    self._recipient_meta[RCPT_CONFIG_TYPE_KEY]
+                )
+                if recipient_type == RecipientType.TTS:
+                    # TTS recipients go to TTS settings step
+                    return await self.async_step_recipient_tts_settings(None)
+                # Other recipients go directly to channel mapping
                 return await self.async_step_recipient_channel_mapping(None)
 
             except vol.Invalid as e:
@@ -337,6 +384,52 @@ class RecipientConfigFlow(ConfigSubentryFlow):
             last_step=False,
             description_placeholders={
                 "info": "Configure notification behavior for this recipient"
+            },
+        )
+
+    async def async_step_recipient_tts_settings(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Configure TTS-specific settings (volume levels, message format)."""
+        errors: dict[str, str] = {}
+
+        # Get defaults for the form
+        defaults = dict(self._recipient_settings or {})
+
+        if user_input is not None:
+            try:
+                # Validate TTS settings
+                validated = ConfigValidator.validate_recipient_tts_settings_schema(
+                    user_input
+                )
+
+                # Store TTS settings nested under tts_settings key
+                # This matches the expected structure in RecipientConfig.from_dict()
+                self._recipient_settings[RCPT_CONFIG_TTS_SETTINGS_KEY] = validated
+
+                # Proceed to channel mapping
+                return await self.async_step_recipient_channel_mapping(None)
+
+            except vol.Invalid as e:
+                _LOGGER.debug("Recipient TTS settings validation failed: %s", e)
+                errors[str(e.path[0])] = str(e.path[len(e.path) - 1])
+            except Exception:
+                _LOGGER.exception(
+                    "Unexpected error during recipient TTS settings configuration"
+                )
+                errors["base"] = "tts_settings_error"
+
+        # Show TTS settings form
+        return self.async_show_form(
+            step_id="recipient_tts_settings",
+            data_schema=get_recipient_tts_settings_schema(
+                defaults=user_input or defaults,
+                values={},
+            ),
+            errors=errors,
+            last_step=False,
+            description_placeholders={
+                "info": "Configure TTS volume levels and message format"
             },
         )
 

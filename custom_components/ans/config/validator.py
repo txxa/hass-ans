@@ -31,6 +31,13 @@ from ..const import (
     RCPT_CONFIG_PHONE_KEY,
     RCPT_CONFIG_RATE_LIMIT_KEY,
     RCPT_CONFIG_RETRY_ATTEMPTS_KEY,
+    RCPT_CONFIG_TTS_MESSAGE_FORMAT_KEY,
+    RCPT_CONFIG_TTS_VOLUME_DAYTIME_KEY,
+    RCPT_CONFIG_TTS_VOLUME_EVENING_KEY,
+    RCPT_CONFIG_TTS_VOLUME_MORNING_KEY,
+    RCPT_CONFIG_TTS_VOLUME_NIGHT_KEY,
+    RCPT_CONFIG_TTS_VOLUME_OVERRIDE_CRITICALITIES_KEY,
+    RCPT_CONFIG_TTS_VOLUME_OVERRIDE_LEVEL_KEY,
     RCPT_CONFIG_TYPE_KEY,
     RCPT_MAX_RATE_LIMIT,
     RCPT_MAX_RETRY_ATTEMPTS,
@@ -642,6 +649,55 @@ class ConfigValidator:
     #     )
 
     #     return schema(settings)
+
+    @staticmethod
+    def validate_recipient_tts_settings_schema(data: dict) -> dict:
+        """Validate TTS settings against a schema.
+
+        Validates volume levels (0-100), criticality overrides, and message format.
+
+        Args:
+            data: TTS settings dictionary from config flow
+
+        Returns:
+            Validated TTS settings dictionary
+
+        Raises:
+            vol.Invalid: If validation fails
+
+        """
+        # Valid message formats
+        valid_formats = ["title_and_message", "message_only", "title_only"]
+
+        schema = vol.Schema(
+            {
+                vol.Required(RCPT_CONFIG_TTS_VOLUME_MORNING_KEY): vol.All(
+                    vol.Coerce(int), vol.Range(min=0, max=100)
+                ),
+                vol.Required(RCPT_CONFIG_TTS_VOLUME_DAYTIME_KEY): vol.All(
+                    vol.Coerce(int), vol.Range(min=0, max=100)
+                ),
+                vol.Required(RCPT_CONFIG_TTS_VOLUME_EVENING_KEY): vol.All(
+                    vol.Coerce(int), vol.Range(min=0, max=100)
+                ),
+                vol.Required(RCPT_CONFIG_TTS_VOLUME_NIGHT_KEY): vol.All(
+                    vol.Coerce(int), vol.Range(min=0, max=100)
+                ),
+                vol.Optional(
+                    RCPT_CONFIG_TTS_VOLUME_OVERRIDE_CRITICALITIES_KEY, default=[]
+                ): vol.All(
+                    [vol.In([c.value for c in NotificationCriticality])],
+                    vol.Length(min=0),
+                ),
+                vol.Required(RCPT_CONFIG_TTS_VOLUME_OVERRIDE_LEVEL_KEY): vol.All(
+                    vol.Coerce(int), vol.Range(min=0, max=100)
+                ),
+                vol.Required(RCPT_CONFIG_TTS_MESSAGE_FORMAT_KEY): vol.In(valid_formats),
+            },
+            extra=vol.PREVENT_EXTRA,
+        )
+
+        return schema(data)
 
     @staticmethod
     def validate_recipient_dnd_settings_schema(data: dict) -> dict:

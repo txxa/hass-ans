@@ -43,6 +43,7 @@ from .const import (
     SYS_CONFIG_RETRY_BASE_DELAY_KEY,
     SYS_CONFIG_RETRY_MAX_DELAY_KEY,
     SYS_CONFIG_STORAGE_RETENTION_DAYS_KEY,
+    SYS_CONFIG_TTS_SERVICE_KEY,
     SYS_DEFAULT_ENABLE_AUDIT_LOGGING,
     SYS_DEFAULT_GLOBAL_RATE_LIMIT,
     SYS_DEFAULT_QUEUE_CONCURRENCY,
@@ -107,10 +108,27 @@ class ANSConfigFlow(ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             try:
+                # Validate TTS service if provided (PRIORITY 1 - Security)
+                from .config.forms import validate_tts_service  # noqa: PLC0415
+
+                if SYS_CONFIG_TTS_SERVICE_KEY in user_input:
+                    tts_service = user_input[SYS_CONFIG_TTS_SERVICE_KEY]
+                    try:
+                        validated_tts = await validate_tts_service(
+                            self.hass, tts_service
+                        )
+                        user_input[SYS_CONFIG_TTS_SERVICE_KEY] = validated_tts
+                    except vol.Invalid as e:
+                        _LOGGER.warning("TTS service validation failed: %s", e)
+                        errors[SYS_CONFIG_TTS_SERVICE_KEY] = str(e)
+                        # Don't proceed with config creation if TTS validation fails
+                        # Fall through to show form again with error
+                        user_input = None
+
                 # Validate system configuration
                 from .config.validator import ConfigValidator  # noqa: PLC0415
 
-                if is_reconfigure:
+                if is_reconfigure and user_input is not None:
                     # In reconfigure mode, preserve existing options (rate limits)
                     assert self._reconfigure_entry is not None
                     current_options = (
@@ -155,6 +173,9 @@ class ANSConfigFlow(ConfigFlow, domain=DOMAIN):
                         SYS_CONFIG_ENABLED_CHANNELS_KEY, []
                     ),
                     SYS_CONFIG_ENABLE_AUDIT_LOGGING_KEY: enable_audit,
+                    SYS_CONFIG_TTS_SERVICE_KEY: config_dict.get(
+                        SYS_CONFIG_TTS_SERVICE_KEY
+                    ),
                     "version": config_dict.get("version", 1),
                 }
 
@@ -244,14 +265,36 @@ class ANSConfigFlow(ConfigFlow, domain=DOMAIN):
 
         channel_options = channel_info_to_select_options(available_channels)
 
+        # Detect TTS integrations (NEW for Phase 4)
+        available_tts_services = await ChannelRegistry.detect_tts_integrations(
+            self.hass
+        )
+
+        # Detect media players (NEW for Phase 4)
+        available_media_players = await ChannelRegistry.detect_media_players(self.hass)
+
+        # Add media players to channel options if TTS is configured
+        current_tts = defaults.get(SYS_CONFIG_TTS_SERVICE_KEY)
+        if current_tts and current_tts != "None" and available_media_players:
+            # Convert media players to select options and add to channel list
+            media_player_options = channel_info_to_select_options(
+                available_media_players
+            )
+            channel_options.extend(media_player_options)
+
         # Show the system configuration form (structural settings only for initial setup)
         return self.async_show_form(
             step_id=CONFIG_FLOW_STEP_SYS_SETTINGS_KEY,
             data_schema=get_system_config_schema(
                 defaults=defaults,
-                values={"enabled_channels": channel_options},
+                values={
+                    "enabled_channels": channel_options,
+                    "tts_services": available_tts_services,
+                    "media_players": available_media_players,
+                },
                 include_rate_limits=False,  # Don't show rate limits in setup/reconfigure
                 include_audit_logging=True,  # Show audit logging toggle
+                hass=self.hass,  # Pass hass for TTS validation
             ),
             errors=errors,
             description_placeholders={

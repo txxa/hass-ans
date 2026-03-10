@@ -7,6 +7,7 @@ from .channel_registry import ChannelRegistry
 from .mobile_app import MobileAppDeliveryAdapter
 from .persistent_notification import PersistentNotificationAdapter
 from .signal import SignalDeliveryAdapter
+from .tts_mediaplayer import TTSMediaPlayerAdapter
 
 __all__ = [
     "AdapterFactory",
@@ -19,6 +20,7 @@ __all__ = [
     "MobileAppDeliveryAdapter",
     "PersistentNotificationAdapter",
     "SignalDeliveryAdapter",
+    "TTSMediaPlayerAdapter",
 ]
 
 
@@ -29,3 +31,4 @@ ChannelRegistry.register_adapter_class("notify.mobile_app", MobileAppDeliveryAda
 ChannelRegistry.register_adapter_class(
     "notify.persistent_notification", PersistentNotificationAdapter
 )
+ChannelRegistry.register_adapter_class("media_player.", TTSMediaPlayerAdapter)

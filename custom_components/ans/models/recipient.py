@@ -24,6 +24,14 @@ from ..const import (
     RCPT_CONFIG_RATE_LIMIT_KEY,
     RCPT_CONFIG_RECIPIENT_ID_KEY,
     RCPT_CONFIG_RETRY_ATTEMPTS_KEY,
+    RCPT_CONFIG_TTS_MESSAGE_FORMAT_KEY,
+    RCPT_CONFIG_TTS_SETTINGS_KEY,
+    RCPT_CONFIG_TTS_VOLUME_DAYTIME_KEY,
+    RCPT_CONFIG_TTS_VOLUME_EVENING_KEY,
+    RCPT_CONFIG_TTS_VOLUME_MORNING_KEY,
+    RCPT_CONFIG_TTS_VOLUME_NIGHT_KEY,
+    RCPT_CONFIG_TTS_VOLUME_OVERRIDE_CRITICALITIES_KEY,
+    RCPT_CONFIG_TTS_VOLUME_OVERRIDE_LEVEL_KEY,
     RCPT_CONFIG_TYPE_KEY,
     RCPT_DEFAULT_BLOCKED_SOURCES_PATTERN,
     RCPT_DEFAULT_DND_ALLOWED_CRITICALITIES,
@@ -34,6 +42,12 @@ from ..const import (
     RCPT_DEFAULT_DND_START_TIME,
     RCPT_DEFAULT_RATE_LIMIT,
     RCPT_DEFAULT_RETRY_ATTEMPTS,
+    TTS_DEFAULT_MESSAGE_FORMAT,
+    TTS_DEFAULT_VOLUME_DAYTIME,
+    TTS_DEFAULT_VOLUME_EVENING,
+    TTS_DEFAULT_VOLUME_MORNING,
+    TTS_DEFAULT_VOLUME_NIGHT,
+    TTS_DEFAULT_VOLUME_OVERRIDE_LEVEL,
 )
 from .notification import NotificationCriticality, NotificationType
 
@@ -44,6 +58,7 @@ class RecipientType(str, Enum):
     HA_USER = "HA_USER"
     VIRTUAL = "VIRTUAL"
     SYSTEM = "SYSTEM"
+    TTS = "TTS"  # NEW: TTS recipient type
 
 
 @dataclass(frozen=True)
@@ -53,6 +68,78 @@ class RecipientContactInfo:
     email_address: str | None
     phone_number: str | None
     mobile_device_id: str | None = None
+
+
+@dataclass
+class TTSSettings:
+    """TTS-specific settings for TTS recipients."""
+
+    volume_morning: int  # 0-100
+    volume_daytime: int  # 0-100
+    volume_evening: int  # 0-100
+    volume_night: int  # 0-100
+    volume_override_criticalities: list[str]  # List of criticality values
+    volume_override_level: int  # 0-100
+    message_format: str  # "title_and_message", "message_only", "title_only"
+
+    def __post_init__(self):
+        """Validate TTS settings."""
+        # Validate volume ranges
+        for vol_field in [
+            "volume_morning",
+            "volume_daytime",
+            "volume_evening",
+            "volume_night",
+            "volume_override_level",
+        ]:
+            value = getattr(self, vol_field)
+            if not 0 <= value <= 100:
+                raise ValueError(f"{vol_field} must be between 0 and 100")
+
+        # Validate message format
+        valid_formats = ["title_and_message", "message_only", "title_only"]
+        if self.message_format not in valid_formats:
+            raise ValueError(f"message_format must be one of {valid_formats}")
+
+    @classmethod
+    def default(cls) -> TTSSettings:
+        """Return default TTS settings."""
+        return cls(
+            volume_morning=TTS_DEFAULT_VOLUME_MORNING,
+            volume_daytime=TTS_DEFAULT_VOLUME_DAYTIME,
+            volume_evening=TTS_DEFAULT_VOLUME_EVENING,
+            volume_night=TTS_DEFAULT_VOLUME_NIGHT,
+            volume_override_criticalities=[],
+            volume_override_level=TTS_DEFAULT_VOLUME_OVERRIDE_LEVEL,
+            message_format=TTS_DEFAULT_MESSAGE_FORMAT,
+        )
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for storage."""
+        return {
+            RCPT_CONFIG_TTS_VOLUME_MORNING_KEY: self.volume_morning,
+            RCPT_CONFIG_TTS_VOLUME_DAYTIME_KEY: self.volume_daytime,
+            RCPT_CONFIG_TTS_VOLUME_EVENING_KEY: self.volume_evening,
+            RCPT_CONFIG_TTS_VOLUME_NIGHT_KEY: self.volume_night,
+            RCPT_CONFIG_TTS_VOLUME_OVERRIDE_CRITICALITIES_KEY: self.volume_override_criticalities,
+            RCPT_CONFIG_TTS_VOLUME_OVERRIDE_LEVEL_KEY: self.volume_override_level,
+            RCPT_CONFIG_TTS_MESSAGE_FORMAT_KEY: self.message_format,
+        }
+
+    @staticmethod
+    def from_dict(data: dict) -> TTSSettings:
+        """Create TTSSettings from dictionary."""
+        return TTSSettings(
+            volume_morning=data[RCPT_CONFIG_TTS_VOLUME_MORNING_KEY],
+            volume_daytime=data[RCPT_CONFIG_TTS_VOLUME_DAYTIME_KEY],
+            volume_evening=data[RCPT_CONFIG_TTS_VOLUME_EVENING_KEY],
+            volume_night=data[RCPT_CONFIG_TTS_VOLUME_NIGHT_KEY],
+            volume_override_criticalities=data[
+                RCPT_CONFIG_TTS_VOLUME_OVERRIDE_CRITICALITIES_KEY
+            ],
+            volume_override_level=data[RCPT_CONFIG_TTS_VOLUME_OVERRIDE_LEVEL_KEY],
+            message_format=data[RCPT_CONFIG_TTS_MESSAGE_FORMAT_KEY],
+        )
 
 
 @dataclass
@@ -123,6 +210,7 @@ class RecipientConfig:
     dnd_allowed_sources_regex: str | None
     dnd_allowed_criticalities: list[str] | None = None
     dnd_allowed_types: list[str] | None = None
+    tts_settings: TTSSettings | None = None  # NEW: TTS-specific settings
     version: int = field(default=1)
 
     def __post_init__(self):
@@ -203,6 +291,11 @@ class RecipientConfig:
             data[RCPT_CONFIG_RECIPIENT_ID_KEY] = None
         else:
             data[RCPT_CONFIG_RECIPIENT_ID_KEY] = str(self.recipient_id)
+        # Handle TTS settings serialization
+        if self.tts_settings is not None:
+            data[RCPT_CONFIG_TTS_SETTINGS_KEY] = self.tts_settings.to_dict()
+        else:
+            data[RCPT_CONFIG_TTS_SETTINGS_KEY] = None
         return data
 
     @staticmethod
@@ -233,6 +326,12 @@ class RecipientConfig:
             [],
         )
 
+        # Handle TTS settings deserialization
+        tts_settings = None
+        tts_settings_data = data.get(RCPT_CONFIG_TTS_SETTINGS_KEY)
+        if tts_settings_data is not None:
+            tts_settings = TTSSettings.from_dict(tts_settings_data)
+
         return RecipientConfig(
             recipient_id=data.get(RCPT_CONFIG_RECIPIENT_ID_KEY),
             retry_attempts=data.get(
@@ -258,5 +357,6 @@ class RecipientConfig:
                 RCPT_CONFIG_DND_ALLOWED_TYPES_KEY, RCPT_DEFAULT_DND_ALLOWED_TYPES
             ),
             blocked_sources_regex=data.get(RCPT_CONFIG_BLOCKED_SOURCES_PATTERN_KEY),
+            tts_settings=tts_settings,
             version=version,
         )

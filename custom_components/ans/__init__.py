@@ -15,6 +15,7 @@ from .const import (
 )
 from .delivery.factory import NotificationSystemSetup
 from .persistence.recovery import async_initialize_persistence
+from .persistence.volume_restoration import VolumeRestorationRegistry
 from .service import async_setup_services
 
 _LOGGER = logging.getLogger(__name__)
@@ -172,15 +173,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             len(orphaned_retries),
         )
 
+        # Initialize volume restoration registry for TTS media player adapters
+        volume_registry = VolumeRestorationRegistry(hass)
+        await volume_registry.async_load()
+        entry_data["volume_registry"] = volume_registry
+        _LOGGER.debug("Volume restoration registry initialized")
+
         # Start background tasks BEFORE scheduling retries
         task_queue = system["task_queue"]
         housekeeping_scheduler = system["housekeeping_scheduler"]
+        deduplication_service = system["deduplication_service"]
 
         await task_queue.start()
         _LOGGER.debug("ANS task queue started")
 
         await housekeeping_scheduler.start()
         _LOGGER.debug("ANS housekeeping scheduler started")
+
+        await deduplication_service.start()
+        _LOGGER.debug("ANS deduplication service started")
 
         # Schedule recovered tasks for retry
         from datetime import UTC, datetime, timedelta  # noqa: PLC0415
@@ -268,6 +279,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Stop background tasks
         task_queue = entry_data.get("task_queue")
         housekeeping_scheduler = entry_data.get("housekeeping_scheduler")
+        volume_registry = entry_data.get("volume_registry")
+        deduplication_service = entry_data.get("deduplication_service")
 
         if task_queue:
             await task_queue.stop()
@@ -276,6 +289,14 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if housekeeping_scheduler:
             await housekeeping_scheduler.stop()
             _LOGGER.debug("ANS housekeeping scheduler stopped")
+
+        if volume_registry:
+            await volume_registry.async_unload()
+            _LOGGER.debug("Volume restoration registry unloaded")
+
+        if deduplication_service:
+            await deduplication_service.stop()
+            _LOGGER.debug("ANS deduplication service stopped")
 
         # Clean up entry data
         hass.data[DOMAIN].pop(entry.entry_id, None)

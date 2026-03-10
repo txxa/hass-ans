@@ -16,13 +16,16 @@ from ..channels.adapter_registry import AdapterRegistry
 from ..channels.mobile_app import MobileAppDeliveryAdapter
 from ..channels.persistent_notification import PersistentNotificationAdapter
 from ..channels.signal import SignalDeliveryAdapter
+from ..channels.tts_mediaplayer import TTSMediaPlayerAdapter
 from ..config.repository import ConfigRepository
 from ..const import (
+    DOMAIN,
     RCPT_DEFAULT_RETRY_ATTEMPTS,
     SYS_STORAGE_HOUSEKEEPING_INTERVAL_HOURS,
 )
 from ..persistence.file import DeliveryAttemptLog, NotificationRegistry, RetryQueue
 from ..persistence.housekeeping import HousekeepingScheduler
+from .deduplication import DeduplicationService
 from .filter_engine import FilterEngine
 from .orchestrator import NotificationOrchestrator
 from .processor import NotificationDeliveryProcessor
@@ -97,6 +100,56 @@ class NotificationSystemSetup:
         manager.register_factory(
             MobileAppDeliveryAdapter.create_factory(
                 factory_fn=_create_mobile_app_adapter
+            )
+        )
+
+        # TTS Media Player: Entity-specific instances, created only for enabled media players
+        def _create_tts_mediaplayer_adapter(
+            h: HomeAssistant, entity_id: str | None
+        ) -> TTSMediaPlayerAdapter:
+            if entity_id is None:
+                raise ValueError("entity_id is required for tts_mediaplayer adapter")
+
+            # Retrieve TTS service and volume registry from hass.data
+            # These must be set during integration setup
+            tts_service = None
+            volume_registry = None
+
+            # Find main entry data
+            if DOMAIN in h.data:
+                for entry_data in h.data[DOMAIN].values():
+                    if isinstance(entry_data, dict):
+                        if "config_repository" in entry_data:
+                            config_repo = entry_data["config_repository"]
+                            snapshot = config_repo.snapshot()
+                            tts_service = snapshot.system_config.tts_service
+                        if "volume_registry" in entry_data:
+                            volume_registry = entry_data["volume_registry"]
+                        if tts_service and volume_registry:
+                            break
+
+            if not tts_service:
+                raise ValueError(
+                    "TTS service not configured in system settings. "
+                    "Cannot create TTS media player adapter."
+                )
+
+            if not volume_registry:
+                raise ValueError(
+                    "Volume restoration registry not initialized. "
+                    "Cannot create TTS media player adapter."
+                )
+
+            return TTSMediaPlayerAdapter(
+                hass=h,
+                entity_id=entity_id,
+                tts_service=tts_service,
+                volume_registry=volume_registry,
+            )
+
+        manager.register_factory(
+            TTSMediaPlayerAdapter.create_factory(
+                factory_fn=_create_tts_mediaplayer_adapter
             )
         )
 
@@ -243,11 +296,19 @@ class NotificationSystemSetup:
             retry_queue=retry_queue,
         )
 
+        # Create deduplication service (prevents duplicate deliveries)
+        deduplication_service = DeduplicationService(
+            window_seconds=60,  # 60 second deduplication window
+            max_cache_size=1000,  # Maximum 1000 entries in cache
+            cleanup_interval=60,  # Cleanup every 60 seconds
+        )
+
         # Create orchestrator (coordinates notifications → tasks)
         orchestrator = NotificationOrchestrator(
             config_repo=config_repo,
             task_queue=task_queue,
             notification_registry=notification_registry,
+            deduplication_service=deduplication_service,
         )
 
         # Create housekeeping scheduler for cleanup
@@ -271,4 +332,5 @@ class NotificationSystemSetup:
             "attempt_log": attempt_log,
             "retry_queue": retry_queue,
             "housekeeping_scheduler": housekeeping_scheduler,
+            "deduplication_service": deduplication_service,
         }

@@ -28,6 +28,7 @@ from ..models import (
     NotificationDeliveryTask,
     NotificationPayload,
 )
+from .deduplication import DeduplicationService
 from .queue import NotificationDeliveryTaskQueue
 
 _LOGGER = logging.getLogger(__name__)
@@ -55,6 +56,7 @@ class NotificationOrchestrator:
         config_repo: ConfigRepository,
         task_queue: NotificationDeliveryTaskQueue,
         notification_registry,
+        deduplication_service: DeduplicationService | None = None,
     ) -> None:
         """Initialize the Orchestrator.
 
@@ -62,11 +64,13 @@ class NotificationOrchestrator:
             config_repo: Repository for managing configuration data.
             task_queue: Queue for managing asynchronous tasks.
             notification_registry: Notification registry for tracking.
+            deduplication_service: Optional deduplication service for preventing duplicate deliveries.
 
         """
         self._config_repo = config_repo
         self._task_queue = task_queue
         self._notification_registry = notification_registry
+        self._deduplication_service = deduplication_service
 
     async def handle_notification(self, payload: NotificationPayload) -> None:
         """Handle notification orchestration.
@@ -137,6 +141,28 @@ class NotificationOrchestrator:
                     payload.notification_id,
                 )
                 continue
+
+            # Apply deduplication if enabled
+            if self._deduplication_service:
+                channels = await self._deduplicate_channels(
+                    payload.notification_id, channels
+                )
+
+                # Check if all channels were deduplicated
+                if not channels:
+                    _LOGGER.debug(
+                        "All channels for recipient '%s' were deduplicated for notification %s",
+                        recipient_id,
+                        payload.notification_id,
+                    )
+                    # Still track recipient even if all channels deduplicated
+                    recipients_data.append(
+                        {
+                            "recipient_id": recipient_id,
+                            "channels": [],  # No channels after deduplication
+                        }
+                    )
+                    continue
 
             # Track recipients and channels for registration
             recipients_data.append(
@@ -226,6 +252,48 @@ class NotificationOrchestrator:
 
         return snapshot.getRecipientChannels(recipient_id, payload.criticality)
 
+    async def _deduplicate_channels(
+        self, notification_id: str, channels: list[str]
+    ) -> list[str]:
+        """Remove duplicate channels using deduplication service.
+
+        Args:
+            notification_id: Notification identifier.
+            channels: List of channel IDs to check.
+
+        Returns:
+            Filtered list of channel IDs (non-duplicates only).
+
+        """
+        if not self._deduplication_service:
+            return channels
+
+        non_duplicate_channels = []
+        for channel_id in channels:
+            is_duplicate, reason = await self._deduplication_service.is_duplicate(
+                notification_id, channel_id
+            )
+
+            if is_duplicate:
+                _LOGGER.debug(
+                    "Deduplication: Skipping channel '%s' for notification %s: %s",
+                    channel_id,
+                    notification_id,
+                    reason,
+                )
+            else:
+                non_duplicate_channels.append(channel_id)
+
+        if len(non_duplicate_channels) < len(channels):
+            _LOGGER.info(
+                "Deduplication: Filtered %d/%d channels for notification %s",
+                len(channels) - len(non_duplicate_channels),
+                len(channels),
+                notification_id,
+            )
+
+        return non_duplicate_channels
+
     # ------------------------------------------------------------------
     # Task construction
     # ------------------------------------------------------------------
@@ -268,6 +336,31 @@ class NotificationOrchestrator:
                 f"Cannot create delivery task for recipient '{recipient_id}'."
             )
 
+        # Extract TTS settings for TTS recipients
+        # These settings are per-recipient and enable different TTS recipients
+        # to have different volume/format settings for the same notification
+        tts_settings = None
+        recipient_data = snapshot.recipients.get(recipient_id)
+        recipient_config = snapshot.recipient_configs.get(recipient_id)
+
+        if recipient_data and recipient_config:
+            from ..models.recipient import RecipientType  # noqa: PLC0415
+
+            if (
+                recipient_data.type == RecipientType.TTS
+                and recipient_config.tts_settings
+            ):
+                tts_settings = recipient_config.tts_settings
+                _LOGGER.debug(
+                    "Task for recipient '%s' includes TTS settings: format=%s, volumes=(%d,%d,%d,%d)",
+                    recipient_id,
+                    tts_settings.message_format,
+                    tts_settings.volume_morning,
+                    tts_settings.volume_daytime,
+                    tts_settings.volume_evening,
+                    tts_settings.volume_night,
+                )
+
         return NotificationDeliveryTask(
             job_id=uuid4(),
             recipient_id=recipient_id,
@@ -275,6 +368,7 @@ class NotificationOrchestrator:
             channel_info=channel_info,
             policy=policy,
             contact_info=contact_info,
+            tts_settings=tts_settings,  # Include TTS settings in task
             snapshot_id=snapshot_id,
             created_at=datetime.now(UTC),
         )

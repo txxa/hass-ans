@@ -18,6 +18,7 @@ from ..const import (
     SYS_CONFIG_RETRY_BASE_DELAY_KEY,
     SYS_CONFIG_RETRY_MAX_DELAY_KEY,
     SYS_CONFIG_STORAGE_RETENTION_DAYS_KEY,
+    SYS_CONFIG_TTS_SERVICE_KEY,
     SYS_DEFAULT_ENABLE_AUDIT_LOGGING,
     SYS_DEFAULT_GLOBAL_RATE_LIMIT,
     SYS_DEFAULT_QUEUE_CONCURRENCY,
@@ -50,7 +51,9 @@ class SystemConfig:
     persistent_notifications_enabled: bool = (
         False  # Enable/disable persistent notifications
     )
-    # tts_integration: str | None
+    tts_service: str | None = (
+        None  # NEW: TTS service (e.g., "tts.google_translate_say")
+    )
     version: int = field(default=1)
 
     def __post_init__(self) -> None:
@@ -76,6 +79,7 @@ class SystemConfig:
         data[SYS_CONFIG_QUEUE_CONCURRENCY_KEY] = self.queue_max_concurrency
         data[SYS_CONFIG_STORAGE_RETENTION_DAYS_KEY] = self.storage_retention_days
         data[SYS_CONFIG_ENABLE_AUDIT_LOGGING_KEY] = self.enable_audit_logging
+        data[SYS_CONFIG_TTS_SERVICE_KEY] = self.tts_service
         return data
 
     @staticmethod
@@ -106,7 +110,7 @@ class SystemConfig:
             enable_audit_logging=data.get(
                 SYS_CONFIG_ENABLE_AUDIT_LOGGING_KEY, SYS_DEFAULT_ENABLE_AUDIT_LOGGING
             ),
-            # tts_integration=data.get(SYS_CONFIG_TTS_INTEGRATION_KEY),
+            tts_service=data.get(SYS_CONFIG_TTS_SERVICE_KEY),
             version=data.get(CONFIG_VERSION_KEY, 1),
         )
 

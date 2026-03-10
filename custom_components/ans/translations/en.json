@@ -1,5 +1,26 @@
 {
     "title": "Advanced Notification System",
+    "selector": {
+        "recipient_type": {
+            "options": {
+                "TTS": "TTS Speaker (Audio Notifications)"
+            }
+        },
+        "message_format": {
+            "options": {
+                "title_and_message": "Title and Message",
+                "message_only": "Message Only",
+                "title_only": "Title Only"
+            }
+        },
+        "recipient_choice": {
+            "options": {
+                "system_home_assistant": "System: Home Assistant ",
+                "tts_new": "TTS: Text-to-Speech recipient",
+                "virtual_new": "Virtual: Custom recipient"
+            }
+        }
+    },
     "config": {
         "step": {
             "system_settings": {
@@ -9,8 +30,12 @@
                     "retry_attempts_max": "Maximum retry attempts",
                     "rate_limit_max": "Global rate limit (max notifications/min)",
                     "enabled_channels": "Enabled notification channels",
+                    "tts_service": "Text-to-Speech service (optional)",
                     "persistent_notifications_enabled": "Enable persistent notifications (auto-configures system-wide channel)",
                     "enable_audit_logging": "Enable audit logging (tracks notifications and delivery attempts)"
+                },
+                "data_description": {
+                    "tts_service": "Select a TTS integration to enable media player delivery channels for TTS recipients."
                 }
             }
         },
@@ -21,10 +46,17 @@
             "invalid_ha_user_selection": "Invalid Home Assistant user selection.",
             "create_entry_failed": "Failed to create integration entry. See logs for details.",
             "reconfigure_entry_not_found": "Reconfiguration entry was not found.",
+            "tts_service": "Invalid TTS service selection or service not available.",
             "base": "Unknown error — see logs for details.",
             "retry_attempts_max": "Maximum retries must be an integer ≥ 0.",
             "rate_limit_max": "Maximum rate limit must be an integer ≥ 0.",
             "enabled_channels": "At least one channel must be enabled or persistent notifications must be enabled.",
+            "tts_service_unavailable": "The selected TTS service is not available or has been removed.",
+            "invalid_tts_service": "Invalid TTS service format. Must be a valid service name (e.g., 'tts.google_translate_say').",
+            "media_player_offline": "Media player is offline or unavailable.",
+            "media_player_not_found": "The specified media player entity was not found.",
+            "volume_control_failed": "Failed to control media player volume.",
+            "invalid_tts_configuration": "Invalid TTS configuration. Please check your settings.",
             "define_identity_default_settings": "Invalid selection.",
             "rate_limit": "Rate limit must be an integer between {min} and {max}.",
             "retry_attempts": "Retry attempts must be an integer between {min} and {max}.",
@@ -148,6 +180,28 @@
                         "blocked_sources_regex": "Blocked sources (regular expression)"
                     }
                 },
+                "recipient_tts_settings": {
+                    "title": "TTS Settings",
+                    "description": "Configure volume levels and message format for text-to-speech delivery. Volume levels are applied based on the current time of day.",
+                    "data": {
+                        "volume_morning": "Morning Volume (6:00-9:00)",
+                        "volume_daytime": "Daytime Volume (9:00-18:00)",
+                        "volume_evening": "Evening Volume (18:00-22:00)",
+                        "volume_night": "Night Volume (22:00-6:00)",
+                        "volume_override_level": "Override Volume Level",
+                        "volume_override_criticalities": "Override for Criticalities",
+                        "message_format": "Message Format"
+                    },
+                    "data_description": {
+                        "volume_morning": "Volume level (0-100) for notifications delivered between 6:00 AM and 9:00 AM.",
+                        "volume_daytime": "Volume level (0-100) for notifications delivered between 9:00 AM and 6:00 PM.",
+                        "volume_evening": "Volume level (0-100) for notifications delivered between 6:00 PM and 10:00 PM.",
+                        "volume_night": "Volume level (0-100) for notifications delivered between 10:00 PM and 6:00 AM.",
+                        "volume_override_level": "Volume level (0-100) to use when a notification matches the override criticalities below.",
+                        "volume_override_criticalities": "Select criticality levels that should use the override volume instead of time-based volumes (e.g., always play CRITICAL notifications at maximum volume).",
+                        "message_format": "Choose how notification content is formatted for TTS: 'Title and Message' speaks both, 'Message Only' speaks just the message, 'Title Only' speaks just the title."
+                    }
+                },
                 "recipient_channel_mapping": {
                     "title": "Recipient — Channel Mapping",
                     "description": "Map notification criticality levels to delivery channels.",
@@ -192,6 +246,19 @@
                 "notification_types": "Select at least one notification type.",
                 "blocked_sources_regex": "Invalid regular expression for blocked sources.",
                 "invalid_channel_mapping": "At least one channel must be configured for a recipient.",
+                "volume_morning": "Morning volume must be an integer between 0 and 100.",
+                "volume_daytime": "Daytime volume must be an integer between 0 and 100.",
+                "volume_evening": "Evening volume must be an integer between 0 and 100.",
+                "volume_night": "Night volume must be an integer between 0 and 100.",
+                "volume_override_level": "Override volume level must be an integer between 0 and 100.",
+                "volume_override_criticalities": "Invalid criticality selection for volume override.",
+                "message_format": "Invalid message format. Must be 'title_and_message', 'message_only', or 'title_only'.",
+                "tts_settings_required": "TTS settings are required for TTS recipients.",
+                "tts_service_unavailable": "The configured TTS service is not available. Please reconfigure the integration.",
+                "media_player_offline": "One or more selected media players are offline or unavailable.",
+                "media_player_not_found": "One or more selected media players were not found.",
+                "volume_control_failed": "Failed to control volume on one or more media players.",
+                "invalid_tts_configuration": "Invalid TTS configuration for this recipient.",
                 "channels_low": "One or more channels are invalid or unavailable.",
                 "channels_medium": "One or more channels are invalid or unavailable.",
                 "channels_high": "One or more channels are invalid or unavailable.",

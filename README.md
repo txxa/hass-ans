@@ -39,7 +39,13 @@ This integration provides a centralized notification system that intelligently r
 - **Multi-Channel Support**:
   - System channels (persistent notification)
   - Recipient channels (mobile app, and other Home Assistant notification services)
+  - Text-to-Speech (TTS) delivery via media players
   - Extensible adapter architecture for additional channels
+- **Text-to-Speech Delivery**:
+  - Time-based volume control with four configurable time frames (morning, daytime, evening, night)
+  - Criticality-based volume overrides for urgent notifications
+  - Automatic volume restoration after playback
+  - Deduplication to prevent the same message from playing multiple times
 - **Comprehensive Tracking**:
   - Notification registry for all messages
   - Delivery attempt logs for audit trails
@@ -123,7 +129,8 @@ To add the integration, go to Settings ➤ Devices & Services ➤ Integrations, 
 
 During initial setup, the following settings are configured:
 
-- **Enabled Channels**: Select which notification channels are available system-wide
+- **Enabled Channels**: Select which notification channels are available system-wide, including media player entities for TTS delivery
+- **TTS Service** (optional): Select a TTS integration to enable spoken audio notifications (e.g., `tts.google_translate_say`)
 - **Audit Logging**: Enable or disable comprehensive delivery tracking and audit logs
 
 #### Integration Options
@@ -139,7 +146,7 @@ After installation, additional system-wide settings can be configured via the Op
 
 #### Reconfiguring Integration Settings
 
-The initial setup options (Enabled Channels and Audit Logging) can be changed at any time using the Reconfigure flow (Settings ➤ Devices & Services ➤ Integrations ➤ Advanced Notification System ➤ Reconfigure).
+The initial setup options (TTS Service, Enabled Channels, and Audit Logging) can be changed at any time using the Reconfigure flow (Settings ➤ Devices & Services ➤ Integrations ➤ Advanced Notification System ➤ Reconfigure).
 
 ### Recipient Configuration (Sub Entries)
 
@@ -154,12 +161,23 @@ To add a new recipient:
 3. Follow the configuration steps:
 
 **Step 1: Select/Create Recipient**
-- Choose an existing Home Assistant user or create a new recipient identifier
 
-**Step 2: Recipient Data**
+Choose the recipient type:
+- **System: Home Assistant**: A special built-in recipient for system-level notifications via persistent notification. Recipient data (Steps 2) is skipped — name and settings are applied automatically and cannot be changed.
+- **Existing Home Assistant user**: Links the recipient to an HA user account
+- **New virtual recipient**: Creates a custom recipient identified by email address or phone number
+- **TTS Speaker (Audio Notifications)**: Creates a recipient that delivers spoken notifications to media player entities
+
+**Step 2: Recipient Data** *(skipped for System: Home Assistant)*
 - **Display Name**: Friendly name for the recipient
-- **Email Address**: Email contact for the recipient (if applicable)
-- **Phone Number**: Phone contact for the recipient (if applicable)
+- **Email Address**: Email contact for the recipient (if applicable, not applicable for TTS recipients)
+- **Phone Number**: Phone contact for the recipient (if applicable, not applicable for TTS recipients)
+
+> **Note**: Contact info requirements depend on channels:
+> - Mobile app channels require Home Assistant user linkage (no email/phone needed)
+> - Email channels require email address
+> - SMS/Messenger channels require phone number
+> - System channels (persistent notification) and TTS recipients require no contact info
 
 **Step 3: Basic Settings**
 - **Rate Limit**: Maximum notifications per minute for this recipient
@@ -167,11 +185,26 @@ To add a new recipient:
 - **Allowed Notification Types**: Select which notification types (INFO, WARNING, ALERT, REMINDER, EVENT, SECURITY) this recipient should receive
 - **Blocked Sources**: Regular expression patterns to block notifications from specific sources
 
-**Step 4: Channel Mapping**
-- Map each criticality level (LOW, MEDIUM, HIGH, CRITICAL) to specific delivery channels
-- Configure which channels should be used for each criticality level
+**Step 4: TTS Settings** *(TTS recipients only)*
+- **Volume Levels**: Configure the playback volume for each time frame:
+  - Morning (06:00–09:00): default 40%
+  - Daytime (09:00–18:00): default 50%
+  - Evening (18:00–22:00): default 40%
+  - Night (22:00–06:00): default 20%
+- **Override Volume Level**: Volume used when the criticality override is triggered (default 80%)
+- **Override for Criticalities**: Select which criticality levels trigger the override volume (e.g., HIGH, CRITICAL)
+- **Message Format**: How notification content is spoken:
+  - `title_and_message`: speaks "{title}. {message}"
+  - `message_only`: speaks only the message
+  - `title_only`: speaks only the title
 
-**Step 5: Do Not Disturb Settings**
+**Step 5: Channel Mapping**
+- Map each criticality level (LOW, MEDIUM, HIGH, CRITICAL) to specific delivery channels
+- For the System: Home Assistant recipient: `persistent_notification` (the only available channel for this recipient type)
+- For notification recipients: notification services (e.g., `notify.mobile_app_phone`)
+- For TTS recipients: media player entities (e.g., `media_player.living_room_speaker`)
+
+**Step 6: Do Not Disturb Settings**
 - **Enable/Disable DND**: Turn Do Not Disturb mode on or off
 - **Start Time**: Time when DND period begins
 - **End Time**: Time when DND period ends
@@ -181,7 +214,7 @@ To add a new recipient:
 
 #### Reconfiguring Recipients
 
-All recipient settings (Steps 2-5 above) can be updated at any time using the Reconfigure flow for the specific recipient entry.
+All recipient settings can be updated at any time using the Reconfigure flow for the specific recipient entry.
 
 ### Sending Notifications
 

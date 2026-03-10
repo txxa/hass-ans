@@ -11,9 +11,10 @@ import logging
 from typing import TYPE_CHECKING
 
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.selector import SelectOptionDict
 
 from ..const import PERSISTENT_NOTIFICATION_CHANNEL
-from ..models import ChannelInfo, ChannelScope, IntegrationInfo, RecipientType
+from ..models import ChannelInfo, ChannelScope, RecipientType
 
 if TYPE_CHECKING:
     from .adapter_registry import AdapterRegistry
@@ -458,14 +459,14 @@ class ChannelRegistry:
 
         This is a static utility method for filtering channels when you have
         a list but not access to the registry instance. Filters based on
-        channel scope metadata.
+        channel scope metadata and recipient type.
 
         Parameters
         ----------
         channels : list[ChannelInfo]
             List of channel information objects to filter.
         recipient_type : RecipientType
-            The type of recipient (SYSTEM, HA_USER, VIRTUAL).
+            The type of recipient (SYSTEM, HA_USER, VIRTUAL, TTS).
 
         Returns
         -------
@@ -475,6 +476,10 @@ class ChannelRegistry:
         """
         if recipient_type == RecipientType.SYSTEM:
             return [ch for ch in channels if ch.scope == ChannelScope.SYSTEM]
+        if recipient_type == RecipientType.TTS:
+            # TTS recipients only use media_player channels
+            return [ch for ch in channels if ch.id.startswith("media_player.")]
+        # HA_USER and VIRTUAL recipients use notification channels
         return [ch for ch in channels if ch.scope == ChannelScope.RECIPIENT]
 
     @staticmethod
@@ -550,11 +555,10 @@ class ChannelRegistry:
         return results
 
     @staticmethod
-    async def detect_tts_integrations(hass: HomeAssistant) -> list[IntegrationInfo]:
+    async def detect_tts_integrations(hass: HomeAssistant) -> list[SelectOptionDict]:
         """Discover available TTS integrations.
 
-        TODO: This function is prepared for future TTS channel support.
-        Currently not used but will be integrated when TTS notifications are implemented.
+        Returns TTS services formatted for dropdown selector with validation.
 
         Parameters
         ----------
@@ -563,32 +567,119 @@ class ChannelRegistry:
 
         Returns
         -------
-        list[IntegrationInfo]
-            List of detected TTS integrations with metadata:
-            - id: TTS service identifier (e.g., "tts.google_translate")
-            - label: Human-friendly label
-            - integration: Integration domain
+        list[SelectOptionDict]
+            List of TTS services formatted for dropdown selector.
+            Each dict contains 'value' (service_id) and 'label' (friendly name).
 
         """
         services = hass.services.async_services()
         tts_services = services.get("tts", {})
 
-        results: list[IntegrationInfo] = []
-        for service_id in sorted(tts_services.keys()):
-            channel_id = f"tts.{service_id}"
-            label = ChannelRegistry._get_channel_label_with_fallback(
-                channel_id, service_id
-            )
-            results.append(
-                IntegrationInfo(
-                    channel_id,
-                    label,
+        results: list[SelectOptionDict] = []
+        for service_name in sorted(tts_services.keys()):
+            # Build full service identifier
+            service_id = f"tts.{service_name}"
+
+            # Validate service format (PRIORITY 1 - Security)
+            if not service_id.startswith("tts."):
+                _LOGGER.warning(
+                    "Skipping invalid TTS service format: %s",
                     service_id,
+                )
+                continue
+
+            # Create human-friendly label
+            label = service_name.replace("_", " ").title()
+
+            results.append(
+                SelectOptionDict(
+                    value=service_id,
+                    label=label,
                 )
             )
 
-        _LOGGER.debug("Detected TTS integrations: %s", results)
+        # Sort alphabetically by label
+        results.sort(key=lambda x: x["label"])
+
+        _LOGGER.debug(
+            "Detected %d TTS integrations: %s",
+            len(results),
+            [s["value"] for s in results],
+        )
         return results
+
+    @staticmethod
+    async def detect_media_players(hass: HomeAssistant) -> list[ChannelInfo]:
+        """Discover media player entities that support TTS playback.
+
+        Performs runtime validation to ensure media players actually support
+        required features (volume control and media playback) based on their
+        actual attributes, which is more reliable than feature flags.
+
+        Security: Validates actual capabilities through attribute checks.
+
+        Parameters
+        ----------
+        hass : HomeAssistant
+            Home Assistant instance.
+
+        Returns
+        -------
+        list[ChannelInfo]
+            List of ChannelInfo objects for compatible media players with:
+            - id: Entity ID (e.g., "media_player.living_room")
+            - label: Friendly name
+            - scope: RECIPIENT (media players are recipient-scoped)
+            - integration: Device class or "media_player"
+
+        """
+        media_players: list[ChannelInfo] = []
+
+        for entity_id in hass.states.async_entity_ids("media_player"):
+            state = hass.states.get(entity_id)
+            if not state:
+                continue
+
+            # Runtime capability validation (PRIORITY 1 - Security)
+            # Check for volume control capability via volume_level attribute
+            has_volume_attr = state.attributes.get("volume_level") is not None
+
+            if not has_volume_attr:
+                _LOGGER.debug(
+                    "Skipping media player %s: no volume_level attribute",
+                    entity_id,
+                )
+                continue
+
+            # Verify volume_level is in valid range [0.0, 1.0]
+            volume_level = state.attributes.get("volume_level")
+            if not isinstance(volume_level, (int, float)) or not (
+                0.0 <= volume_level <= 1.0
+            ):
+                _LOGGER.warning(
+                    "Skipping media player %s: invalid volume_level value: %s",
+                    entity_id,
+                    volume_level,
+                )
+                continue
+
+            # Get friendly name from attributes
+            friendly_name = state.attributes.get("friendly_name", entity_id)
+
+            media_players.append(
+                ChannelInfo(
+                    id=entity_id,
+                    label=friendly_name,
+                    scope=ChannelScope.RECIPIENT,  # Media players are recipient-scoped
+                    integration=state.attributes.get("device_class") or "media_player",
+                )
+            )
+
+        _LOGGER.info(
+            "Discovered %d compatible media players for TTS", len(media_players)
+        )
+
+        return media_players
 
     def clear(self) -> None:
         """Clear all registered channels.

@@ -1,6 +1,10 @@
 """Voluptuous schema definitions for ANS config flows."""
 
+import logging
+import re
+
 import voluptuous as vol
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.selector import (
     SelectOptionDict,
     SelectSelector,
@@ -10,8 +14,6 @@ from homeassistant.helpers.selector import (
 )
 
 from ..const import (
-    CONFIG_FLOW_SELECTED_HA_USERS_KEY,
-    # DEFAULT_TTS_INTEGRATION,
     RCPT_CONFIG_BLOCKED_SOURCES_PATTERN_KEY,
     RCPT_CONFIG_CHANNELS_KEY,
     RCPT_CONFIG_CONFIGURED_CHANNELS_KEY,
@@ -29,6 +31,13 @@ from ..const import (
     RCPT_CONFIG_RATE_LIMIT_KEY,
     RCPT_CONFIG_RECIPIENT_CHOICE_KEY,
     RCPT_CONFIG_RETRY_ATTEMPTS_KEY,
+    RCPT_CONFIG_TTS_MESSAGE_FORMAT_KEY,
+    RCPT_CONFIG_TTS_VOLUME_DAYTIME_KEY,
+    RCPT_CONFIG_TTS_VOLUME_EVENING_KEY,
+    RCPT_CONFIG_TTS_VOLUME_MORNING_KEY,
+    RCPT_CONFIG_TTS_VOLUME_NIGHT_KEY,
+    RCPT_CONFIG_TTS_VOLUME_OVERRIDE_CRITICALITIES_KEY,
+    RCPT_CONFIG_TTS_VOLUME_OVERRIDE_LEVEL_KEY,
     RCPT_DEFAULT_BLOCKED_SOURCES_PATTERN,
     RCPT_DEFAULT_CRITICALITY_LEVELS,
     RCPT_DEFAULT_DND_ALLOWED_CRITICALITIES,
@@ -50,6 +59,7 @@ from ..const import (
     SYS_CONFIG_RETRY_BASE_DELAY_KEY,
     SYS_CONFIG_RETRY_MAX_DELAY_KEY,
     SYS_CONFIG_STORAGE_RETENTION_DAYS_KEY,
+    SYS_CONFIG_TTS_SERVICE_KEY,
     SYS_DEFAULT_ENABLE_AUDIT_LOGGING,
     SYS_DEFAULT_ENABLED_CHANNELS,
     SYS_DEFAULT_GLOBAL_RATE_LIMIT,
@@ -64,17 +74,79 @@ from ..const import (
     SYS_MAX_RETRY_MAX_DELAY_SECONDS,
     SYS_STORAGE_DEFAULT_FILE_RETENTION_DAYS,
     SYS_STORAGE_MAX_FILE_RETENTION_DAYS,
-    # SYS_CONFIG_TTS_INTEGRATION_KEY,
+    TTS_DEFAULT_MESSAGE_FORMAT,
+    TTS_DEFAULT_VOLUME_DAYTIME,
+    TTS_DEFAULT_VOLUME_EVENING,
+    TTS_DEFAULT_VOLUME_MORNING,
+    TTS_DEFAULT_VOLUME_NIGHT,
+    TTS_DEFAULT_VOLUME_OVERRIDE_LEVEL,
 )
 from ..models import (
     NotificationCriticality,
     NotificationType,
+    RecipientType,
 )
 from .validator import ValidationContext
+
+_LOGGER = logging.getLogger(__name__)
 
 # ---------------------------
 # System Config Schema
 # ---------------------------
+
+
+async def validate_tts_service(hass: HomeAssistant, value: str) -> str | None:
+    """Validate TTS service name format and runtime existence (PRIORITY 1 - Security).
+
+    Ensures TTS service:
+    1. Follows correct naming convention (tts.service_name)
+    2. Actually exists in Home Assistant at runtime
+    3. Contains no malicious patterns
+
+    Parameters
+    ----------
+    hass : HomeAssistant
+        Home Assistant instance for runtime validation.
+    value : str
+        TTS service identifier (e.g., "tts.google_translate_say").
+
+    Returns
+    -------
+    str | None
+        Validated service identifier, or None if disabled.
+
+    Raises
+    ------
+    vol.Invalid
+        If service format is invalid or service doesn't exist.
+
+    """
+    # Handle "None" string (user deselected TTS)
+    if value == "None" or value is None or value == "":
+        return None
+
+    # Validate format: must start with "tts."
+    if not value.startswith("tts."):
+        raise vol.Invalid(f"TTS service must start with 'tts.' (got: {value})")
+
+    # Validate format: must contain only alphanumeric, underscore, and dot
+    if not re.match(r"^tts\.[a-z0-9_]+$", value):
+        raise vol.Invalid(
+            f"Invalid TTS service format: {value}. "
+            "Must contain only lowercase letters, numbers, and underscores after 'tts.'"
+        )
+
+    # Runtime validation: check if service actually exists
+    services = hass.services.async_services()
+    tts_services = services.get("tts", {})
+    service_name = value.split(".", 1)[1]  # Extract service name after "tts."
+
+    if service_name not in tts_services:
+        available = ", ".join(sorted(tts_services.keys())) if tts_services else "none"
+        raise vol.Invalid(f"TTS service '{value}' not found. Available: {available}")
+
+    _LOGGER.debug("TTS service validation passed: %s", value)
+    return value
 
 
 def get_system_config_schema(
@@ -82,14 +154,16 @@ def get_system_config_schema(
     values: dict | None,
     include_rate_limits: bool = True,
     include_audit_logging: bool = False,
+    hass: HomeAssistant | None = None,
 ) -> vol.Schema:
     """Return schema for system-wide configuration.
 
     Args:
         defaults: Default values for form fields
-        values: Available options for select fields (e.g., enabled_channels)
+        values: Available options for select fields (e.g., enabled_channels, tts_services, media_players)
         include_rate_limits: Whether to include rate limit fields (False for initial setup)
         include_audit_logging: Whether to include audit logging toggle
+        hass: Home Assistant instance (required for TTS service validation)
 
     """
     defaults = defaults or {}
@@ -131,6 +205,39 @@ def get_system_config_schema(
             mode=SelectSelectorMode.DROPDOWN,
         )
     )
+
+    # TTS service selection (optional)
+    tts_services = values.get("tts_services", [])
+    if tts_services:  # Only show if TTS services are available
+        # Add "None" option to allow disabling TTS
+        tts_options = [SelectOptionDict(value="None", label="(Disabled)")]
+        tts_options.extend(tts_services)
+
+        schema_dict[
+            vol.Optional(
+                SYS_CONFIG_TTS_SERVICE_KEY,
+                description={
+                    "suggested_value": defaults.get(SYS_CONFIG_TTS_SERVICE_KEY, "None"),
+                },
+            )
+        ] = SelectSelector(
+            SelectSelectorConfig(
+                options=tts_options,
+                translation_key=SYS_CONFIG_TTS_SERVICE_KEY,
+                multiple=False,
+                mode=SelectSelectorMode.DROPDOWN,
+            )
+        )
+
+    # Media player selection (only shown if TTS service is selected)
+    # This is handled dynamically in the config flow by conditional form display
+    media_players = values.get("media_players", [])
+    current_tts = defaults.get(SYS_CONFIG_TTS_SERVICE_KEY)
+    if media_players and current_tts and current_tts != "None":
+        # Show media player selection when TTS is enabled
+        # Note: This will be handled via channel selection in enabled_channels
+        # Media players are added to the enabled_channels list automatically
+        pass
 
     # Audit logging toggle (stored in config entry data)
     if include_audit_logging:
@@ -242,58 +349,23 @@ def get_system_options_schema(
 # ------------------------
 
 
-def get_recipient_selection_schema(defaults: dict | None, values: dict | None):
-    """Choose what type of recipient to create with clear, unified options.
-
-    Creates a single dropdown with all available recipient options:
-    - System recipients (one per available system channel)
-    - HA users (not yet configured as recipients)
-    - Virtual recipient (custom/manual entry)
+def get_recipient_selection_schema(
+    defaults: dict | None, options: list[SelectOptionDict]
+):
+    """Return schema for the recipient selection step.
 
     Args:
-        defaults: Default values for the form
-        values: Available options including:
-            - available_system_channels: List of SelectOptionDict for system channels
-            - CONFIG_FLOW_SELECTED_HA_USERS_KEY: List of SelectOptionDict for HA users
+        defaults: Default values for the form (e.g. previously submitted input)
+        options: Pre-built list of SelectOptionDict entries. Static entries use
+            the option value as label (translated by the frontend via
+            translation_key). Dynamic entries (e.g. HA users) carry their
+            runtime label directly.
 
     Returns:
         Voluptuous schema with a single unified selection field
 
     """
     defaults = defaults or {}
-    values = values or {}
-
-    # Build unified options list
-    options: list[SelectOptionDict] = []
-
-    # Add system recipient option if not already configured
-    if values.get("system_recipient_available", True):
-        options.append(
-            SelectOptionDict(
-                label="System: Home Assistant",
-                value="system_home_assistant",
-            )
-        )
-
-    # Add HA user options (users not yet configured as recipients)
-    ha_users = values.get(CONFIG_FLOW_SELECTED_HA_USERS_KEY, [])
-    options.extend(
-        [
-            SelectOptionDict(
-                label=f"HA User: {user['label']}",
-                value=f"ha_user_{user['value']}",
-            )
-            for user in ha_users
-        ]
-    )
-
-    # Always add virtual recipient option
-    options.append(
-        SelectOptionDict(
-            label="Virtual: Custom recipient (enter manually)",
-            value="virtual_new",
-        )
-    )
 
     return vol.Schema(
         {
@@ -316,13 +388,16 @@ def get_recipient_selection_schema(defaults: dict | None, values: dict | None):
 
 
 def get_recipient_definition_schema(
-    defaults: dict | None, values: dict | None = None
+    defaults: dict | None,
+    values: dict | None = None,
+    recipient_type: RecipientType | None = None,
 ) -> vol.Schema:
     """Return schema for defining recipient basics.
 
     Args:
         defaults: Default values for form fields
         values: Available options for select fields (currently unused)
+        recipient_type: Recipient type; TTS recipients omit email and phone fields.
 
     Note:
         Contact information (email, phone) is optional. Channels that require
@@ -333,44 +408,50 @@ def get_recipient_definition_schema(
     """
     defaults = defaults or {}
     values = values or {}
+    is_tts = recipient_type == RecipientType.TTS
 
-    return vol.Schema(
-        {
-            vol.Required(
-                RCPT_CONFIG_NAME_KEY,
-                description={
-                    "suggested_value": defaults.get(RCPT_CONFIG_NAME_KEY),
-                },
-            ): str,
+    schema_dict: dict = {
+        vol.Required(
+            RCPT_CONFIG_NAME_KEY,
+            description={
+                "suggested_value": defaults.get(RCPT_CONFIG_NAME_KEY),
+            },
+        ): str,
+    }
+
+    if not is_tts:
+        schema_dict[
             vol.Optional(
                 RCPT_CONFIG_EMAIL_KEY,
                 description={
                     "suggested_value": defaults.get(RCPT_CONFIG_EMAIL_KEY),
                 },
-            ): selector(
-                {
-                    "text": {
-                        "type": "email",
-                        "autocomplete": "email",
-                    }
+            )
+        ] = selector(
+            {
+                "text": {
+                    "type": "email",
+                    "autocomplete": "email",
                 }
-            ),
+            }
+        )
+        schema_dict[
             vol.Optional(
                 RCPT_CONFIG_PHONE_KEY,
                 description={
                     "suggested_value": defaults.get(RCPT_CONFIG_PHONE_KEY),
                 },
-            ): selector(
-                {
-                    "text": {
-                        "type": "tel",
-                        "autocomplete": "tel",
-                    }
+            )
+        ] = selector(
+            {
+                "text": {
+                    "type": "tel",
+                    "autocomplete": "tel",
                 }
-            ),
-        },
-        extra=vol.PREVENT_EXTRA,
-    )
+            }
+        )
+
+    return vol.Schema(schema_dict, extra=vol.PREVENT_EXTRA)
 
 
 def get_recipient_basic_settings_schema(
@@ -514,6 +595,153 @@ def get_recipient_criticality_channel_mapping_schema(
 
     return vol.Schema(
         schema_dict,
+        extra=vol.PREVENT_EXTRA,
+    )
+
+
+def get_recipient_tts_settings_schema(
+    defaults: dict | None, values: dict | None
+) -> vol.Schema:
+    """Return schema for TTS recipient settings.
+
+    Configures volume levels for different time periods, criticality-based overrides,
+    and message format preferences for TTS delivery.
+
+    Args:
+        defaults: Default values for form fields
+        values: Available options for select fields (criticality_options)
+
+    Time Frames (for volume control):
+        - Morning: 06:00 - 09:00
+        - Daytime: 09:00 - 18:00
+        - Evening: 18:00 - 22:00
+        - Night: 22:00 - 06:00
+
+    Message Formats:
+        - title_and_message: "{title}. {message}"
+        - message_only: "{message}"
+        - title_only: "{title}"
+
+    """
+    defaults = defaults or {}
+    values = values or {}
+
+    # Build criticality options for override selection
+    criticality_options: list[SelectOptionDict] = [
+        SelectOptionDict(label=c.value.title(), value=c.value)
+        for c in NotificationCriticality
+    ]
+
+    # Build message format options
+    message_format_options: list[SelectOptionDict] = [
+        SelectOptionDict(
+            label="Title and Message",
+            value="title_and_message",
+        ),
+        SelectOptionDict(
+            label="Message Only",
+            value="message_only",
+        ),
+        SelectOptionDict(
+            label="Title Only",
+            value="title_only",
+        ),
+    ]
+
+    # Volume number selector configuration
+    volume_selector = selector(
+        {
+            "number": {
+                "min": 0,
+                "max": 100,
+                "step": 5,
+                "mode": "slider",
+                "unit_of_measurement": "%",
+            }
+        }
+    )
+
+    return vol.Schema(
+        {
+            vol.Required(
+                RCPT_CONFIG_TTS_VOLUME_MORNING_KEY,
+                description={
+                    "suggested_value": defaults.get(
+                        RCPT_CONFIG_TTS_VOLUME_MORNING_KEY,
+                        TTS_DEFAULT_VOLUME_MORNING,
+                    ),
+                },
+            ): volume_selector,
+            vol.Required(
+                RCPT_CONFIG_TTS_VOLUME_DAYTIME_KEY,
+                description={
+                    "suggested_value": defaults.get(
+                        RCPT_CONFIG_TTS_VOLUME_DAYTIME_KEY,
+                        TTS_DEFAULT_VOLUME_DAYTIME,
+                    ),
+                },
+            ): volume_selector,
+            vol.Required(
+                RCPT_CONFIG_TTS_VOLUME_EVENING_KEY,
+                description={
+                    "suggested_value": defaults.get(
+                        RCPT_CONFIG_TTS_VOLUME_EVENING_KEY,
+                        TTS_DEFAULT_VOLUME_EVENING,
+                    ),
+                },
+            ): volume_selector,
+            vol.Required(
+                RCPT_CONFIG_TTS_VOLUME_NIGHT_KEY,
+                description={
+                    "suggested_value": defaults.get(
+                        RCPT_CONFIG_TTS_VOLUME_NIGHT_KEY,
+                        TTS_DEFAULT_VOLUME_NIGHT,
+                    ),
+                },
+            ): volume_selector,
+            vol.Optional(
+                RCPT_CONFIG_TTS_VOLUME_OVERRIDE_CRITICALITIES_KEY,
+                description={
+                    "suggested_value": defaults.get(
+                        RCPT_CONFIG_TTS_VOLUME_OVERRIDE_CRITICALITIES_KEY,
+                        [],
+                    ),
+                },
+            ): SelectSelector(
+                SelectSelectorConfig(
+                    options=criticality_options,
+                    translation_key=RCPT_CONFIG_TTS_VOLUME_OVERRIDE_CRITICALITIES_KEY,
+                    multiple=True,
+                    mode=SelectSelectorMode.DROPDOWN,
+                ),
+            ),
+            vol.Required(
+                RCPT_CONFIG_TTS_VOLUME_OVERRIDE_LEVEL_KEY,
+                description={
+                    "suggested_value": defaults.get(
+                        RCPT_CONFIG_TTS_VOLUME_OVERRIDE_LEVEL_KEY,
+                        TTS_DEFAULT_VOLUME_OVERRIDE_LEVEL,
+                    ),
+                },
+            ): volume_selector,
+            vol.Required(
+                RCPT_CONFIG_TTS_MESSAGE_FORMAT_KEY,
+                description={
+                    "suggested_value": defaults.get(
+                        RCPT_CONFIG_TTS_MESSAGE_FORMAT_KEY,
+                        TTS_DEFAULT_MESSAGE_FORMAT,
+                    ),
+                },
+            ): SelectSelector(
+                SelectSelectorConfig(
+                    options=message_format_options,
+                    translation_key=RCPT_CONFIG_TTS_MESSAGE_FORMAT_KEY,
+                    multiple=False,
+                    mode=SelectSelectorMode.DROPDOWN,
+                ),
+            ),
+        },
+        required=True,
         extra=vol.PREVENT_EXTRA,
     )
 

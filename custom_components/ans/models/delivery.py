@@ -11,7 +11,7 @@ from uuid import UUID
 from .channel import ChannelInfo, ChannelScope
 from .notification import NotificationCriticality, NotificationPayload, NotificationType
 from .policy import RecipientNotificationPolicy
-from .recipient import RecipientContactInfo
+from .recipient import RecipientContactInfo, TTSSettings
 
 
 class DeliveryStatus(str, Enum):
@@ -56,6 +56,7 @@ class NotificationDeliveryTask:
     payload: NotificationPayload
     policy: RecipientNotificationPolicy
     contact_info: RecipientContactInfo
+    tts_settings: TTSSettings | None  # NEW: TTS settings for this delivery task
 
     created_at: datetime
     snapshot_id: str | None = None
@@ -120,6 +121,13 @@ class NotificationDeliveryTask:
                 phone_number=contact_data.get("phone"),
             )
 
+            # Reconstruct TTSSettings if present (for TTS recipients)
+            tts_settings = None
+            if "tts_settings" in snapshot and snapshot["tts_settings"] is not None:
+                from .recipient import TTSSettings  # noqa: PLC0415
+
+                tts_settings = TTSSettings.from_dict(snapshot["tts_settings"])
+
             return cls(
                 job_id=job_id,
                 recipient_id=snapshot["recipient_id"],
@@ -127,6 +135,7 @@ class NotificationDeliveryTask:
                 payload=payload,
                 policy=policy,
                 contact_info=contact_info,
+                tts_settings=tts_settings,
                 created_at=datetime.now(UTC),  # New timestamp for retry
                 snapshot_id=None,
             )
@@ -141,7 +150,7 @@ class NotificationDeliveryTask:
             Dictionary representation of task suitable for JSON storage.
 
         """
-        return {
+        data = {
             "job_id": str(self.job_id),
             "recipient_id": self.recipient_id,
             "channel_info": {
@@ -167,6 +176,12 @@ class NotificationDeliveryTask:
             },
             "created_at": self.created_at.isoformat(),
         }
+
+        # Include TTS settings if present
+        if self.tts_settings is not None:
+            data["tts_settings"] = self.tts_settings.to_dict()
+
+        return data
 
 
 @dataclass

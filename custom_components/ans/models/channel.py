@@ -13,14 +13,18 @@ class ChannelScope(str, Enum):
     ------
     SYSTEM : str
         Channel delivers to the HA instance itself, not specific recipients.
-        Examples: persistent_notification, TTS
+        Example: persistent_notification
     RECIPIENT : str
         Channel delivers to individual recipients.
         Examples: mobile_app, email, SMS
+    TTS : str
+        Channel delivers via text-to-speech to a media player entity.
+        Example: media_player.living_room
     """
 
     SYSTEM = "SYSTEM"
     RECIPIENT = "RECIPIENT"
+    TTS = "TTS"
 
 
 @dataclass(frozen=True)

@@ -1,13 +1,23 @@
 """Deliver notifications via Home Assistant persistent notifications."""
 
+from __future__ import annotations
+
 import logging
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.typing import TemplateVarsType
+from homeassistant.exceptions import (
+    HomeAssistantError,
+    ServiceNotFound,
+    ServiceValidationError,
+)
 
 from ..channels.adapter_lifecycle import AdapterType
 from ..models import DeliveryResult, NotificationPayload, RecipientContactInfo
 from .base import AdapterMetadata, ChannelRequirement, DeliveryAdapter
+
+if TYPE_CHECKING:
+    from ..models.recipient import TTSSettings
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -25,19 +35,38 @@ class PersistentNotificationAdapter(DeliveryAdapter):
 
     """
 
-    channel = "notify.persistent_notification"
-    is_system_channel = True  # Persistent notifications are system-wide
-
-    # Metadata for auto-registration
-    ADAPTER_METADATA = AdapterMetadata(
+    ADAPTER_METADATA: ClassVar[AdapterMetadata] = AdapterMetadata(
         adapter_type=AdapterType.STATIC,
         channel_prefix="notify.persistent_notification",
         integration="persistent_notification",
     )
+    # Channel identifier derived from metadata — no separator appended for
+    # STATIC adapters since the prefix IS the full channel ID.
+    _PREFIX: ClassVar[str] = ADAPTER_METADATA.channel_prefix
+
+    @classmethod
+    def get_metadata(cls) -> AdapterMetadata:
+        """Return adapter metadata."""
+        return cls.ADAPTER_METADATA
+
+    @classmethod
+    def matches_channel(cls, channel_id: str) -> bool:
+        """Return True if channel_id belongs to this adapter."""
+        return channel_id == cls._PREFIX
+
+    @classmethod
+    def extract_variant(cls, channel_id: str) -> str | None:  # noqa: ARG003
+        """Return None — persistent_notification has no variant."""
+        return None
+
+    @property
+    def channel(self) -> str:  # type: ignore[override]  # mypy false positive: abstract property
+        """Return the channel identifier."""
+        return self._PREFIX
 
     @classmethod
     def get_requirements(cls) -> ChannelRequirement:
-        """Persistent notification requires no contact information.
+        """Return requirements indicating no contact information is needed.
 
         Returns
         -------
@@ -86,6 +115,7 @@ class PersistentNotificationAdapter(DeliveryAdapter):
         payload: NotificationPayload,
         contact_info: RecipientContactInfo,
         idempotency_key: str,
+        tts_settings: TTSSettings | None = None,  # noqa: ARG002
     ) -> DeliveryResult:
         """Deliver notification via persistent notification service.
 
@@ -97,6 +127,8 @@ class PersistentNotificationAdapter(DeliveryAdapter):
             Recipient contact information (not used for persistent notifications).
         idempotency_key : str
             Unique key for idempotent retries.
+        tts_settings : TTSSettings | None
+            Per-recipient TTS settings (not used by this adapter).
 
         Returns
         -------
@@ -114,7 +146,7 @@ class PersistentNotificationAdapter(DeliveryAdapter):
                     message += f"- {key}: {value}\n"
 
             # Build notification data
-            data: TemplateVarsType = {
+            data: dict[str, Any] = {
                 "title": payload.title,
                 "message": message,
                 "notification_id": idempotency_key,
@@ -125,6 +157,7 @@ class PersistentNotificationAdapter(DeliveryAdapter):
                 domain="persistent_notification",
                 service="create",
                 service_data=data,
+                blocking=True,
             )
 
             _LOGGER.debug(
@@ -132,8 +165,23 @@ class PersistentNotificationAdapter(DeliveryAdapter):
             )
             return self.success(remote_id=idempotency_key)
 
-        except Exception as exc:
-            _LOGGER.exception("Failed to create persistent notification")
+        except ServiceNotFound as exc:
+            _LOGGER.error("persistent_notification service not found: %s", exc)
             return self.permanent_failure(
+                error=f"persistent_notification service not found: {exc}"
+            )
+        except ServiceValidationError as exc:
+            _LOGGER.error("persistent_notification service validation error: %s", exc)
+            return self.permanent_failure(
+                error=f"persistent_notification service validation error: {exc}"
+            )
+        except HomeAssistantError as exc:
+            _LOGGER.warning("persistent_notification service error: %s", exc)
+            return self.transient_failure(
+                error=f"persistent_notification service error: {exc}"
+            )
+        except Exception as exc:
+            _LOGGER.exception("Unexpected persistent_notification adapter failure")
+            return self.transient_failure(
                 error=f"persistent_notification service error: {exc}"
             )

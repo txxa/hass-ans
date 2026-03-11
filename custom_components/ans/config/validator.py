@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import voluptuous as vol
+from homeassistant.core import HomeAssistant
 
 from ..const import (
     CONFIG_VERSION_KEY,
@@ -361,7 +362,7 @@ class ConfigValidator:
                         channels,
                         min_length=0,
                         allowed_values=available_channels,
-                        regex_pattern="^notify\\.[a-zA-Z0-9_]+$",
+                        regex_pattern="^(notify|media_player)\\.[a-zA-Z0-9_]+$",
                     )
                 except ValueError as e:
                     raise FieldValidationError(
@@ -909,7 +910,7 @@ class ConfigValidator:
                 ConfigValidator._validate_string_list(
                     config.enabled_channels,
                     min_length=1,
-                    regex_pattern="^notify\\.[a-zA-Z0-9_]+$",
+                    regex_pattern="^(notify|media_player)\\.[a-zA-Z0-9_]+$",
                 )
             except ValueError as e:
                 raise FieldValidationError(
@@ -1498,3 +1499,54 @@ class ConfigValidator:
     #             validated[ID_CONFIG_PHONE_KEY] = None
 
     #     return validated
+
+
+async def validate_tts_service(hass: HomeAssistant, value: str) -> str | None:
+    """Validate TTS engine entity ID format and runtime existence (PRIORITY 1 - Security).
+
+    Ensures the selected TTS entity:
+    1. Follows the correct ``tts.<name>`` format
+    2. Actually exists in the Home Assistant state machine at runtime
+    3. Contains no malicious patterns
+
+    Parameters
+    ----------
+    hass : HomeAssistant
+        Home Assistant instance for runtime validation.
+    value : str
+        TTS entity ID (e.g., ``"tts.piper"`` or ``"tts.cloud"``).
+
+    Returns
+    -------
+    str | None
+        Validated entity ID, or ``None`` if disabled.
+
+    Raises
+    ------
+    vol.Invalid
+        If the entity ID format is invalid or the entity doesn't exist.
+
+    """
+    # Handle "None" string (user deselected TTS)
+    if value == "None" or value is None or value == "":
+        return None
+
+    # Validate format: must start with "tts."
+    if not value.startswith("tts."):
+        raise vol.Invalid(f"TTS entity must start with 'tts.' (got: {value})")
+
+    # Validate format: must contain only alphanumeric, underscore, and dot
+    if not re.match(r"^tts\.[a-z0-9_]+$", value):
+        raise vol.Invalid(
+            f"Invalid TTS entity format: {value}. "
+            "Must contain only lowercase letters, numbers, and underscores after 'tts.'"
+        )
+
+    # Runtime validation: entity must exist in the state machine
+    state = hass.states.get(value)
+    if state is None:
+        available = ", ".join(sorted(hass.states.async_entity_ids("tts"))) or "none"
+        raise vol.Invalid(f"TTS entity '{value}' not found. Available: {available}")
+
+    _LOGGER.debug("TTS entity validation passed: %s", value)
+    return value

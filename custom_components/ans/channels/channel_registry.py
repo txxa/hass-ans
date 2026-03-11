@@ -10,17 +10,17 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from homeassistant.components.media_player.const import MediaPlayerEntityFeature
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.selector import SelectOptionDict
 
 from ..const import PERSISTENT_NOTIFICATION_CHANNEL
 from ..models import ChannelInfo, ChannelScope, RecipientType
 
 if TYPE_CHECKING:
-    from .adapter_registry import AdapterRegistry
     from .base import ChannelRequirement, DeliveryAdapter
 
 _LOGGER = logging.getLogger(__name__)
+_TTS_ACTION_ENTITY_SUFFIXES: frozenset[str] = frozenset({"speak", "clear_cache"})
 
 
 class ChannelRegistry:
@@ -33,41 +33,36 @@ class ChannelRegistry:
     ----------
     _channels : dict[str, ChannelInfo]
         Internal mapping of channel ID to channel information.
-    _adapter_classes : dict[str, Type[DeliveryAdapter]]
-        Class-level registry mapping channel patterns to adapter classes.
+    _adapter_classes : dict[str, type[DeliveryAdapter]]
+        Per-instance mapping of channel patterns to adapter classes used
+        for requirement lookups and label generation.
 
     """
 
-    # Class-level adapter registry for requirement lookups
-    _adapter_classes: dict[str, type[DeliveryAdapter]] = {}
-
-    def __init__(self) -> None:
-        """Initialize an empty channel registry."""
-        self._channels: dict[str, ChannelInfo] = {}
-
-    @classmethod
-    def register_adapter_class(
-        cls, channel_pattern: str, adapter_class: type[DeliveryAdapter]
+    def __init__(
+        self,
+        adapter_classes: dict[str, type[DeliveryAdapter]] | None = None,
     ) -> None:
-        """Register an adapter class for requirement lookups.
+        """Initialize an empty channel registry.
 
         Parameters
         ----------
-        channel_pattern : str
-            Channel ID or pattern (e.g., "notify.signal", "notify.mobile_app").
-        adapter_class : Type[DeliveryAdapter]
-            Adapter class implementing get_requirements().
+        adapter_classes : dict[str, type[DeliveryAdapter]] | None
+            Optional mapping of channel patterns to adapter classes, used for
+            contact-info requirement lookups and label generation.
 
         """
-        cls._adapter_classes[channel_pattern] = adapter_class
-        _LOGGER.debug(
-            "Registered adapter class for pattern '%s': %s",
-            channel_pattern,
-            adapter_class.__name__,
+        self._channels: dict[str, ChannelInfo] = {}
+        self._adapter_classes: dict[str, type[DeliveryAdapter]] = (
+            dict(adapter_classes) if adapter_classes else {}
         )
 
-    @classmethod
-    def get_adapter_class(cls, channel_id: str) -> type[DeliveryAdapter] | None:
+    @property
+    def adapter_classes(self) -> dict[str, type[DeliveryAdapter]]:
+        """Return the adapter-class map (read-only view)."""
+        return self._adapter_classes
+
+    def get_adapter_class(self, channel_id: str) -> type[DeliveryAdapter] | None:
         """Get adapter class for a channel ID.
 
         Parameters
@@ -82,18 +77,17 @@ class ChannelRegistry:
 
         """
         # Direct match
-        if channel_id in cls._adapter_classes:
-            return cls._adapter_classes[channel_id]
+        if channel_id in self._adapter_classes:
+            return self._adapter_classes[channel_id]
 
         # Pattern match for dynamic channels (e.g., notify.mobile_app_*)
-        for pattern, adapter_class in cls._adapter_classes.items():
-            if cls._matches_channel_pattern(channel_id, pattern):
+        for pattern, adapter_class in self._adapter_classes.items():
+            if self._matches_channel_pattern(channel_id, pattern):
                 return adapter_class
 
         return None
 
-    @classmethod
-    def get_channel_requirements(cls, channel_id: str) -> ChannelRequirement | None:
+    def get_channel_requirements(self, channel_id: str) -> ChannelRequirement | None:
         """Get contact information requirements for a channel.
 
         Parameters
@@ -107,14 +101,13 @@ class ChannelRegistry:
             Requirements dict if adapter found, None otherwise.
 
         """
-        adapter_class = cls.get_adapter_class(channel_id)
+        adapter_class = self.get_adapter_class(channel_id)
         if adapter_class:
             return adapter_class.get_requirements()
         return None
 
-    @classmethod
     def filter_channels_by_contact_info(
-        cls,
+        self,
         channel_ids: list[str],
         *,
         has_email: bool = False,
@@ -146,7 +139,7 @@ class ChannelRegistry:
         unavailable: dict[str, str] = {}
 
         for channel_id in channel_ids:
-            requirements = cls.get_channel_requirements(channel_id)
+            requirements = self.get_channel_requirements(channel_id)
 
             # Unknown channel - allow it (conservative approach for custom channels)
             if requirements is None:
@@ -180,15 +173,16 @@ class ChannelRegistry:
     def _matches_channel_pattern(channel_id: str, pattern: str) -> bool:
         """Check if a channel ID matches a requirement pattern.
 
-        Supports prefix matching for dynamic channels (e.g., "notify.mobile_app"
-        matches "notify.mobile_app_device123").
+        Supports two suffix styles:
+        - Underscore-separated: ``notify.mobile_app`` matches ``notify.mobile_app_device123``
+        - Period-separated: ``media_player`` matches ``media_player.living_room``
 
         Parameters
         ----------
         channel_id : str
             The full channel ID (e.g., "notify.mobile_app_sm_s911b").
         pattern : str
-            The pattern to match against (e.g., "notify.mobile_app").
+            The pattern to match against (e.g., "notify.mobile_app" or "media_player").
 
         Returns
         -------
@@ -200,14 +194,22 @@ class ChannelRegistry:
         if channel_id == pattern:
             return True
 
-        # Prefix match for dynamic channels (e.g., notify.mobile_app_*)
+        # Underscore-separated variant channels (e.g., notify.mobile_app_*)
         if channel_id.startswith(f"{pattern}_"):
+            return True
+
+        # Period-separated domain channels (e.g., media_player.*)
+        if channel_id.startswith(f"{pattern}."):
             return True
 
         return False
 
     @staticmethod
-    def _get_channel_label_with_fallback(channel_id: str, service_id: str) -> str:
+    def get_channel_label_with_fallback(
+        channel_id: str,
+        service_id: str,
+        adapter_classes: dict[str, type[DeliveryAdapter]] | None = None,
+    ) -> str:
         """Get channel label from adapter or fallback to generic formatting.
 
         Attempts to get a human-friendly label from the channel's adapter class.
@@ -219,6 +221,8 @@ class ChannelRegistry:
             Full channel identifier (e.g., "notify.mobile_app_sm_s911b").
         service_id : str
             Service identifier without domain prefix (e.g., "mobile_app_sm_s911b").
+        adapter_classes : dict[str, type[DeliveryAdapter]] | None
+            Optional mapping of channel patterns to adapter classes for label lookup.
 
         Returns
         -------
@@ -227,9 +231,12 @@ class ChannelRegistry:
 
         """
         # Try to get label from adapter class
-        adapter_class = ChannelRegistry.get_adapter_class(channel_id)
-        if adapter_class:
-            return adapter_class.get_channel_label(channel_id)
+        if adapter_classes:
+            if channel_id in adapter_classes:
+                return adapter_classes[channel_id].get_channel_label(channel_id)
+            for pattern, adapter_class in adapter_classes.items():
+                if ChannelRegistry._matches_channel_pattern(channel_id, pattern):
+                    return adapter_class.get_channel_label(channel_id)
 
         # Fallback to generic formatting for channels without dedicated adapters
         _LOGGER.debug(
@@ -405,32 +412,6 @@ class ChannelRegistry:
         """
         return len(self._channels)
 
-    def validate_adapters(
-        self, adapter_registry: AdapterRegistry
-    ) -> dict[str, list[str]]:
-        """Validate that all channels have corresponding adapters.
-
-        Parameters
-        ----------
-        adapter_registry : AdapterRegistry
-            The adapter registry to validate against.
-
-        Returns
-        -------
-        dict[str, list[str]]
-            Dictionary with:
-            - 'missing_adapters': Channels without adapters
-            - 'orphaned_adapters': Adapters without channels
-
-        """
-        channel_ids = set(self.get_all_ids())
-        adapter_channels = set(adapter_registry.channels())
-
-        return {
-            "missing_adapters": sorted(channel_ids - adapter_channels),
-            "orphaned_adapters": sorted(adapter_channels - channel_ids),
-        }
-
     def get_channels_for_recipient_type(
         self, recipient_type: RecipientType
     ) -> list[ChannelInfo]:
@@ -449,6 +430,8 @@ class ChannelRegistry:
         """
         if recipient_type == RecipientType.SYSTEM:
             return self.filter_by_scope(ChannelScope.SYSTEM)
+        if recipient_type == RecipientType.TTS:
+            return self.filter_by_scope(ChannelScope.TTS)
         return self.filter_by_scope(ChannelScope.RECIPIENT)
 
     @staticmethod
@@ -477,209 +460,10 @@ class ChannelRegistry:
         if recipient_type == RecipientType.SYSTEM:
             return [ch for ch in channels if ch.scope == ChannelScope.SYSTEM]
         if recipient_type == RecipientType.TTS:
-            # TTS recipients only use media_player channels
-            return [ch for ch in channels if ch.id.startswith("media_player.")]
+            # TTS recipients only use media_player channels (scope=TTS)
+            return [ch for ch in channels if ch.scope == ChannelScope.TTS]
         # HA_USER and VIRTUAL recipients use notification channels
         return [ch for ch in channels if ch.scope == ChannelScope.RECIPIENT]
-
-    @staticmethod
-    async def detect_notification_channels(
-        hass: HomeAssistant,
-    ) -> list[ChannelInfo]:
-        """Discover available notification channels (notify.* services).
-
-        Detects all notify services registered in Home Assistant and creates
-        ChannelInfo objects with appropriate scope metadata.
-
-        Note:
-            This may run before all notify integrations are loaded during startup.
-            Use the 'ans.refresh_channels' service to re-detect channels after
-            all integrations have initialized.
-
-        Parameters
-        ----------
-        hass : HomeAssistant
-            Home Assistant instance.
-
-        Returns
-        -------
-        list[ChannelInfo]
-            List of discovered notification channels with metadata.
-
-        """
-        services = hass.services.async_services()
-        notify_services = services.get("notify", {})
-
-        if not notify_services:
-            _LOGGER.warning(
-                "No notify services found during channel detection. "
-                "This can happen if ANS loads before notify integrations. "
-                "Channels will be detected on next config reload."
-            )
-
-        results: list[ChannelInfo] = []
-        for service_id in sorted(notify_services.keys()):
-            if service_id in ("notify", "send_message"):
-                continue  # Skip unsupported services
-
-            channel_id = f"notify.{service_id}"
-            label = ChannelRegistry._get_channel_label_with_fallback(
-                channel_id, service_id
-            )
-
-            # Determine scope based on channel nature:
-            # - persistent_notification: delivers to HA instance (SYSTEM)
-            # - all others: deliver to specific recipients (RECIPIENT)
-            # Future: TTS channels will also be SYSTEM
-            scope = (
-                ChannelScope.SYSTEM
-                if channel_id == PERSISTENT_NOTIFICATION_CHANNEL
-                else ChannelScope.RECIPIENT
-            )
-
-            results.append(
-                ChannelInfo(
-                    id=channel_id,
-                    label=label,
-                    scope=scope,
-                    integration=service_id,
-                )
-            )
-            _LOGGER.debug(
-                "Detected notification channel: %s (label=%s, scope=%s)",
-                channel_id,
-                label,
-                scope.value,
-            )
-
-        return results
-
-    @staticmethod
-    async def detect_tts_integrations(hass: HomeAssistant) -> list[SelectOptionDict]:
-        """Discover available TTS integrations.
-
-        Returns TTS services formatted for dropdown selector with validation.
-
-        Parameters
-        ----------
-        hass : HomeAssistant
-            Home Assistant instance.
-
-        Returns
-        -------
-        list[SelectOptionDict]
-            List of TTS services formatted for dropdown selector.
-            Each dict contains 'value' (service_id) and 'label' (friendly name).
-
-        """
-        services = hass.services.async_services()
-        tts_services = services.get("tts", {})
-
-        results: list[SelectOptionDict] = []
-        for service_name in sorted(tts_services.keys()):
-            # Build full service identifier
-            service_id = f"tts.{service_name}"
-
-            # Validate service format (PRIORITY 1 - Security)
-            if not service_id.startswith("tts."):
-                _LOGGER.warning(
-                    "Skipping invalid TTS service format: %s",
-                    service_id,
-                )
-                continue
-
-            # Create human-friendly label
-            label = service_name.replace("_", " ").title()
-
-            results.append(
-                SelectOptionDict(
-                    value=service_id,
-                    label=label,
-                )
-            )
-
-        # Sort alphabetically by label
-        results.sort(key=lambda x: x["label"])
-
-        _LOGGER.debug(
-            "Detected %d TTS integrations: %s",
-            len(results),
-            [s["value"] for s in results],
-        )
-        return results
-
-    @staticmethod
-    async def detect_media_players(hass: HomeAssistant) -> list[ChannelInfo]:
-        """Discover media player entities that support TTS playback.
-
-        Performs runtime validation to ensure media players actually support
-        required features (volume control and media playback) based on their
-        actual attributes, which is more reliable than feature flags.
-
-        Security: Validates actual capabilities through attribute checks.
-
-        Parameters
-        ----------
-        hass : HomeAssistant
-            Home Assistant instance.
-
-        Returns
-        -------
-        list[ChannelInfo]
-            List of ChannelInfo objects for compatible media players with:
-            - id: Entity ID (e.g., "media_player.living_room")
-            - label: Friendly name
-            - scope: RECIPIENT (media players are recipient-scoped)
-            - integration: Device class or "media_player"
-
-        """
-        media_players: list[ChannelInfo] = []
-
-        for entity_id in hass.states.async_entity_ids("media_player"):
-            state = hass.states.get(entity_id)
-            if not state:
-                continue
-
-            # Runtime capability validation (PRIORITY 1 - Security)
-            # Check for volume control capability via volume_level attribute
-            has_volume_attr = state.attributes.get("volume_level") is not None
-
-            if not has_volume_attr:
-                _LOGGER.debug(
-                    "Skipping media player %s: no volume_level attribute",
-                    entity_id,
-                )
-                continue
-
-            # Verify volume_level is in valid range [0.0, 1.0]
-            volume_level = state.attributes.get("volume_level")
-            if not isinstance(volume_level, (int, float)) or not (
-                0.0 <= volume_level <= 1.0
-            ):
-                _LOGGER.warning(
-                    "Skipping media player %s: invalid volume_level value: %s",
-                    entity_id,
-                    volume_level,
-                )
-                continue
-
-            # Get friendly name from attributes
-            friendly_name = state.attributes.get("friendly_name", entity_id)
-
-            media_players.append(
-                ChannelInfo(
-                    id=entity_id,
-                    label=friendly_name,
-                    scope=ChannelScope.RECIPIENT,  # Media players are recipient-scoped
-                    integration=state.attributes.get("device_class") or "media_player",
-                )
-            )
-
-        _LOGGER.info(
-            "Discovered %d compatible media players for TTS", len(media_players)
-        )
-
-        return media_players
 
     def clear(self) -> None:
         """Clear all registered channels.
@@ -688,3 +472,173 @@ class ChannelRegistry:
         """
         self._channels.clear()
         _LOGGER.debug("Cleared all channel registrations")
+
+
+def detect_notification_channels(
+    hass: HomeAssistant,
+    adapter_classes: dict[str, type[DeliveryAdapter]] | None = None,
+) -> list[ChannelInfo]:
+    """Discover available notification channels (notify.* services).
+
+    Detects all notify services registered in Home Assistant and creates
+    ChannelInfo objects with appropriate scope metadata.
+
+    Note:
+        This may run before all notify integrations are loaded during startup.
+        Use the 'ans.refresh_channels' service to re-detect channels after
+        all integrations have initialized.
+
+    Parameters
+    ----------
+    hass : HomeAssistant
+        Home Assistant instance.
+    adapter_classes : dict[str, type[DeliveryAdapter]] | None
+        Optional map of channel-id prefix to adapter class, used to
+        generate human-readable labels.  When ``None`` the raw service
+        name is used as the label.
+
+    Returns
+    -------
+    list[ChannelInfo]
+        List of discovered notification channels with metadata.
+
+    """
+    services = hass.services.async_services()
+    notify_services = services.get("notify", {})
+
+    if not notify_services:
+        _LOGGER.warning(
+            "No notify services found during channel detection. "
+            "This can happen if ANS loads before notify integrations. "
+            "Channels will be detected on next config reload."
+        )
+
+    results: list[ChannelInfo] = []
+    for service_id in sorted(notify_services.keys()):
+        if service_id in ("notify", "send_message"):
+            continue  # Skip unsupported services
+
+        channel_id = f"notify.{service_id}"
+        label = ChannelRegistry.get_channel_label_with_fallback(
+            channel_id, service_id, adapter_classes=adapter_classes
+        )
+
+        # Determine scope based on channel nature:
+        # - persistent_notification: delivers to HA instance (SYSTEM)
+        # - all others: deliver to specific recipients (RECIPIENT)
+        scope = (
+            ChannelScope.SYSTEM
+            if channel_id == PERSISTENT_NOTIFICATION_CHANNEL
+            else ChannelScope.RECIPIENT
+        )
+
+        results.append(
+            ChannelInfo(
+                id=channel_id,
+                label=label,
+                scope=scope,
+                integration=service_id,
+            )
+        )
+        _LOGGER.debug(
+            "Detected notification channel: %s (label=%s, scope=%s)",
+            channel_id,
+            label,
+            scope.value,
+        )
+
+    return results
+
+
+def detect_media_players(hass: HomeAssistant) -> list[ChannelInfo]:
+    """Discover media player entities that support TTS playback.
+
+    Performs runtime validation to ensure media players actually support
+    required features (volume control and media playback) based on their
+    actual attributes, which is more reliable than feature flags.
+
+    Security: Validates actual capabilities through attribute checks.
+
+    Parameters
+    ----------
+    hass : HomeAssistant
+        Home Assistant instance.
+
+    Returns
+    -------
+    list[ChannelInfo]
+        List of ChannelInfo objects for compatible media players with:
+        - id: Entity ID (e.g., "media_player.living_room")
+        - label: Friendly name
+        - scope: TTS (media players are TTS-scoped)
+        - integration: Device class or "media_player"
+
+    """
+    media_players: list[ChannelInfo] = []
+
+    _REQUIRED_FEATURES = (
+        MediaPlayerEntityFeature.PLAY_MEDIA | MediaPlayerEntityFeature.VOLUME_SET
+    )
+
+    for entity_id in hass.states.async_entity_ids("media_player"):
+        state = hass.states.get(entity_id)
+        if not state:
+            continue
+
+        # Require PLAY_MEDIA and VOLUME_SET feature flags so that basic TVs or
+        # receivers that expose volume but cannot play arbitrary media are excluded.
+        supported = state.attributes.get("supported_features", 0)
+        if (supported & _REQUIRED_FEATURES) != _REQUIRED_FEATURES:
+            _LOGGER.debug(
+                "Skipping media player %s: missing required features (supported=0x%x)",
+                entity_id,
+                supported,
+            )
+            continue
+
+        # Get friendly name from attributes
+        friendly_name = state.attributes.get("friendly_name", entity_id)
+
+        media_players.append(
+            ChannelInfo(
+                id=entity_id,
+                label=friendly_name,
+                scope=ChannelScope.TTS,  # TTS delivery via media player
+                integration=state.attributes.get("device_class") or "media_player",
+            )
+        )
+
+    _LOGGER.info("Discovered %d compatible media players for TTS", len(media_players))
+
+    return media_players
+
+
+def detect_tts_entities(hass: HomeAssistant) -> list[str]:
+    """Return entity IDs of TTS engine entities available in the state machine.
+
+    These entity IDs are suitable for use as the ``target`` of the modern
+    ``tts.speak`` service action.
+
+    Excludes HA-internal action entities that are not speech engines:
+    - ``tts.speak`` / ``tts.clear_cache`` — service-action entities
+    - any ``tts.*_say`` entity — legacy per-integration say actions
+
+    Parameters
+    ----------
+    hass : HomeAssistant
+        Home Assistant instance.
+
+    Returns
+    -------
+    list[str]
+        Sorted list of TTS engine entity IDs (e.g. ``["tts.cloud", "tts.piper"]``).
+
+    """
+    results: list[str] = []
+    for entity_id in hass.states.async_entity_ids("tts"):
+        suffix = entity_id.removeprefix("tts.")
+        if suffix in _TTS_ACTION_ENTITY_SUFFIXES or suffix.endswith("_say"):
+            _LOGGER.debug("Skipping non-engine TTS entity: %s", entity_id)
+            continue
+        results.append(entity_id)
+    return sorted(results)

@@ -252,6 +252,7 @@ class NotificationDeliveryProcessor:
                 payload=task.payload,
                 contact_info=task.contact_info,
                 idempotency_key=attempt.idempotency_key,
+                tts_settings=task.tts_settings,
             )
         except Exception as exc:
             _LOGGER.exception(
@@ -357,6 +358,15 @@ class NotificationDeliveryProcessor:
 
         # Log attempt with final status (only logged once)
         await self._attempt_log.log_attempt(attempt, task)
+
+        _LOGGER.warning(
+            "Transient failure job_id=%s recipient_id=%s attempt=%s channel=%s error=%s",
+            task.job_id,
+            task.recipient_id,
+            attempt.attempt_number,
+            task.channel_info.id,
+            error,
+        )
 
         await self._schedule_retry(task, reason="transient_failure")
 

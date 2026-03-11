@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
-from collections.abc import Callable
-from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING
 
@@ -12,7 +11,8 @@ if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
     from .adapter_registry import AdapterRegistry
-    from .base import DeliveryAdapter
+
+from .base import AdapterFactory
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -34,29 +34,6 @@ class AdapterType(str, Enum):
     STATIC = "static"
     DYNAMIC_SINGLE = "dynamic_single"
     DYNAMIC_MULTI = "dynamic_multi"
-
-
-@dataclass
-class AdapterFactory:
-    """Factory for creating adapter instances.
-
-    Attributes
-    ----------
-    adapter_type : AdapterType
-        Lifecycle behavior of this adapter.
-    channel_prefix : str
-        Channel identifier or prefix (e.g., "notify.mobile_app").
-    factory_fn : Callable
-        Function to create adapter instance(s).
-    cleanup_fn : Callable | None
-        Optional cleanup function when adapter is unregistered.
-
-    """
-
-    adapter_type: AdapterType
-    channel_prefix: str
-    factory_fn: Callable[[HomeAssistant, str | None], DeliveryAdapter]
-    cleanup_fn: Callable[[DeliveryAdapter], None] | None = None
 
 
 class AdapterLifecycleManager:
@@ -92,6 +69,17 @@ class AdapterLifecycleManager:
         self._hass = hass
         self._registry = registry
         self._factories: dict[str, AdapterFactory] = {}
+        # Maps registered channel_id → factory channel_prefix for O(1) lookup.
+        #
+        # Key semantics differ by adapter type:
+        #   STATIC / DYNAMIC_SINGLE — key IS the factory prefix (there is exactly
+        #       one adapter per prefix, registered under the prefix itself as the
+        #       channel name).  key == value == factory_prefix, and therefore
+        #       the invariant channel == channel_prefix always holds.
+        #   DYNAMIC_MULTI — key is the full variant channel_id (e.g.
+        #       "notify.mobile_app_sm_s911b"), value is the factory prefix (e.g.
+        #       "notify.mobile_app").  Multiple keys can share the same value.
+        self._channel_to_factory_prefix: dict[str, str] = {}
 
     def get_factory_count(self) -> int:
         """Get the number of registered factories.
@@ -103,6 +91,25 @@ class AdapterLifecycleManager:
 
         """
         return len(self._factories)
+
+    def get_static_channel_ids(self) -> set[str]:
+        """Return the channel IDs of all registered STATIC adapters.
+
+        STATIC adapters are always present regardless of user configuration and
+        detected channel state, so they must be excluded from the orphaned-adapter
+        check to prevent false warnings on cold startup.
+
+        Returns
+        -------
+        set[str]
+            Set of channel IDs (== factory prefixes) belonging to STATIC adapters.
+
+        """
+        return {
+            prefix
+            for prefix, factory in self._factories.items()
+            if factory.adapter_type == AdapterType.STATIC
+        }
 
     def register_factory(self, factory: AdapterFactory) -> None:
         """Register an adapter factory.
@@ -130,21 +137,33 @@ class AdapterLifecycleManager:
                 try:
                     adapter = factory.factory_fn(self._hass, None)
                     self._registry.register(adapter)
+                    self._channel_to_factory_prefix[prefix] = prefix
                     _LOGGER.info("Initialized static adapter: %s", prefix)
                 except Exception:
                     _LOGGER.exception(
                         "Failed to initialize static adapter '%s'", prefix
                     )
 
-    def sync_with_config(self, enabled_channels: list[str]) -> None:
+    async def sync_with_config(
+        self,
+        enabled_channels: list[str],
+        detected_channel_ids: set[str] | None = None,
+    ) -> None:
         """Synchronize adapters with enabled channels configuration.
 
         Registers new adapters for enabled channels and unregisters removed ones.
+        When ``detected_channel_ids`` is provided, adapters for channels no longer
+        present in Home Assistant are also removed, even if they are still listed
+        in ``enabled_channels``.
 
         Parameters
         ----------
         enabled_channels : list[str]
             List of enabled channel IDs from system config.
+        detected_channel_ids : set[str] | None
+            Optional set of channel IDs currently detected in HA.  When
+            provided, channels absent from this set are treated as removed
+            and their adapters are cleaned up.
 
         """
         # Track changes for logging
@@ -158,8 +177,17 @@ class AdapterLifecycleManager:
                 continue
 
             if factory.adapter_type == AdapterType.DYNAMIC_SINGLE:
-                # Single instance, enable/disable based on config
-                is_enabled = prefix in enabled_channels
+                # Single instance, enable/disable based on config.
+                # Set-intersection: channel must appear in enabled_channels AND
+                # (if detected_channel_ids is provided) in the currently detected set.
+                enabled_matching = {
+                    ch
+                    for ch in enabled_channels
+                    if factory.adapter_class.matches_channel(ch)
+                }
+                if detected_channel_ids is not None:
+                    enabled_matching &= detected_channel_ids
+                is_enabled = bool(enabled_matching)
                 is_registered = self._registry.get(prefix) is not None
 
                 if is_enabled and not is_registered:
@@ -167,6 +195,7 @@ class AdapterLifecycleManager:
                     try:
                         adapter = factory.factory_fn(self._hass, None)
                         self._registry.register(adapter)
+                        self._channel_to_factory_prefix[prefix] = prefix
                         added_count += 1
                         _LOGGER.info("Registered dynamic adapter: %s", prefix)
                     except Exception:
@@ -177,32 +206,43 @@ class AdapterLifecycleManager:
                     adapter = self._registry.get(prefix)
                     if adapter and factory.cleanup_fn:
                         try:
-                            factory.cleanup_fn(adapter)
+                            if inspect.iscoroutinefunction(factory.cleanup_fn):
+                                await factory.cleanup_fn(adapter)
+                            else:
+                                factory.cleanup_fn(adapter)
                         except Exception:
                             _LOGGER.exception(
                                 "Error during adapter cleanup '%s'", prefix
                             )
                     self._registry.unregister(prefix)
+                    self._channel_to_factory_prefix.pop(prefix, None)
                     removed_count += 1
                     _LOGGER.info("Unregistered dynamic adapter: %s", prefix)
 
             elif factory.adapter_type == AdapterType.DYNAMIC_MULTI:
                 # Multiple instances based on channel variants
-                # Get all currently registered channels for this prefix
+                # Get all currently registered channels for this adapter
                 registered_channels = {
-                    ch for ch in self._registry.channels() if ch.startswith(prefix)
+                    ch
+                    for ch in self._registry.channels()
+                    if factory.adapter_class.matches_channel(ch)
                 }
 
-                # Get all enabled channels for this prefix
+                # Get all enabled channels for this adapter;
+                # intersect with detected channels so stale adapters are pruned
+                # when a HA notify service disappears.
                 enabled_matching = {
-                    ch for ch in enabled_channels if ch.startswith(prefix)
+                    ch
+                    for ch in enabled_channels
+                    if factory.adapter_class.matches_channel(ch)
                 }
+                if detected_channel_ids is not None:
+                    enabled_matching &= detected_channel_ids
 
                 # Register new channels
                 for channel_id in enabled_matching - registered_channels:
                     try:
-                        # Extract variant (e.g., "sm_s911b" from "notify.mobile_app_sm_s911b")
-                        variant = channel_id[len(prefix) :].lstrip("_")
+                        variant = factory.adapter_class.extract_variant(channel_id)
                         if not variant:
                             _LOGGER.warning(
                                 "Cannot extract variant from channel '%s'", channel_id
@@ -210,6 +250,7 @@ class AdapterLifecycleManager:
                             continue
                         adapter = factory.factory_fn(self._hass, variant)
                         self._registry.register(adapter)
+                        self._channel_to_factory_prefix[channel_id] = prefix
                         added_count += 1
                         _LOGGER.info("Registered adapter variant: %s", channel_id)
                     except Exception:
@@ -220,13 +261,17 @@ class AdapterLifecycleManager:
                     adapter = self._registry.get(channel_id)
                     if adapter and factory.cleanup_fn:
                         try:
-                            factory.cleanup_fn(adapter)
+                            if inspect.iscoroutinefunction(factory.cleanup_fn):
+                                await factory.cleanup_fn(adapter)
+                            else:
+                                factory.cleanup_fn(adapter)
                         except Exception:
                             _LOGGER.exception(
                                 "Error during adapter cleanup '%s'",
                                 channel_id,
                             )
                     self._registry.unregister(channel_id)
+                    self._channel_to_factory_prefix.pop(channel_id, None)
                     removed_count += 1
                     _LOGGER.info("Unregistered adapter variant: %s", channel_id)
 
@@ -238,25 +283,33 @@ class AdapterLifecycleManager:
                 self._registry.count(),
             )
 
-    def cleanup_all(self) -> None:
+    async def cleanup_all(self) -> None:
         """Cleanup all registered adapters.
 
         Called during shutdown to properly dispose of all adapters.
+        Supports both synchronous and asynchronous cleanup functions.
         """
         for channel in list(self._registry.channels()):
             adapter = self._registry.get(channel)
             if not adapter:
                 continue
 
-            # Find matching factory for cleanup
-            for prefix, factory in self._factories.items():
-                if channel.startswith(prefix) and factory.cleanup_fn:
-                    try:
+            # O(1) factory lookup via tracking dict
+            factory_prefix = self._channel_to_factory_prefix.get(channel)
+            if (
+                factory_prefix
+                and (factory := self._factories.get(factory_prefix))
+                and factory.cleanup_fn
+            ):
+                try:
+                    if inspect.iscoroutinefunction(factory.cleanup_fn):
+                        await factory.cleanup_fn(adapter)
+                    else:
                         factory.cleanup_fn(adapter)
-                    except Exception:
-                        _LOGGER.exception("Error during adapter cleanup '%s'", channel)
-                    break
+                except Exception:
+                    _LOGGER.exception("Error during adapter cleanup '%s'", channel)
 
             self._registry.unregister(channel)
 
+        self._channel_to_factory_prefix.clear()
         _LOGGER.info("All adapters cleaned up")

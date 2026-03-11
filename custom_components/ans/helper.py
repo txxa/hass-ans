@@ -6,8 +6,8 @@ This module contains general-purpose helper functions for:
 - Validation utilities
 - Form data conversion
 
-Note: Channel detection has been moved to ChannelRegistry for better
-architectural consistency.
+Note: Channel detection functions live in ``channels.channel_registry`` as
+module-level functions (``detect_notification_channels``, ``detect_media_players``).
 """
 
 from __future__ import annotations

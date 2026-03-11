@@ -11,7 +11,12 @@ from .forms import (
 )
 from .recipient_flow import RecipientConfigFlow
 from .repository import ConfigRepository
-from .validator import ConfigValidator, FieldValidationError, ValidationContext
+from .validator import (
+    ConfigValidator,
+    FieldValidationError,
+    ValidationContext,
+    validate_tts_service,
+)
 
 __all__ = [
     "ConfigRepository",
@@ -19,6 +24,7 @@ __all__ = [
     "FieldValidationError",
     "RecipientConfigFlow",
     "ValidationContext",
+    "validate_tts_service",
     "get_recipient_basic_settings_schema",
     "get_recipient_criticality_channel_mapping_schema",
     "get_recipient_definition_schema",

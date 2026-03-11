@@ -97,9 +97,15 @@ class NotificationOrchestrator:
             )
             return
 
-        snapshot = self._snapshot_config()
+        try:
+            snapshot = self._snapshot_config()
+        except RuntimeError:
+            _LOGGER.error(
+                "Cannot process notification %s: Config snapshot unavailable.",
+                payload.notification_id,
+            )
+            return
         recipients = list(self._resolve_recipients(snapshot))
-
         _LOGGER.debug(
             "Notification %s: Resolved %d recipients: %s",
             payload.notification_id,

@@ -6,12 +6,14 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, ClassVar, TypedDict
+from typing import TYPE_CHECKING, TypedDict
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
-    from ..channels.adapter_lifecycle import AdapterFactory, AdapterType
+    from ..channels.adapter_lifecycle import AdapterType
+    from ..delivery.factory import AdapterDeps
+    from ..models.recipient import TTSSettings
 
 from ..models import (
     DeliveryResult,
@@ -71,12 +73,50 @@ class AdapterMetadata:
         Channel identifier or prefix.
     integration : str | None
         Integration name (for logging/diagnostics).
+    channel_separator : str
+        Character that separates the prefix from the variant portion of a
+        channel ID.  Defaults to ``"_"`` (e.g. ``notify.mobile_app_sm_s911b``).
+        Use ``"."`` for period-separated namespaces such as ``media_player.*``.
 
     """
 
     adapter_type: AdapterType
     channel_prefix: str
     integration: str | None = None
+    channel_separator: str = "_"
+
+
+@dataclass
+class AdapterFactory:
+    """Factory for creating adapter instances.
+
+    Attributes
+    ----------
+    adapter_type : AdapterType
+        Lifecycle behavior of this adapter.
+    channel_prefix : str
+        Channel identifier or prefix (e.g., "notify.mobile_app").
+    factory_fn : Callable
+        Function to create adapter instance(s).
+    adapter_class : type[DeliveryAdapter]
+        The concrete adapter class that owns this factory.  Used by the
+        lifecycle manager to call ``matches_channel()`` and
+        ``extract_variant()`` without hardcoding prefix strings.
+    channel_separator : str
+        Character between the prefix and variant portion of a channel ID.
+        Must match :attr:`AdapterMetadata.channel_separator`. Defaults to
+        ``"_"``.
+    cleanup_fn : Callable | None
+        Optional cleanup function when adapter is unregistered.
+
+    """
+
+    adapter_type: AdapterType
+    channel_prefix: str
+    factory_fn: Callable[[HomeAssistant, str | None], DeliveryAdapter]
+    adapter_class: type[DeliveryAdapter]
+    channel_separator: str = "_"
+    cleanup_fn: Callable[[DeliveryAdapter], None] | None = None
 
 
 class DeliveryAdapter(ABC):
@@ -84,17 +124,46 @@ class DeliveryAdapter(ABC):
 
     One adapter = one physical channel implementation.
 
-    Subclasses should define ADAPTER_METADATA as a class variable
-    to enable automatic factory registration.
+    Subclasses must define ADAPTER_METADATA as a class variable and implement
+    the abstract classmethods ``get_metadata``, ``matches_channel``, and
+    ``extract_variant`` for self-describing channel ownership.
     """
 
-    channel: str  # logical channel name, e.g. "signal", "email"
-    is_system_channel: bool = (
-        False  # True for system-wide channels like persistent_notification
-    )
+    @classmethod
+    @abstractmethod
+    def get_metadata(cls) -> AdapterMetadata:
+        """Return the adapter's metadata (type, prefix, integration, separator).
 
-    # Optional: Subclasses can define this for auto-registration
-    ADAPTER_METADATA: ClassVar[AdapterMetadata | None] = None
+        Must be implemented on every concrete adapter class.
+        """
+        raise NotImplementedError
+
+    @classmethod
+    @abstractmethod
+    def matches_channel(cls, channel_id: str) -> bool:
+        """Return True if *channel_id* belongs to this adapter.
+
+        Used by the lifecycle manager to assign channels to adapters without
+        relying on external prefix-string knowledge.
+        """
+        raise NotImplementedError
+
+    @classmethod
+    @abstractmethod
+    def extract_variant(cls, channel_id: str) -> str | None:
+        """Extract the variant portion from *channel_id*.
+
+        Returns ``None`` for single-instance adapters (STATIC, DYNAMIC_SINGLE).
+        For multi-instance adapters (DYNAMIC_MULTI), returns the suffix that
+        distinguishes one instance from another (e.g. ``"sm_s911b"`` from
+        ``"notify.mobile_app_sm_s911b"``).
+        """
+        raise NotImplementedError
+
+    @property
+    @abstractmethod
+    def channel(self) -> str:
+        """Logical channel identifier (e.g. "notify.signal", "media_player.living_room")."""
 
     @classmethod
     @abstractmethod
@@ -131,8 +200,8 @@ class DeliveryAdapter(ABC):
         Default implementation does basic string cleanup.
 
         """
-        # Remove domain prefix if present
-        label = channel_id.replace("notify.", "").replace("tts.", "")
+        # Remove notify. domain prefix if present (no other domain prefix is used)
+        label = channel_id.replace("notify.", "")
         # Basic cleanup: underscores to spaces, title case
         return label.replace("_", " ").title()
 
@@ -143,6 +212,7 @@ class DeliveryAdapter(ABC):
         payload: NotificationPayload,
         contact_info: RecipientContactInfo,
         idempotency_key: str,
+        tts_settings: TTSSettings | None = None,
     ) -> DeliveryResult:
         """Perform exactly one delivery attempt.
 
@@ -211,6 +281,7 @@ class DeliveryAdapter(ABC):
         factory_fn: Callable[[HomeAssistant, str | None], DeliveryAdapter]
         | None = None,
         cleanup_fn: Callable[[DeliveryAdapter], None] | None = None,
+        deps: AdapterDeps | None = None,  # noqa: ARG003
     ) -> AdapterFactory:
         """Create an AdapterFactory for this adapter class.
 
@@ -220,28 +291,33 @@ class DeliveryAdapter(ABC):
             Custom factory function (defaults to standard constructor).
         cleanup_fn : Callable, optional
             Optional cleanup function.
+        deps : AdapterDeps | None, optional
+            Runtime dependencies (used by adapters that require extra injection,
+            e.g. TTSMediaPlayerAdapter).  Ignored by the base implementation.
 
         Returns
         -------
         AdapterFactory
             AdapterFactory configured for this adapter.
 
-        Raises
-        ------
-        ValueError
-            If ADAPTER_METADATA is not defined.
-
         """
-        # Import here to avoid circular dependency between base and adapter_lifecycle
-        from ..channels.adapter_lifecycle import AdapterFactory  # noqa: PLC0415
-
-        if cls.ADAPTER_METADATA is None:
-            raise ValueError(
-                f"{cls.__name__} must define ADAPTER_METADATA for auto-registration"
-            )
+        meta = cls.get_metadata()
 
         # Default factory: call constructor with hass parameter
         if factory_fn is None:
+            # DYNAMIC_MULTI adapters MUST supply an explicit factory_fn.  The
+            # default factory ignores the variant/device_id argument, which
+            # would produce a broken instance with no channel variant.  Fail at
+            # registration time rather than silently creating bad adapters.
+            from .adapter_lifecycle import AdapterType  # noqa: PLC0415
+
+            if meta.adapter_type == AdapterType.DYNAMIC_MULTI:
+                raise TypeError(
+                    f"{cls.__name__}.create_factory() requires an explicit "
+                    "factory_fn for DYNAMIC_MULTI adapters — the default "
+                    "factory ignores the variant/device_id argument and would "
+                    "produce a broken instance."
+                )
 
             def _default_factory(hass: HomeAssistant, _device_id: str | None):
                 """Create adapter instance with hass parameter."""
@@ -250,8 +326,10 @@ class DeliveryAdapter(ABC):
             factory_fn = _default_factory
 
         return AdapterFactory(
-            adapter_type=cls.ADAPTER_METADATA.adapter_type,
-            channel_prefix=cls.ADAPTER_METADATA.channel_prefix,
+            adapter_type=meta.adapter_type,
+            channel_prefix=meta.channel_prefix,
             factory_fn=factory_fn,
+            adapter_class=cls,
+            channel_separator=meta.channel_separator,
             cleanup_fn=cleanup_fn,
         )

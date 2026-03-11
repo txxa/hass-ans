@@ -86,7 +86,9 @@ class NotificationDeliveryTask:
             channel_info = ChannelInfo(
                 id=channel_data["id"],
                 label=channel_data.get("name", channel_data["id"]),  # Fallback to id
-                scope=ChannelScope.RECIPIENT,  # Assumption for retry tasks
+                scope=ChannelScope(
+                    channel_data.get("scope", ChannelScope.RECIPIENT.value)
+                ),
                 integration=channel_data.get("adapter_type"),
             )
 
@@ -157,6 +159,7 @@ class NotificationDeliveryTask:
                 "id": self.channel_info.id,
                 "name": self.channel_info.label,
                 "adapter_type": self.channel_info.integration,
+                "scope": self.channel_info.scope.value,
             },
             "payload": {
                 "notification_id": self.payload.notification_id,

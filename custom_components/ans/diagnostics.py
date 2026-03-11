@@ -8,6 +8,7 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
+from .channels.adapter_registry import validate_channel_adapter_consistency
 from .const import DOMAIN
 from .models import ChannelScope
 
@@ -77,7 +78,9 @@ async def async_get_config_entry_diagnostics(
                 }
 
                 # Validation results
-                validation = channel_registry.validate_adapters(adapter_registry)
+                validation = validate_channel_adapter_consistency(
+                    channel_registry, adapter_registry
+                )
                 diagnostics["validation"] = {
                     "missing_adapters": validation["missing_adapters"],
                     "orphaned_adapters": validation["orphaned_adapters"],

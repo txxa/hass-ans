@@ -1,7 +1,6 @@
 """Voluptuous schema definitions for ANS config flows."""
 
 import logging
-import re
 
 import voluptuous as vol
 from homeassistant.core import HomeAssistant
@@ -95,58 +94,42 @@ _LOGGER = logging.getLogger(__name__)
 # ---------------------------
 
 
-async def validate_tts_service(hass: HomeAssistant, value: str) -> str | None:
-    """Validate TTS service name format and runtime existence (PRIORITY 1 - Security).
+def detect_tts_integrations(hass: HomeAssistant) -> list[SelectOptionDict]:
+    """Return available TTS engine entities formatted for a dropdown selector.
 
-    Ensures TTS service:
-    1. Follows correct naming convention (tts.service_name)
-    2. Actually exists in Home Assistant at runtime
-    3. Contains no malicious patterns
+    Thin UI-formatting wrapper around
+    :func:`~custom_components.ans.channels.channel_registry.detect_tts_entities`.
+    Detection logic lives in the channel registry; this function only handles
+    the conversion to :class:`SelectOptionDict` for the config-flow forms.
 
     Parameters
     ----------
     hass : HomeAssistant
-        Home Assistant instance for runtime validation.
-    value : str
-        TTS service identifier (e.g., "tts.google_translate_say").
+        Home Assistant instance.
 
     Returns
     -------
-    str | None
-        Validated service identifier, or None if disabled.
-
-    Raises
-    ------
-    vol.Invalid
-        If service format is invalid or service doesn't exist.
+    list[SelectOptionDict]
+        TTS engine entities formatted for a dropdown selector.
+        Each item contains ``value`` (entity ID) and ``label`` (friendly name).
 
     """
-    # Handle "None" string (user deselected TTS)
-    if value == "None" or value is None or value == "":
-        return None
+    from ..channels.channel_registry import detect_tts_entities  # noqa: PLC0415
 
-    # Validate format: must start with "tts."
-    if not value.startswith("tts."):
-        raise vol.Invalid(f"TTS service must start with 'tts.' (got: {value})")
-
-    # Validate format: must contain only alphanumeric, underscore, and dot
-    if not re.match(r"^tts\.[a-z0-9_]+$", value):
-        raise vol.Invalid(
-            f"Invalid TTS service format: {value}. "
-            "Must contain only lowercase letters, numbers, and underscores after 'tts.'"
+    results: list[SelectOptionDict] = [
+        SelectOptionDict(
+            value=entity_id,
+            label=entity_id.removeprefix("tts.").replace("_", " ").title(),
         )
+        for entity_id in detect_tts_entities(hass)
+    ]
 
-    # Runtime validation: check if service actually exists
-    services = hass.services.async_services()
-    tts_services = services.get("tts", {})
-    service_name = value.split(".", 1)[1]  # Extract service name after "tts."
-
-    if service_name not in tts_services:
-        available = ", ".join(sorted(tts_services.keys())) if tts_services else "none"
-        raise vol.Invalid(f"TTS service '{value}' not found. Available: {available}")
-
-    _LOGGER.debug("TTS service validation passed: %s", value)
-    return value
+    _LOGGER.debug(
+        "Detected %d TTS entities: %s",
+        len(results),
+        [s["value"] for s in results],
+    )
+    return results
 
 
 def get_system_config_schema(
@@ -561,7 +544,7 @@ def get_recipient_criticality_channel_mapping_schema(
     available_channels_options = values.get(RCPT_CONFIG_CONFIGURED_CHANNELS_KEY, [])
 
     # Extract channel IDs from SelectOptionDict objects
-    available_channels_list = [ch["value"] for ch in available_channels_options]
+    # available_channels_list = [ch["value"] for ch in available_channels_options]
 
     criticality_levels = values.get(
         RCPT_CONFIG_CRITICALITY_LEVELS_KEY, RCPT_DEFAULT_CRITICALITY_LEVELS
@@ -579,7 +562,7 @@ def get_recipient_criticality_channel_mapping_schema(
                 key,
                 description={
                     "suggested_value": defaults.get(
-                        key, available_channels_list
+                        key,  # available_channels_list
                     ),  # default: all allowed
                 },
             )

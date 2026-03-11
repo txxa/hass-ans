@@ -23,7 +23,11 @@ from homeassistant.config_entries import (
 )
 from homeassistant.helpers.selector import SelectOptionDict
 
-from ..channels.channel_registry import ChannelRegistry
+from ..channels.channel_registry import (
+    ChannelRegistry,
+    detect_media_players,
+    detect_notification_channels,
+)
 from ..const import (
     PERSISTENT_NOTIFICATION_CHANNEL,
     RCPT_CONFIG_CONFIGURED_CHANNELS_KEY,
@@ -157,6 +161,7 @@ class RecipientConfigFlow(ConfigSubentryFlow):
                     self._recipient_meta.update(
                         {
                             RCPT_CONFIG_TYPE_KEY: RecipientType.VIRTUAL.value,
+                            RCPT_CONFIG_ID_KEY: str(uuid.uuid4()),
                         }
                     )
                     return await self.async_step_recipient_definition(None)
@@ -166,6 +171,7 @@ class RecipientConfigFlow(ConfigSubentryFlow):
                     self._recipient_meta.update(
                         {
                             RCPT_CONFIG_TYPE_KEY: RecipientType.TTS.value,
+                            RCPT_CONFIG_ID_KEY: str(uuid.uuid4()),
                         }
                     )
                     return await self.async_step_recipient_definition(None)
@@ -505,15 +511,23 @@ class RecipientConfigFlow(ConfigSubentryFlow):
         has_phone = bool(self._recipient_meta.get(RCPT_CONFIG_PHONE_KEY))
         has_ha_user = recipient_type == RecipientType.HA_USER
 
-        # Filter channels by contact info requirements using ChannelRegistry
-        available_channel_ids, unavailable_channels = (
-            ChannelRegistry.filter_channels_by_contact_info(
-                all_channel_ids,
-                has_email=has_email,
-                has_phone=has_phone,
-                has_ha_user=has_ha_user,
+        # Filter channels by contact info requirements using ChannelRegistry instance
+        from .. import get_config_repository  # noqa: PLC0415
+
+        _config_repo = get_config_repository(self.hass)
+        if _config_repo is not None:
+            available_channel_ids, unavailable_channels = (
+                _config_repo.channel_registry.filter_channels_by_contact_info(
+                    all_channel_ids,
+                    has_email=has_email,
+                    has_phone=has_phone,
+                    has_ha_user=has_ha_user,
+                )
             )
-        )
+        else:
+            # Fallback: no registry available, allow all channels
+            available_channel_ids = all_channel_ids
+            unavailable_channels = {}
 
         # Build list of available channel info objects
         available_channel_info = [
@@ -898,10 +912,13 @@ class RecipientConfigFlow(ConfigSubentryFlow):
             _LOGGER.warning(
                 "Config repository unavailable or empty, falling back to direct channel detection"
             )
-            all_channels = await ChannelRegistry.detect_notification_channels(self.hass)
+            recipient_type = self._recipient_meta.get(RCPT_CONFIG_TYPE_KEY)
+            if recipient_type and RecipientType(recipient_type) == RecipientType.TTS:
+                all_channels = detect_media_players(self.hass)
+            else:
+                all_channels = detect_notification_channels(self.hass)
 
             # Apply recipient type filtering manually if needed
-            recipient_type = self._recipient_meta.get(RCPT_CONFIG_TYPE_KEY)
             if recipient_type:
                 all_channels = ChannelRegistry.filter_channels_by_recipient_type(
                     all_channels, RecipientType(recipient_type)

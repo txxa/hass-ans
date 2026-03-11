@@ -4,9 +4,15 @@ Maintains a mapping of channel names to adapter instances.
 Adapters can be registered once during setup and retrieved as needed.
 """
 
+from __future__ import annotations
+
 import logging
+from typing import TYPE_CHECKING
 
 from .base import DeliveryAdapter
+
+if TYPE_CHECKING:
+    from .channel_registry import ChannelRegistry
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -29,13 +35,6 @@ class AdapterRegistry:
             adapter: Adapter instance with a channel attribute.
 
         """
-        if not hasattr(adapter, "channel"):
-            _LOGGER.error(
-                "Cannot register adapter without 'channel' attribute: %s",
-                type(adapter).__name__,
-            )
-            return
-
         channel = adapter.channel
         if channel in self._adapters:
             _LOGGER.warning(
@@ -59,10 +58,8 @@ class AdapterRegistry:
 
         """
         adapter = self._adapters.get(channel)
-        if adapter:
-            _LOGGER.debug("Found adapter for channel '%s'", channel)
-        else:
-            _LOGGER.debug("No adapter found for channel '%s'", channel)
+        if adapter is None:
+            _LOGGER.debug("No adapter registered for channel '%s'", channel)
         return adapter
 
     def unregister(self, channel: str) -> bool:
@@ -91,7 +88,7 @@ class AdapterRegistry:
         """
         return len(self._adapters)
 
-    def all(self) -> dict[str, DeliveryAdapter]:
+    def all_adapters(self) -> dict[str, DeliveryAdapter]:
         """Get all registered adapters.
 
         Returns:
@@ -104,7 +101,52 @@ class AdapterRegistry:
         """Get list of registered channel names.
 
         Returns:
-            Sorted list of channel names.
+            List of channel names in registration order.
 
         """
-        return sorted(self._adapters.keys())
+        return list(self._adapters.keys())
+
+
+def validate_channel_adapter_consistency(
+    channel_registry: ChannelRegistry,
+    adapter_registry: AdapterRegistry,
+    *,
+    excluded_adapter_channels: set[str] | None = None,
+) -> dict[str, list[str]]:
+    """Validate that all channels have corresponding adapters and vice versa.
+
+    Parameters
+    ----------
+    channel_registry : ChannelRegistry
+        The channel registry to validate channels from.
+    adapter_registry : AdapterRegistry
+        The adapter registry to validate adapters against.
+    excluded_adapter_channels : set[str] | None
+        Optional set of adapter channel IDs to exclude from the orphaned-adapter
+        check.  Pass the STATIC adapter channel IDs here so that always-registered
+        adapters do not generate spurious warnings before channel discovery runs.
+
+    Returns
+    -------
+    dict[str, list[str]]
+        Dictionary with:
+        - 'missing_adapters': Channels without adapters
+        - 'orphaned_adapters': Adapters without channel registration
+
+    """
+    channel_ids = set(channel_registry.get_all_ids())
+    adapter_channels = set(adapter_registry.channels())
+
+    # STATIC adapters are registered unconditionally and therefore exist in the
+    # adapter registry before channel discovery populates the channel registry.
+    # Excluding them here prevents false "orphaned adapter" warnings at cold startup.
+    effective_adapter_channels = (
+        adapter_channels - excluded_adapter_channels
+        if excluded_adapter_channels
+        else adapter_channels
+    )
+
+    return {
+        "missing_adapters": sorted(channel_ids - adapter_channels),
+        "orphaned_adapters": sorted(effective_adapter_channels - channel_ids),
+    }

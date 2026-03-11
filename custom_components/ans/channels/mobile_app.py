@@ -1,14 +1,26 @@
 """Deliver notifications via Home Assistant Mobile App."""
 
+from __future__ import annotations
+
+import copy
 import logging
-from typing import Any
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import (
+    HomeAssistantError,
+    ServiceNotFound,
+    ServiceValidationError,
+)
 
 from ..channels.adapter_lifecycle import AdapterType
 from ..models import DeliveryResult, NotificationPayload, RecipientContactInfo
-from .base import AdapterMetadata, ChannelRequirement, DeliveryAdapter
+from .base import AdapterFactory, AdapterMetadata, ChannelRequirement, DeliveryAdapter
+
+if TYPE_CHECKING:
+    from ..delivery.factory import AdapterDeps
+    from ..models.recipient import TTSSettings
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -28,14 +40,34 @@ class MobileAppDeliveryAdapter(DeliveryAdapter):
 
     """
 
-    is_system_channel = False  # Mobile app delivers to specific devices
-
     # Metadata for auto-registration
-    ADAPTER_METADATA = AdapterMetadata(
+    ADAPTER_METADATA: ClassVar[AdapterMetadata] = AdapterMetadata(
         adapter_type=AdapterType.DYNAMIC_MULTI,
         channel_prefix="notify.mobile_app",
         integration="mobile_app",
     )
+    # Full channel prefix including separator, derived from metadata.
+    # Eliminates hardcoded "notify.mobile_app_" literals throughout the class.
+    _PREFIX: ClassVar[str] = (
+        ADAPTER_METADATA.channel_prefix + ADAPTER_METADATA.channel_separator
+    )
+
+    @classmethod
+    def get_metadata(cls) -> AdapterMetadata:
+        """Return adapter metadata."""
+        return cls.ADAPTER_METADATA
+
+    @classmethod
+    def matches_channel(cls, channel_id: str) -> bool:
+        """Return True if channel_id belongs to this adapter."""
+        return channel_id.startswith(cls._PREFIX)
+
+    @classmethod
+    def extract_variant(cls, channel_id: str) -> str | None:
+        """Return the device_id portion of a mobile_app channel_id."""
+        if cls.matches_channel(channel_id):
+            return channel_id[len(cls._PREFIX) :]
+        return None
 
     @classmethod
     def get_requirements(cls) -> ChannelRequirement:
@@ -77,10 +109,38 @@ class MobileAppDeliveryAdapter(DeliveryAdapter):
 
         """
         # Extract device ID from channel_id
-        device_id = channel_id.replace("notify.mobile_app_", "")
+        device_id = channel_id[len(cls._PREFIX) :]
         # Format device name nicely
         device_name = device_id.replace("_", " ").title()
         return f"Mobile App ({device_name})"
+
+    @classmethod
+    def create_factory(
+        cls,
+        factory_fn: Callable[[HomeAssistant, str | None], DeliveryAdapter]
+        | None = None,
+        cleanup_fn: Callable[[DeliveryAdapter], None] | None = None,
+        deps: AdapterDeps | None = None,  # noqa: ARG003
+    ) -> AdapterFactory:
+        """Create an AdapterFactory that forwards the device_id to the constructor.
+
+        Overrides the base implementation to supply a factory function that
+        passes the channel variant (``device_id``) to the constructor so that
+        each mobile-app device gets its own correctly-wired adapter instance.
+        """
+        if factory_fn is None:
+
+            def _device_factory(
+                hass: HomeAssistant, device_id: str | None
+            ) -> MobileAppDeliveryAdapter:
+                if not device_id:
+                    raise ValueError(
+                        "device_id is required for MobileAppDeliveryAdapter"
+                    )
+                return cls(hass=hass, device_id=device_id)
+
+            factory_fn = _device_factory
+        return super().create_factory(factory_fn=factory_fn, cleanup_fn=cleanup_fn)
 
     def __init__(self, *, hass: HomeAssistant, device_id: str) -> None:
         """Initialize mobile app adapter for a specific device.
@@ -93,10 +153,17 @@ class MobileAppDeliveryAdapter(DeliveryAdapter):
             Device identifier (e.g., "sm_s911b" from "notify.mobile_app_sm_s911b").
 
         """
+        if not device_id:
+            raise ValueError("device_id is required for MobileAppDeliveryAdapter")
         self._hass = hass
         self.device_id = device_id
-        # Set the full channel name for this specific device
-        self.channel = f"notify.mobile_app_{device_id}"
+        # Full channel name derived from class-level prefix
+        self._channel = f"{self._PREFIX}{device_id}"
+
+    @property
+    def channel(self) -> str:  # type: ignore[override]  # mypy false positive: abstract property
+        """Return the channel identifier for this device."""
+        return self._channel
 
     async def deliver(
         self,
@@ -104,6 +171,7 @@ class MobileAppDeliveryAdapter(DeliveryAdapter):
         payload: NotificationPayload,
         contact_info: RecipientContactInfo,
         idempotency_key: str,
+        tts_settings: TTSSettings | None = None,  # noqa: ARG002
     ) -> DeliveryResult:
         """Deliver notification via mobile_app notify service.
 
@@ -115,6 +183,8 @@ class MobileAppDeliveryAdapter(DeliveryAdapter):
             Recipient contact information including mobile_device_id.
         idempotency_key : str
             Unique key for idempotent retries.
+        tts_settings : TTSSettings | None
+            Per-recipient TTS settings (not used by the mobile app adapter).
 
         Returns
         -------
@@ -134,7 +204,7 @@ class MobileAppDeliveryAdapter(DeliveryAdapter):
 
             # Add metadata as data payload if present
             if payload.metadata:
-                service_data["data"] = payload.metadata.copy()
+                service_data["data"] = copy.deepcopy(payload.metadata)
                 # Add idempotency key to data for tracking
                 service_data["data"]["idempotency_key"] = idempotency_key
             else:
@@ -155,16 +225,27 @@ class MobileAppDeliveryAdapter(DeliveryAdapter):
             )
             return self.success(remote_id=idempotency_key)
 
+        except ServiceNotFound as exc:
+            _LOGGER.error("Mobile app service '%s' not found: %s", service_name, exc)
+            return self.permanent_failure(
+                error=f"Mobile app service '{service_name}' not found: {exc}"
+            )
+        except ServiceValidationError as exc:
+            _LOGGER.error(
+                "Mobile app service '%s' validation error: %s", service_name, exc
+            )
+            return self.permanent_failure(
+                error=f"Mobile app service '{service_name}' validation error: {exc}"
+            )
         except HomeAssistantError as exc:
-            # Service not found or other HA errors
-            error_msg = str(exc).lower()
-            if "not found" in error_msg or "does not exist" in error_msg:
-                return self.permanent_failure(
-                    error=f"Mobile app service '{service_name}' not found: {exc}"
-                )
-            # Other HA errors could be transient
+            _LOGGER.warning(
+                "Mobile app service error for device '%s': %s", self.device_id, exc
+            )
             return self.transient_failure(error=f"Mobile app service error: {exc}")
 
         except Exception as exc:
             _LOGGER.exception("Unexpected mobile app adapter failure")
-            return self.permanent_failure(error=f"mobile_app unexpected error: {exc}")
+            # Unexpected errors are treated as transient: they are more likely
+            # caused by runtime conditions (OOM, event loop issues) than by
+            # permanent misconfiguration.
+            return self.transient_failure(error=f"mobile_app unexpected error: {exc}")

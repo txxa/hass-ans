@@ -1,14 +1,23 @@
 """Deliver notifications via Signal."""
 
+from __future__ import annotations
+
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import (
+    HomeAssistantError,
+    ServiceNotFound,
+    ServiceValidationError,
+)
 
 from ..channels.adapter_lifecycle import AdapterType
 from ..models import DeliveryResult, NotificationPayload, RecipientContactInfo
 from .base import AdapterMetadata, ChannelRequirement, DeliveryAdapter
+
+if TYPE_CHECKING:
+    from ..models.recipient import TTSSettings
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -18,9 +27,15 @@ class SignalDeliveryAdapter(DeliveryAdapter):
 
     Supports all Signal Messenger integration features:
     - Text messages with optional styled formatting (bold, italic, strikethrough)
+    - Automatic bold title highlighting when a title is provided
     - File attachments from local paths
     - Attachments from URLs with SSL verification control
     - Custom recipient targeting per message
+
+    When a notification has a title, the adapter automatically selects
+    ``text_mode="styled"`` (unless overridden via metadata) and wraps the
+    title in ``**...**`` so it renders as bold in the Signal client.
+    Pass ``text_mode: "normal"`` in ``metadata`` to disable this behaviour.
 
     Attributes
     ----------
@@ -31,15 +46,39 @@ class SignalDeliveryAdapter(DeliveryAdapter):
 
     """
 
-    channel = "notify.signal"
-    is_system_channel = False  # Signal delivers to specific recipients
-
-    # Metadata for auto-registration
-    ADAPTER_METADATA = AdapterMetadata(
+    ADAPTER_METADATA: ClassVar[AdapterMetadata] = AdapterMetadata(
         adapter_type=AdapterType.DYNAMIC_SINGLE,
         channel_prefix="notify.signal",
         integration="signal_messenger",
     )
+    # Channel identifier derived from metadata — no separator appended for
+    # DYNAMIC_SINGLE adapters since the prefix IS the full channel ID.
+    _PREFIX: ClassVar[str] = ADAPTER_METADATA.channel_prefix
+
+    @classmethod
+    def get_metadata(cls) -> AdapterMetadata:
+        """Return adapter metadata."""
+        return cls.ADAPTER_METADATA
+
+    @classmethod
+    def matches_channel(cls, channel_id: str) -> bool:
+        """Return True if channel_id belongs to this adapter."""
+        return channel_id == cls._PREFIX
+
+    @classmethod
+    def extract_variant(cls, channel_id: str) -> str | None:  # noqa: ARG003
+        """Return None — Signal has no variant."""
+        return None
+
+    @property
+    def channel(self) -> str:  # type: ignore[override]  # mypy false positive: abstract property
+        """Return the channel identifier."""
+        return self._PREFIX
+
+    @property
+    def service_name(self) -> str:
+        """Return the notify service name for Signal, derived from channel ID."""
+        return self.channel.removeprefix("notify.")
 
     @classmethod
     def get_requirements(cls) -> ChannelRequirement:
@@ -75,20 +114,120 @@ class SignalDeliveryAdapter(DeliveryAdapter):
         """
         return "Signal Messenger"
 
-    def __init__(self, *, hass: HomeAssistant, service_name: str = "signal") -> None:
+    def __init__(self, *, hass: HomeAssistant) -> None:
         """Initialize Signal adapter with Home Assistant service.
 
         Parameters
         ----------
         hass : HomeAssistant
             Home Assistant instance for service calls.
-        service_name : str, optional
-            Signal messenger notify service name, by default "signal".
-            This corresponds to the service configured in notify: section.
 
         """
         self._hass = hass
-        self.service_name = service_name
+
+    @staticmethod
+    def _build_service_data(
+        payload: NotificationPayload,
+        contact_info: RecipientContactInfo,
+    ) -> dict[str, Any]:
+        """Build Signal service_data from payload and contact information.
+
+        Synchronous. Contains all text-mode detection/validation, metadata
+        inspection, and message construction logic so that ``deliver()``
+        only performs the async service call.
+
+        Parameters
+        ----------
+        payload : NotificationPayload
+            Notification content (title, message, metadata).
+        contact_info : RecipientContactInfo
+            Recipient contact info (phone number used as Signal target).
+
+        Returns
+        -------
+        dict[str, Any]
+            Fully assembled service_data for the notify.signal service call.
+
+        """
+        data_payload: dict[str, Any] = {}
+
+        if payload.metadata:
+            # Text mode: "normal" or "styled" for formatting.
+            # When a title is present and no explicit text_mode is set,
+            # default to "styled" so the title can be visually highlighted.
+            explicit_text_mode = payload.metadata.get("text_mode")
+            if explicit_text_mode is None:
+                text_mode = "styled" if payload.title else "normal"
+            elif explicit_text_mode in ("normal", "styled"):
+                text_mode = explicit_text_mode
+            else:
+                _LOGGER.warning(
+                    "Invalid text_mode '%s', using 'normal'. Valid values: 'normal', 'styled'",
+                    explicit_text_mode,
+                )
+                text_mode = "normal"
+            data_payload["text_mode"] = text_mode
+
+            # File attachments: list of local file paths
+            if "attachments" in payload.metadata:
+                attachments = payload.metadata["attachments"]
+                if isinstance(attachments, list):
+                    data_payload["attachments"] = attachments
+                else:
+                    _LOGGER.warning(
+                        "attachments must be a list of file paths, got: %s",
+                        type(attachments).__name__,
+                    )
+
+            # URL attachments: list of URLs for remote files
+            if "urls" in payload.metadata:
+                urls = payload.metadata["urls"]
+                if isinstance(urls, list):
+                    data_payload["urls"] = urls
+                else:
+                    _LOGGER.warning(
+                        "urls must be a list of URLs, got: %s",
+                        type(urls).__name__,
+                    )
+
+            # SSL verification for URL attachments
+            if "verify_ssl" in payload.metadata:
+                verify_ssl = payload.metadata["verify_ssl"]
+                if isinstance(verify_ssl, bool):
+                    data_payload["verify_ssl"] = verify_ssl
+                else:
+                    _LOGGER.warning(
+                        "verify_ssl must be boolean, got: %s",
+                        type(verify_ssl).__name__,
+                    )
+        else:
+            # No metadata: auto-upgrade to styled when a title is present so
+            # it is visually highlighted; fall back to plain for body-only messages.
+            text_mode = "styled" if payload.title else "normal"
+            data_payload["text_mode"] = text_mode
+
+        # Build message string.  Signal has no native title field, so the
+        # title is prepended to the body.  In styled mode the title is
+        # wrapped in **...** to render as bold in the Signal client.
+        if payload.title:
+            if text_mode == "styled":
+                message = f"**{payload.title}**\n\n{payload.message}"
+            else:
+                message = f"{payload.title}\n\n{payload.message}"
+        else:
+            message = payload.message
+
+        # Build service data structure
+        service_data: dict[str, Any] = {
+            "message": message,
+            "target": [contact_info.phone_number],
+        }
+
+        # Add data payload to service data if not empty
+        if data_payload:
+            service_data["data"] = data_payload
+
+        return service_data
 
     async def deliver(
         self,
@@ -96,11 +235,14 @@ class SignalDeliveryAdapter(DeliveryAdapter):
         payload: NotificationPayload,
         contact_info: RecipientContactInfo,
         idempotency_key: str,
+        tts_settings: TTSSettings | None = None,  # noqa: ARG002
     ) -> DeliveryResult:
         """Deliver notification via Signal messenger notify service.
 
         Supports all Signal Messenger features through metadata:
-        - text_mode: "normal" or "styled" (enables *italic*, **bold**, ~strikethrough~)
+        - text_mode: "normal" or "styled" (enables *italic*, **bold**, ~strikethrough~).
+          Defaults to "styled" when a title is present so the title is highlighted
+          in bold automatically.  Set explicitly to "normal" to opt out.
         - attachments: list of file paths
         - urls: list of URLs for remote attachments
         - verify_ssl: boolean for SSL verification (default: true)
@@ -113,6 +255,8 @@ class SignalDeliveryAdapter(DeliveryAdapter):
             Recipient contact information including phone number.
         idempotency_key : str
             Unique key for idempotent retries.
+        tts_settings : TTSSettings | None
+            Per-recipient TTS settings (not used by the Signal adapter).
 
         Returns
         -------
@@ -127,73 +271,7 @@ class SignalDeliveryAdapter(DeliveryAdapter):
             )
 
         try:
-            # Build base notification message
-            message = payload.message
-
-            # Add title if present (Signal doesn't have separate title field)
-            if payload.title:
-                message = f"{payload.title}\n\n{payload.message}"
-
-            # Build service data structure
-            service_data: dict[str, Any] = {
-                "message": message,
-                "target": [contact_info.phone_number],
-            }
-
-            # Process metadata for Signal-specific features
-            data_payload: dict[str, Any] = {}
-
-            if payload.metadata:
-                # Text mode: "normal" or "styled" for formatting
-                text_mode = payload.metadata.get("text_mode", "normal")
-                if text_mode in ("normal", "styled"):
-                    data_payload["text_mode"] = text_mode
-                else:
-                    _LOGGER.warning(
-                        "Invalid text_mode '%s', using 'normal'. Valid values: 'normal', 'styled'",
-                        text_mode,
-                    )
-                    data_payload["text_mode"] = "normal"
-
-                # File attachments: list of local file paths
-                if "attachments" in payload.metadata:
-                    attachments = payload.metadata["attachments"]
-                    if isinstance(attachments, list):
-                        data_payload["attachments"] = attachments
-                    else:
-                        _LOGGER.warning(
-                            "attachments must be a list of file paths, got: %s",
-                            type(attachments).__name__,
-                        )
-
-                # URL attachments: list of URLs for remote files
-                if "urls" in payload.metadata:
-                    urls = payload.metadata["urls"]
-                    if isinstance(urls, list):
-                        data_payload["urls"] = urls
-                    else:
-                        _LOGGER.warning(
-                            "urls must be a list of URLs, got: %s",
-                            type(urls).__name__,
-                        )
-
-                # SSL verification for URL attachments
-                if "verify_ssl" in payload.metadata:
-                    verify_ssl = payload.metadata["verify_ssl"]
-                    if isinstance(verify_ssl, bool):
-                        data_payload["verify_ssl"] = verify_ssl
-                    else:
-                        _LOGGER.warning(
-                            "verify_ssl must be boolean, got: %s",
-                            type(verify_ssl).__name__,
-                        )
-            else:
-                # Default text mode if no metadata
-                data_payload["text_mode"] = "normal"
-
-            # Add data payload to service data if not empty
-            if data_payload:
-                service_data["data"] = data_payload
+            service_data = self._build_service_data(payload, contact_info)
 
             # Call signal_messenger notify service
             await self._hass.services.async_call(
@@ -207,23 +285,32 @@ class SignalDeliveryAdapter(DeliveryAdapter):
                 "Sent Signal notification to '%s' via service '%s' (text_mode=%s, attachments=%d, urls=%d) with key '%s'",
                 contact_info.phone_number,
                 self.service_name,
-                data_payload.get("text_mode", "normal"),
-                len(data_payload.get("attachments", [])),
-                len(data_payload.get("urls", [])),
+                service_data.get("data", {}).get("text_mode", "normal"),
+                len(service_data.get("data", {}).get("attachments", [])),
+                len(service_data.get("data", {}).get("urls", [])),
                 idempotency_key,
             )
             return self.success(remote_id=idempotency_key)
 
+        except ServiceNotFound as exc:
+            _LOGGER.error(
+                "Signal service 'notify.%s' not found: %s", self.service_name, exc
+            )
+            return self.permanent_failure(
+                error=f"Signal service 'notify.{self.service_name}' not found: {exc}"
+            )
+        except ServiceValidationError as exc:
+            _LOGGER.error("Signal service validation error: %s", exc)
+            return self.permanent_failure(
+                error=f"Signal service validation error: {exc}"
+            )
         except HomeAssistantError as exc:
-            # Service not found or other HA errors
-            error_msg = str(exc).lower()
-            if "not found" in error_msg or "does not exist" in error_msg:
-                return self.permanent_failure(
-                    error=f"Signal service 'notify.{self.service_name}' not found: {exc}"
-                )
-            # Other HA errors could be transient
+            _LOGGER.warning("Signal service error: %s", exc)
             return self.transient_failure(error=f"Signal service error: {exc}")
 
         except Exception as exc:
             _LOGGER.exception("Unexpected Signal adapter failure")
-            return self.permanent_failure(error=f"signal unexpected error: {exc}")
+            # Unexpected errors are treated as transient: they are more likely
+            # caused by runtime conditions (OOM, event loop issues) than by
+            # permanent misconfiguration.
+            return self.transient_failure(error=f"signal unexpected error: {exc}")

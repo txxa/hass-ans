@@ -23,8 +23,15 @@ from homeassistant.core import callback
 
 from custom_components.ans.config.validator import FieldValidationError
 
-from .channels.channel_registry import ChannelRegistry
-from .config.forms import get_system_config_schema, get_system_options_schema
+from .channels.channel_registry import (
+    detect_media_players,
+    detect_notification_channels,
+)
+from .config.forms import (
+    detect_tts_integrations,
+    get_system_config_schema,
+    get_system_options_schema,
+)
 
 # Import sub-entry flow for Home Assistant to discover
 # pyright: reportUnusedImport=false
@@ -53,6 +60,7 @@ from .const import (
     SYS_DEFAULT_RETRY_MAX_DELAY_SECONDS,
     SYS_STORAGE_DEFAULT_FILE_RETENTION_DAYS,
 )
+from .delivery.factory import ADAPTER_CLASS_MAP
 from .helper import channel_info_to_select_options
 from .models import SystemConfig
 
@@ -109,7 +117,7 @@ class ANSConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             try:
                 # Validate TTS service if provided (PRIORITY 1 - Security)
-                from .config.forms import validate_tts_service  # noqa: PLC0415
+                from .config.validator import validate_tts_service  # noqa: PLC0415
 
                 if SYS_CONFIG_TTS_SERVICE_KEY in user_input:
                     tts_service = user_input[SYS_CONFIG_TTS_SERVICE_KEY]
@@ -125,96 +133,97 @@ class ANSConfigFlow(ConfigFlow, domain=DOMAIN):
                         # Fall through to show form again with error
                         user_input = None
 
-                # Validate system configuration
+                # Validate system configuration — only when user_input survived
+                # TTS validation above (which may have set it to None on failure).
                 from .config.validator import ConfigValidator  # noqa: PLC0415
 
-                if is_reconfigure and user_input is not None:
-                    # In reconfigure mode, preserve existing options (rate limits)
-                    assert self._reconfigure_entry is not None
-                    current_options = (
-                        dict(self._reconfigure_entry.options)
-                        if self._reconfigure_entry.options
-                        else {}
-                    )
-                    # Merge user input with current options for validation
-                    full_config = {**user_input, **current_options}
-                else:
-                    # In initial setup, use default rate limits
+                if user_input is not None:
+                    if is_reconfigure:
+                        # In reconfigure mode, preserve existing options (rate limits)
+                        assert self._reconfigure_entry is not None
+                        current_options = (
+                            dict(self._reconfigure_entry.options)
+                            if self._reconfigure_entry.options
+                            else {}
+                        )
+                        # Merge user input with current options for validation
+                        full_config = {**user_input, **current_options}
+                    else:
+                        # In initial setup, use default rate limits
+                        full_config = {
+                            **user_input,
+                            SYS_CONFIG_GLOBAL_RATE_LIMIT_KEY: SYS_DEFAULT_GLOBAL_RATE_LIMIT,
+                            SYS_CONFIG_RATE_LIMIT_WINDOW_KEY: SYS_DEFAULT_RATE_LIMIT_WINDOW,
+                        }
 
-                    full_config = {
-                        **user_input,
-                        SYS_CONFIG_GLOBAL_RATE_LIMIT_KEY: SYS_DEFAULT_GLOBAL_RATE_LIMIT,
-                        SYS_CONFIG_RATE_LIMIT_WINDOW_KEY: SYS_DEFAULT_RATE_LIMIT_WINDOW,
+                    validated_data = ConfigValidator.validate_system_settings_schema(
+                        full_config
+                    )
+
+                    # Create SystemConfig to ensure all validation passes
+                    system_config = SystemConfig.from_dict(validated_data)
+
+                    # Split into data (structural) and options (tunable)
+                    config_dict = system_config.to_dict()
+
+                    # data: enabled_channels (defines system structure)
+                    # Note: Boolean checkbox fields are omitted from user_input when unchecked
+                    enable_audit = user_input.get(SYS_CONFIG_ENABLE_AUDIT_LOGGING_KEY)
+                    if enable_audit is None:
+                        # Checkbox was unchecked (omitted from form) - default based on context
+                        enable_audit = (
+                            SYS_DEFAULT_ENABLE_AUDIT_LOGGING
+                            if not is_reconfigure
+                            else False
+                        )
+
+                    data = {
+                        SYS_CONFIG_ENABLED_CHANNELS_KEY: config_dict.get(
+                            SYS_CONFIG_ENABLED_CHANNELS_KEY, []
+                        ),
+                        SYS_CONFIG_ENABLE_AUDIT_LOGGING_KEY: enable_audit,
+                        SYS_CONFIG_TTS_SERVICE_KEY: config_dict.get(
+                            SYS_CONFIG_TTS_SERVICE_KEY
+                        ),
+                        "version": config_dict.get("version", 1),
                     }
 
-                validated_data = ConfigValidator.validate_system_settings_schema(
-                    full_config
-                )
+                    # options: rate limits and other tunable parameters
+                    options = {
+                        SYS_CONFIG_GLOBAL_RATE_LIMIT_KEY: config_dict.get(
+                            SYS_CONFIG_GLOBAL_RATE_LIMIT_KEY
+                        ),
+                        SYS_CONFIG_RATE_LIMIT_WINDOW_KEY: config_dict.get(
+                            SYS_CONFIG_RATE_LIMIT_WINDOW_KEY
+                        ),
+                    }
 
-                # Create SystemConfig to ensure all validation passes
-                system_config = SystemConfig.from_dict(validated_data)
+                    if is_reconfigure:
+                        # Update existing entry (type checked by is_reconfigure condition)
+                        assert self._reconfigure_entry is not None
+                        self.hass.config_entries.async_update_entry(
+                            self._reconfigure_entry,
+                            data=data,
+                            options=options,
+                        )
 
-                # Split into data (structural) and options (tunable)
-                config_dict = system_config.to_dict()
+                        # Reload the integration to apply changes
+                        await self.hass.config_entries.async_reload(
+                            self._reconfigure_entry.entry_id
+                        )
 
-                # data: enabled_channels (defines system structure)
-                # Note: Boolean checkbox fields are omitted from user_input when unchecked
-                enable_audit = user_input.get(SYS_CONFIG_ENABLE_AUDIT_LOGGING_KEY)
-                if enable_audit is None:
-                    # Checkbox was unchecked (omitted from form) - default based on context
-                    enable_audit = (
-                        SYS_DEFAULT_ENABLE_AUDIT_LOGGING
-                        if not is_reconfigure
-                        else False
-                    )
+                        return self.async_abort(reason="reconfigure_successful")
 
-                data = {
-                    SYS_CONFIG_ENABLED_CHANNELS_KEY: config_dict.get(
-                        SYS_CONFIG_ENABLED_CHANNELS_KEY, []
-                    ),
-                    SYS_CONFIG_ENABLE_AUDIT_LOGGING_KEY: enable_audit,
-                    SYS_CONFIG_TTS_SERVICE_KEY: config_dict.get(
-                        SYS_CONFIG_TTS_SERVICE_KEY
-                    ),
-                    "version": config_dict.get("version", 1),
-                }
-
-                # options: rate limits and other tunable parameters
-                options = {
-                    SYS_CONFIG_GLOBAL_RATE_LIMIT_KEY: config_dict.get(
-                        SYS_CONFIG_GLOBAL_RATE_LIMIT_KEY
-                    ),
-                    SYS_CONFIG_RATE_LIMIT_WINDOW_KEY: config_dict.get(
-                        SYS_CONFIG_RATE_LIMIT_WINDOW_KEY
-                    ),
-                }
-
-                if is_reconfigure:
-                    # Update existing entry (type checked by is_reconfigure condition)
-                    assert self._reconfigure_entry is not None
-                    self.hass.config_entries.async_update_entry(
-                        self._reconfigure_entry,
+                    # Create the main entry with split configuration
+                    # Options use defaults until user modifies via options flow
+                    return self.async_create_entry(
+                        title=NAME,
                         data=data,
                         options=options,
+                        description_placeholders={
+                            "info": "Configure recipients and tune rate limits in the integration settings"
+                        },
                     )
-
-                    # Reload the integration to apply changes
-                    await self.hass.config_entries.async_reload(
-                        self._reconfigure_entry.entry_id
-                    )
-
-                    return self.async_abort(reason="reconfigure_successful")
-
-                # Create the main entry with split configuration
-                # Options use defaults until user modifies via options flow
-                return self.async_create_entry(
-                    title=NAME,
-                    data=data,
-                    options=options,
-                    description_placeholders={
-                        "info": "Configure recipients and tune rate limits in the integration settings"
-                    },
-                )
 
             # except ValueError as e:
             #     _LOGGER.debug("System configuration validation failed: %s", e)
@@ -240,38 +249,23 @@ class ANSConfigFlow(ConfigFlow, domain=DOMAIN):
         else:
             defaults = user_input or {}
 
-        # Detect available notification channels
-        # For reconfigure, use repository if available; otherwise detect fresh
-        if is_reconfigure:
-            # Local import to avoid circular dependency
-            from . import get_config_repository  # noqa: PLC0415
-
-            config_repo = get_config_repository(self.hass)
-            if config_repo and config_repo.channel_registry.count() > 0:
-                available_channels = config_repo.get_channels_for_ui()
-            else:
-                # Fallback to direct detection (shouldn't happen during reconfigure)
-                _LOGGER.warning(
-                    "Config repository not available during reconfigure, detecting channels directly"
-                )
-                available_channels = await ChannelRegistry.detect_notification_channels(
-                    self.hass
-                )
-        else:
-            # Initial setup - detect directly (no repository yet)
-            available_channels = await ChannelRegistry.detect_notification_channels(
-                self.hass
-            )
+        # Always detect channels fresh — the channel_registry cache may be
+        # stale if notify integrations (e.g. mobile_app) finished loading after
+        # ANS started up.  Reading from the cache would hide channels that are
+        # now available, and would double-register media_player channels that
+        # are already stored in the registry under ChannelScope.TTS.
+        available_channels = detect_notification_channels(
+            self.hass,
+            adapter_classes=ADAPTER_CLASS_MAP,
+        )
 
         channel_options = channel_info_to_select_options(available_channels)
 
-        # Detect TTS integrations (NEW for Phase 4)
-        available_tts_services = await ChannelRegistry.detect_tts_integrations(
-            self.hass
-        )
+        # Detect TTS integrations
+        available_tts_services = detect_tts_integrations(self.hass)
 
-        # Detect media players (NEW for Phase 4)
-        available_media_players = await ChannelRegistry.detect_media_players(self.hass)
+        # Detect media players
+        available_media_players = detect_media_players(self.hass)
 
         # Add media players to channel options if TTS is configured
         current_tts = defaults.get(SYS_CONFIG_TTS_SERVICE_KEY)

@@ -257,6 +257,45 @@ class VolumeRestorationRegistry:
                 "Updated override volume for %s: override=%.2f", entity_id, volume
             )
 
+    async def restore_volume(self, entity_id: str) -> None:
+        """Immediately restore volume to the original level and clear the intent.
+
+        Call this when TTS delivery fails before playback starts, so the
+        event-driven restoration (PLAYING → IDLE transition) will never trigger.
+        Always clears the intent regardless of whether the service call succeeds,
+        to prevent stale intents accumulating.
+
+        Args:
+            entity_id: Media player entity ID.
+
+        """
+        async with self._get_lock(entity_id):
+            if entity_id not in self._intents:
+                return
+
+            intent = self._intents[entity_id]
+            try:
+                await self._hass.services.async_call(
+                    "media_player",
+                    "volume_set",
+                    {"entity_id": entity_id, "volume_level": intent.original_volume},
+                    blocking=True,
+                )
+                _LOGGER.debug(
+                    "Immediately restored volume for %s: %.2f",
+                    entity_id,
+                    intent.original_volume,
+                )
+            except (HomeAssistantError, ValueError) as e:
+                _LOGGER.warning(
+                    "Failed to immediately restore volume for %s: %s", entity_id, e
+                )
+            finally:
+                # Always remove the intent so the state-change listener does not
+                # fire a second restoration attempt later.
+                del self._intents[entity_id]
+                await self._schedule_persist()
+
     async def complete_intent(self, entity_id: str) -> None:
         """Mark volume restoration as complete and remove intent.
 

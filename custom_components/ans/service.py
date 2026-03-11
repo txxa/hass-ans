@@ -85,36 +85,16 @@ async def async_setup_services(
         # Get delivery system components and re-sync adapters
         if DOMAIN in hass.data:
             for entry_data in hass.data[DOMAIN].values():
-                if "adapter_lifecycle" in entry_data:
-                    lifecycle_manager = entry_data["adapter_lifecycle"]
+                if "lifecycle_manager" in entry_data:
+                    lifecycle_manager = entry_data["lifecycle_manager"]
 
-                    # Re-sync adapters with updated channels
-                    system_config = config_repo.system_config
-                    if not system_config:
-                        _LOGGER.warning(
-                            "ANS system configuration not available; skipping adapter sync."
-                        )
-                        return
-                    enabled_channels = system_config.enabled_channels
-                    lifecycle_manager.sync_with_config(enabled_channels)
-
-                    # Validate consistency
-                    adapter_registry = entry_data["adapter_registry"]
-                    validation = config_repo.channel_registry.validate_adapters(
-                        adapter_registry
-                    )
+                    # Re-sync adapters with updated channels and detected channel IDs
+                    config_repo.sync_channels_to_state(lifecycle_manager)
 
                     _LOGGER.info(
-                        "Channels refreshed: %d channels, %d adapters",
+                        "Channels refreshed: %d detected channels",
                         channel_count,
-                        len(adapter_registry.channels()),
                     )
-
-                    if validation["missing_adapters"]:
-                        _LOGGER.warning(
-                            "Missing adapters for channels: %s",
-                            validation["missing_adapters"],
-                        )
 
                     break
 

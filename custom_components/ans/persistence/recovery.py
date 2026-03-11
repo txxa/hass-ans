@@ -24,24 +24,38 @@ class PersistenceRecovery:
     def __init__(
         self,
         hass: HomeAssistant,
+        notification_registry=None,
+        attempt_log=None,
+        retry_queue=None,
     ) -> None:
         """Initialize recovery manager.
 
         Args:
             hass: Home Assistant instance.
+            notification_registry: Existing NotificationRegistry, or None to
+                create a new one (used when called standalone).
+            attempt_log: Existing DeliveryAttemptLog, or None to create a new one.
+            retry_queue: Existing RetryQueue, or None to create a new one.
 
         """
         self._hass = hass
-        # Lazy import to avoid circular dependencies
-        from .file import (  # noqa: PLC0415
-            DeliveryAttemptLog,
-            NotificationRegistry,
-            RetryQueue,
-        )
+        if notification_registry is None or attempt_log is None or retry_queue is None:
+            # Lazy import to avoid circular dependencies
+            from .file import (  # noqa: PLC0415
+                DeliveryAttemptLog,
+                NotificationRegistry,
+                RetryQueue,
+            )
 
-        self.notification_registry = NotificationRegistry(hass)
-        self.attempt_log = DeliveryAttemptLog(hass)
-        self.retry_queue = RetryQueue(hass)
+            self.notification_registry = notification_registry or NotificationRegistry(
+                hass
+            )
+            self.attempt_log = attempt_log or DeliveryAttemptLog(hass)
+            self.retry_queue = retry_queue or RetryQueue(hass)
+        else:
+            self.notification_registry = notification_registry
+            self.attempt_log = attempt_log
+            self.retry_queue = retry_queue
 
     async def recover_on_startup(self) -> dict[str, Any]:
         """Recover pending delivery state on Home Assistant startup.
@@ -133,32 +147,38 @@ class PersistenceRecovery:
         return 0  # Return count not tracked in new design
 
 
-async def async_initialize_persistence(hass: HomeAssistant) -> tuple:
-    """Initialize persistence stores and recover pending retries.
+async def async_initialize_persistence(
+    hass: HomeAssistant,
+    notification_registry,
+    attempt_log,
+    retry_queue,
+) -> tuple[list, list]:
+    """Initialize persistence and recover pending retries using existing stores.
 
-    This function should be called during integration setup to:
-    1. Create persistent storage instances
-    2. Load any pending retries from storage
-    3. Return stores and recovered tasks for scheduler
+    Reads the persisted retry schedule from the authoritative store instances
+    created by ``create_system()``.  Passing pre-built stores avoids having two
+    separate in-memory objects wrapping the same HA Store file.
 
     Args:
         hass: Home Assistant instance.
+        notification_registry: Authoritative NotificationRegistry from ANSSystem.
+        attempt_log: Authoritative DeliveryAttemptLog from ANSSystem.
+        retry_queue: Authoritative RetryQueue from ANSSystem.
 
     Returns:
-        Tuple of (notification_registry, attempt_log, retry_queue, pending_tasks, orphaned_retries).
-        - notification_registry: NotificationRegistry instance
-        - attempt_log: DeliveryAttemptLog instance
-        - retry_queue: RetryQueue instance
+        Tuple of (pending_tasks, orphaned_retries).
         - pending_tasks: List of (NotificationDeliveryTask, run_at) tuples
         - orphaned_retries: List of job_ids that couldn't be recovered
 
     """
-    recovery = PersistenceRecovery(hass)
+    recovery = PersistenceRecovery(
+        hass,
+        notification_registry=notification_registry,
+        attempt_log=attempt_log,
+        retry_queue=retry_queue,
+    )
     summary = await recovery.recover_on_startup()
     return (
-        recovery.notification_registry,
-        recovery.attempt_log,
-        recovery.retry_queue,
         summary.get("pending_tasks", []),
         summary.get("orphaned_retries", []),
     )

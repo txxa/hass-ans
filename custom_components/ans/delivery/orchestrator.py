@@ -87,8 +87,11 @@ class NotificationOrchestrator:
             )
             return
 
-        # Validate channel registry is populated (critical error if empty)
-        if self._config_repo.channel_registry.count() == 0:
+        # Validate channels are populated (critical error if none detected)
+        if (
+            self._config_repo.channel_manager is None
+            or self._config_repo.channel_manager.count_detected() == 0
+        ):
             _LOGGER.error(
                 "Cannot process notification %s: No channels registered. "
                 "This indicates a system configuration error. "
@@ -325,12 +328,18 @@ class NotificationOrchestrator:
         policy = snapshot.getRecipientNotificationPolicy(recipient_id)
         contact_info = snapshot.getRecipientContactInfo(recipient_id)
 
-        # Resolve channel ID to ChannelInfo from registry
-        channel_info = snapshot.channel_registry.get(channel)
+        # Resolve channel ID to ChannelInfo via live lookup (ChannelInfo is
+        # frozen and safe to read without snapshotting).
+        channel_manager = self._config_repo.channel_manager
+        if channel_manager is None:
+            raise ValueError(
+                f"Channel '{channel}' not found: ChannelManager is not initialized."
+            )
+        channel_info = channel_manager.get_info(channel)
         if not channel_info:
-            available_channels = snapshot.channel_registry.get_all_ids()
+            available_channels = [info.id for info in channel_manager.get_all_infos()]
             _LOGGER.error(
-                "Channel '%s' not found in registry for recipient '%s'. "
+                "Channel '%s' not found in ChannelManager for recipient '%s'. "
                 "Available channels: %s. "
                 "This indicates a configuration error or that channels weren't loaded during startup.",
                 channel,
@@ -338,7 +347,7 @@ class NotificationOrchestrator:
                 available_channels,
             )
             raise ValueError(
-                f"Channel '{channel}' not found in channel registry. "
+                f"Channel '{channel}' not found in ChannelManager. "
                 f"Cannot create delivery task for recipient '{recipient_id}'."
             )
 

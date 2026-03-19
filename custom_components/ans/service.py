@@ -79,24 +79,14 @@ async def async_setup_services(
             _LOGGER.error("ANS not initialized, cannot refresh channels")
             return
 
-        # Refresh channel registry
-        channel_count = await config_repo.refresh_channels()
-
-        # Get delivery system components and re-sync adapters
-        if DOMAIN in hass.data:
-            for entry_data in hass.data[DOMAIN].values():
-                if "lifecycle_manager" in entry_data:
-                    lifecycle_manager = entry_data["lifecycle_manager"]
-
-                    # Re-sync adapters with updated channels and detected channel IDs
-                    config_repo.sync_channels_to_state(lifecycle_manager)
-
-                    _LOGGER.info(
-                        "Channels refreshed: %d detected channels",
-                        channel_count,
-                    )
-
-                    break
+        # Refresh channels and re-sync adapters via the new unified manager
+        await config_repo.refresh_and_sync()
+        _LOGGER.info(
+            "Channels refreshed: %d detected channels",
+            config_repo.channel_manager.count_detected()
+            if config_repo.channel_manager
+            else 0,
+        )
 
     hass.services.async_register(
         DOMAIN,

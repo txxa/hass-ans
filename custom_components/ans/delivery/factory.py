@@ -10,13 +10,8 @@ from datetime import timedelta
 
 from homeassistant.core import HomeAssistant
 
-from ..channels.adapter_lifecycle import (
-    AdapterLifecycleManager,
-)
-from ..channels.adapter_registry import (
-    AdapterRegistry,
-)
 from ..channels.base import DeliveryAdapter
+from ..channels.channel_manager import ChannelManager
 from ..channels.mobile_app import MobileAppDeliveryAdapter
 from ..channels.persistent_notification import PersistentNotificationAdapter
 from ..channels.signal import SignalDeliveryAdapter
@@ -52,8 +47,7 @@ class ANSSystem:
     accidental field reassignment after construction.
     """
 
-    adapter_registry: AdapterRegistry
-    lifecycle_manager: AdapterLifecycleManager
+    channel_manager: ChannelManager
     orchestrator: NotificationOrchestrator
     task_queue: NotificationDeliveryTaskQueue
     filter_engine: FilterEngine
@@ -88,7 +82,7 @@ class AdapterDeps:
 
 
 #: All adapter classes in registration order.
-#: Order determines factory registration order in the lifecycle manager.
+#: Order determines factory registration order in the channel manager.
 #: Adding a new adapter only requires updating this tuple.
 _ALL_ADAPTER_CLASSES: tuple[type[DeliveryAdapter], ...] = (
     PersistentNotificationAdapter,
@@ -99,92 +93,58 @@ _ALL_ADAPTER_CLASSES: tuple[type[DeliveryAdapter], ...] = (
 
 #: Mapping of channel prefixes to adapter classes, derived from metadata.
 #: Stays in sync with ``_ALL_ADAPTER_CLASSES`` automatically.
+#: Used by config flows for contact-info requirement lookups and UI labels.
 ADAPTER_CLASS_MAP: dict[str, type[DeliveryAdapter]] = {
     cls.get_metadata().channel_prefix: cls for cls in _ALL_ADAPTER_CLASSES
 }
 
 
-def create_adapter_registry(hass: HomeAssistant) -> AdapterRegistry:
-    """Create empty adapter registry.
-
-    Adapters are registered via lifecycle manager.
+def _create_channel_manager(
+    hass: HomeAssistant,
+    config_repo: ConfigRepository,
+    volume_registry: VolumeRestorationRegistry,
+) -> ChannelManager:
+    """Create and configure a ChannelManager with all adapter factories.
 
     Args:
         hass: Home Assistant instance.
+        config_repo: Configuration repository (injected into AdapterDeps).
+        volume_registry: Pre-initialized VolumeRestorationRegistry.
 
     Returns:
-        Empty registry.
+        Configured ChannelManager ready for initialize_static_adapters() and sync().
 
     """
-    return AdapterRegistry()
-
-
-def create_adapter_lifecycle_manager(
-    hass: HomeAssistant,
-    registry: AdapterRegistry,
-    volume_registry,
-    config_repo: ConfigRepository,
-) -> AdapterLifecycleManager:
-    """Create and configure adapter lifecycle manager with all factories.
-
-    Factories for standard adapters are registered via the data-driven
-    ``_STANDARD_ADAPTER_CLASSES`` tuple.  ``TTSMediaPlayerAdapter`` is
-    registered separately because it requires extra runtime dependencies.
-    Adapter instances are only created on-demand for enabled channels.
-
-    Args:
-        hass: Home Assistant instance
-        registry: Adapter registry to manage
-        volume_registry: Pre-initialized VolumeRestorationRegistry instance
-        config_repo: Configuration repository for TTS service lookup
-
-    Returns:
-        Configured lifecycle manager with all adapter factories
-
-    """
-    manager = AdapterLifecycleManager(hass, registry)
     deps = AdapterDeps(config_repo=config_repo, volume_registry=volume_registry)
+    manager = ChannelManager(hass, deps)
 
     for adapter_cls in _ALL_ADAPTER_CLASSES:
         manager.register_factory(adapter_cls.create_factory(deps=deps))
 
     _LOGGER.info(
-        "Adapter lifecycle manager configured with %d factories",
-        manager.get_factory_count(),
+        "ChannelManager configured with %d factories", len(_ALL_ADAPTER_CLASSES)
     )
     return manager
 
 
-def create_processor_factory(
+def _create_processor_factory(
     filter_engine: FilterEngine,
     rate_limiter: RateLimiter,
-    adapters: AdapterRegistry,
+    channel_manager: ChannelManager,
+    hass: HomeAssistant,
     retry_policy: RetryPolicy,
-    notification_registry,
-    attempt_log,
-    retry_queue,
+    notification_registry: NotificationRegistry,
+    attempt_log: DeliveryAttemptLog,
+    retry_queue: RetryQueue,
 ) -> Callable[[], NotificationDeliveryProcessor]:
-    """Create a processor factory for queue workers.
-
-    Args:
-        filter_engine: Filter evaluation engine.
-        rate_limiter: Rate limiting instance.
-        adapters: AdapterRegistry for channel lookup.
-        retry_policy: Retry policy.
-        notification_registry: Notification tracking registry.
-        attempt_log: Attempt tracking log.
-        retry_queue: Retry queue for scheduling.
-
-    Returns:
-        Callable that creates new processor instances.
-
-    """
+    """Create a processor factory for queue workers."""
 
     def _create_processor() -> NotificationDeliveryProcessor:
         return NotificationDeliveryProcessor(
             filter_engine=filter_engine,
             rate_limiter=rate_limiter,
-            adapters=adapters,
+            channel_manager=channel_manager,
+            hass=hass,
             retry_policy=retry_policy,
             notification_registry=notification_registry,
             attempt_log=attempt_log,
@@ -197,7 +157,7 @@ def create_processor_factory(
 def create_system(
     hass: HomeAssistant,
     config_repo: ConfigRepository,
-    volume_registry,
+    volume_registry: VolumeRestorationRegistry,
     max_concurrent_deliveries: int = 5,
 ) -> ANSSystem:
     """Create a complete ANS notification system with all components.
@@ -242,23 +202,24 @@ def create_system(
         max_delay=timedelta(seconds=system_config.retry_max_delay),
     )
 
-    # Create adapter registry and lifecycle manager
-    adapter_registry = create_adapter_registry(hass)
-    lifecycle_manager = create_adapter_lifecycle_manager(
-        hass, adapter_registry, volume_registry, config_repo
-    )
+    # Create ChannelManager (single source of truth for channels + adapters)
+    channel_manager = _create_channel_manager(hass, config_repo, volume_registry)
 
-    # Initialize static adapters (always available)
-    lifecycle_manager.initialize_static_adapters()
-    # NOTE: sync_with_config() is async and is called from async_setup_entry
-    # after create_system() returns.  Dynamic adapters are not yet registered
-    # at this point; validation and adapter-count logging also happen there.
+    # Initialize static adapters (always available, synchronous)
+    channel_manager.initialize_static_adapters()
+    # NOTE: sync() is async and is called from async_setup_entry after
+    # create_system() returns.  Dynamic adapters are not yet registered.
+
+    # Inject ChannelManager into config_repo so orchestrator/repository
+    # can do live channel lookups without snapshotting registry state.
+    config_repo.channel_manager = channel_manager
 
     # Create processor factory for queue
-    processor_factory = create_processor_factory(
+    processor_factory = _create_processor_factory(
         filter_engine=filter_engine,
         rate_limiter=rate_limiter,
-        adapters=adapter_registry,
+        channel_manager=channel_manager,
+        hass=hass,
         retry_policy=retry_policy,
         notification_registry=notification_registry,
         attempt_log=attempt_log,
@@ -297,8 +258,7 @@ def create_system(
     )
 
     return ANSSystem(
-        adapter_registry=adapter_registry,
-        lifecycle_manager=lifecycle_manager,
+        channel_manager=channel_manager,
         orchestrator=orchestrator,
         task_queue=task_queue,
         filter_engine=filter_engine,

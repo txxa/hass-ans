@@ -4,10 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from ..channels.channel_registry import ChannelRegistry
 from ..const import (
     CONFIG_VERSION_KEY,
     SYS_CONFIG_ENABLE_AUDIT_LOGGING_KEY,
@@ -131,8 +128,9 @@ class ConfigSnapshot:
         Recipient configuration indexed by recipient ID.
     system_config : SystemConfig
         System-wide configuration settings.
-    channel_registry : ChannelRegistry
-        Registry of available notification channels with metadata.
+
+    Channel info is resolved live from ChannelManager — snapshots carry only
+    recipients, recipient_configs, and system_config.
 
     """
 
@@ -141,7 +139,6 @@ class ConfigSnapshot:
     recipients: dict[str, RecipientData]
     recipient_configs: dict[str, RecipientConfig]
     system_config: SystemConfig
-    channel_registry: ChannelRegistry
 
     def getRecipients(self) -> list[str]:
         """Get list of configured recipient IDs.

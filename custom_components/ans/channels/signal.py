@@ -12,9 +12,8 @@ from homeassistant.exceptions import (
     ServiceValidationError,
 )
 
-from ..channels.adapter_lifecycle import AdapterType
 from ..models import DeliveryResult, NotificationPayload, RecipientContactInfo
-from .base import AdapterMetadata, ChannelRequirement, DeliveryAdapter
+from .base import AdapterMetadata, AdapterType, ChannelRequirement, DeliveryAdapter
 
 if TYPE_CHECKING:
     from ..models.recipient import TTSSettings

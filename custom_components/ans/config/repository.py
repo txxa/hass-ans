@@ -2,20 +2,13 @@
 
 from __future__ import annotations
 
-import asyncio
 import copy
 import logging
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from homeassistant.core import HomeAssistant
 
-from ..channels.channel_registry import (
-    ChannelRegistry,
-    detect_media_players,
-    detect_notification_channels,
-)
 from ..const import (
     # CONFIG_IDENTITY_DEFAULT_SETTINGS_KEY,
     RCPT_CONFIG_ID_KEY,
@@ -30,9 +23,6 @@ from ..models import (
     SystemConfig,
 )
 
-if TYPE_CHECKING:
-    from ..channels.adapter_lifecycle import AdapterLifecycleManager
-
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -42,7 +32,6 @@ class ConfigRepository:
     def __init__(
         self,
         hass: HomeAssistant,
-        adapter_classes: dict | None = None,
     ) -> None:
         """Initialize the ConfigRepository with the HomeAssistant instance."""
         self.hass = hass
@@ -51,10 +40,11 @@ class ConfigRepository:
         self.system_config: SystemConfig | None = None
         self.recipients: dict[str, RecipientData] = {}
         self.recipient_configs: dict[str, RecipientConfig] = {}
-        self.channel_registry: ChannelRegistry = ChannelRegistry(
-            adapter_classes=adapter_classes
-        )
-        self._refresh_lock = asyncio.Lock()
+
+        # Injected by create_system() after ChannelManager construction.
+        from ..channels.channel_manager import ChannelManager  # noqa: PLC0415
+
+        self.channel_manager: ChannelManager | None = None
 
     # ---------------------------
     # Main entry helpers
@@ -164,8 +154,6 @@ class ConfigRepository:
                 "affected recipients will be unavailable until the issue is resolved"
             )
 
-        # Channels always succeed (zero channels is a warning, not an error).
-        await self.load_channels()
         return True
 
     def unload(self) -> bool:
@@ -180,120 +168,23 @@ class ConfigRepository:
     # Channel Management
     # ---------------------------
 
-    async def refresh_channels(self) -> int:
-        """Refresh channel registry from current HA services.
+    async def refresh_and_sync(self) -> None:
+        """Refresh channel detection and synchronize adapter state in one step.
 
-        Discovers both notify.* services and compatible media_player entities.
-
-        Returns
-        -------
-        int
-            Number of channels registered.
-
+        Delegates to ChannelManager.sync() which is the single source of
+        truth for both channel metadata and live adapters.
         """
-        _LOGGER.debug("Refreshing channel registry...")
-
-        async with self._refresh_lock:
-            # Collect the new channel list BEFORE clearing the registry.
-            # This keeps the registry populated while detection runs so that
-            # concurrent snapshot() calls and parallel refresh_channels() calls
-            # (e.g. from _on_notify_service_registered and update_listener)
-            # never observe an empty registry.
-            channels = detect_notification_channels(
-                self.hass, adapter_classes=self.channel_registry.adapter_classes
-            )
-            media_players = detect_media_players(self.hass)
-            channels.extend(media_players)
-
-            # Atomic swap: replace contents only after the full list is ready.
-            self.channel_registry.clear()
-
-            if not channels:
-                _LOGGER.warning("No notification channels detected")
-                return 0
-
-            self.channel_registry.register_multiple(channels)
-
-            _LOGGER.info(
-                "Refreshed channel registry: %d channels registered (%d notify, %d media_player)",
-                len(channels),
-                len(channels) - len(media_players),
-                len(media_players),
-            )
-
-            return len(channels)
-
-    async def load_channels(self) -> bool:
-        """Load available notification channels into the registry.
-
-        Returns
-        -------
-        bool
-            Always True.  Zero detected channels is treated as a warning so
-            that ANS can start even when notify integrations are not yet
-            loaded (they may appear later; call refresh_channels() or reload
-            the integration after all integrations are up).
-
-        """
-        count = await self.refresh_channels()
-
-        if count == 0:
+        if self.channel_manager is None:
             _LOGGER.warning(
-                "No notification channels detected during setup. "
-                "Ensure notify integrations are configured, then reload ANS "
-                "or call the 'ans.refresh_channels' service."
+                "refresh_and_sync called before ChannelManager was injected; skipping"
             )
-
-        return True
-
-    async def sync_channels_to_state(
-        self, lifecycle_manager: AdapterLifecycleManager
-    ) -> None:
-        """Synchronize adapter state with the current channel registry and system config.
-
-        Uses the current channel_registry contents as the authoritative set of
-        detected channels.  Call :meth:`refresh_channels` or :meth:`load` first
-        to ensure the registry reflects the current HA service landscape.
-
-        Parameters
-        ----------
-        lifecycle_manager : AdapterLifecycleManager
-            The adapter lifecycle manager whose adapter set will be synchronized.
-
-        """
-        detected_ids = set(self.channel_registry.get_all_ids())
-        if self.system_config:
-            await lifecycle_manager.sync_with_config(
-                list(self.system_config.enabled_channels),
-                detected_channel_ids=detected_ids,
-            )
-            _LOGGER.debug(
-                "Adapter state synchronized with channel registry (%d detected channels)",
-                len(detected_ids),
-            )
-        else:
+            return
+        if not self.system_config:
             _LOGGER.warning(
-                "No system config available during channel sync; adapter state unchanged"
+                "refresh_and_sync called with no system_config available; skipping"
             )
-
-    async def refresh_and_sync(
-        self, lifecycle_manager: AdapterLifecycleManager
-    ) -> None:
-        """Refresh channel registry and synchronize adapter state in one step.
-
-        Convenience helper that calls :meth:`refresh_channels` followed by
-        :meth:`sync_channels_to_state`.  Use this instead of the two-step
-        call to ensure the channel list is always refreshed before adapters
-        are synced.
-
-        Parameters
-        ----------
-        lifecycle_manager : AdapterLifecycleManager
-            The adapter lifecycle manager whose adapter set will be synchronized.
-
-        """
-        await self.refresh_channels()
-        await self.sync_channels_to_state(lifecycle_manager)
+            return
+        await self.channel_manager.sync(list(self.system_config.enabled_channels))
 
     def get_channels_for_ui(
         self, recipient_type: RecipientType | None = None
@@ -311,10 +202,11 @@ class ConfigRepository:
             List of channel info objects.
 
         """
+        if self.channel_manager is None:
+            return []
         if recipient_type is None:
-            return self.channel_registry.get_all()
-
-        return self.channel_registry.get_channels_for_recipient_type(recipient_type)
+            return self.channel_manager.get_all_infos()
+        return self.channel_manager.get_infos_for_recipient_type(recipient_type)
 
     # ---------------------------
     # Snapshot
@@ -333,5 +225,4 @@ class ConfigRepository:
             recipients=copy.deepcopy(self.recipients),
             recipient_configs=copy.deepcopy(self.recipient_configs),
             system_config=copy.deepcopy(self.system_config),
-            channel_registry=copy.deepcopy(self.channel_registry),
         )

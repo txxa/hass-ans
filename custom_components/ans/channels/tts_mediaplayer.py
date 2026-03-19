@@ -19,7 +19,6 @@ from homeassistant.exceptions import (
     ServiceValidationError,
 )
 
-from ..channels.adapter_lifecycle import AdapterType
 from ..exceptions import TTSDeliveryError, TTSVolumeControlError
 from ..models import (
     DeliveryResult,
@@ -27,7 +26,13 @@ from ..models import (
     RecipientContactInfo,
 )
 from ..models.recipient import TTSSettings
-from .base import AdapterFactory, AdapterMetadata, ChannelRequirement, DeliveryAdapter
+from .base import (
+    AdapterFactory,
+    AdapterMetadata,
+    AdapterType,
+    ChannelRequirement,
+    DeliveryAdapter,
+)
 from .volume_controller import VolumeController
 
 if TYPE_CHECKING:

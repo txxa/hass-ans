@@ -98,8 +98,8 @@ def detect_tts_integrations(hass: HomeAssistant) -> list[SelectOptionDict]:
     """Return available TTS engine entities formatted for a dropdown selector.
 
     Thin UI-formatting wrapper around
-    :func:`~custom_components.ans.channels.channel_registry.detect_tts_entities`.
-    Detection logic lives in the channel registry; this function only handles
+    :func:`~custom_components.ans.channels.channel_manager.detect_tts_entities`.
+    Detection logic lives in the channel manager; this function only handles
     the conversion to :class:`SelectOptionDict` for the config-flow forms.
 
     Parameters
@@ -114,7 +114,7 @@ def detect_tts_integrations(hass: HomeAssistant) -> list[SelectOptionDict]:
         Each item contains ``value`` (entity ID) and ``label`` (friendly name).
 
     """
-    from ..channels.channel_registry import detect_tts_entities  # noqa: PLC0415
+    from ..channels.channel_manager import detect_tts_entities  # noqa: PLC0415
 
     results: list[SelectOptionDict] = [
         SelectOptionDict(

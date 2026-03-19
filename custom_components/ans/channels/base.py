@@ -11,16 +11,77 @@ from typing import TYPE_CHECKING, TypedDict
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
-    from ..channels.adapter_lifecycle import AdapterType
     from ..delivery.factory import AdapterDeps
     from ..models.recipient import TTSSettings
 
 from ..models import (
+    ChannelInfo,
     DeliveryResult,
     DeliveryStatus,
     NotificationPayload,
     RecipientContactInfo,
 )
+
+
+class AdapterType(str, Enum):
+    """Type of adapter and its lifecycle behavior.
+
+    Values
+    ------
+    STATIC : str
+        Always registered, independent of config (e.g., persistent_notification).
+    DYNAMIC_SINGLE : str
+        One instance, registered when channel is enabled (e.g., signal).
+    DYNAMIC_MULTI : str
+        Multiple instances, one per enabled channel variant (e.g., mobile_app_*).
+
+    """
+
+    STATIC = "static"
+    DYNAMIC_SINGLE = "dynamic_single"
+    DYNAMIC_MULTI = "dynamic_multi"
+
+
+class ChannelStatus(str, Enum):
+    """Status of a channel in the ChannelManager.
+
+    Values
+    ------
+    DETECTED : str
+        Channel is visible in HA but not in enabled_channels — no adapter.
+    ACTIVE : str
+        Channel is detected, enabled, and has a live adapter.
+    INACTIVE : str
+        Channel is in enabled_channels but has no registered factory.
+    STALE : str
+        Channel was previously detected but is no longer visible in HA — adapter destroyed.
+
+    """
+
+    DETECTED = "detected"
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+    STALE = "stale"
+
+
+@dataclass
+class ChannelRecord:
+    """Unified record holding channel metadata and its live adapter.
+
+    Attributes
+    ----------
+    info : ChannelInfo
+        Frozen channel metadata (id, label, scope, integration).
+    adapter : DeliveryAdapter | None
+        Live adapter instance, or None when channel is not ACTIVE.
+    status : ChannelStatus
+        Current lifecycle status of the channel.
+
+    """
+
+    info: ChannelInfo
+    adapter: DeliveryAdapter | None
+    status: ChannelStatus
 
 
 class ChannelRequirement(TypedDict, total=False):
@@ -309,8 +370,6 @@ class DeliveryAdapter(ABC):
             # default factory ignores the variant/device_id argument, which
             # would produce a broken instance with no channel variant.  Fail at
             # registration time rather than silently creating bad adapters.
-            from .adapter_lifecycle import AdapterType  # noqa: PLC0415
-
             if meta.adapter_type == AdapterType.DYNAMIC_MULTI:
                 raise TypeError(
                     f"{cls.__name__}.create_factory() requires an explicit "

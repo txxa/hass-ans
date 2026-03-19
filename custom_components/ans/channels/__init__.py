@@ -1,12 +1,18 @@
 """Channel and adapter management for ANS integration."""
 
-from .adapter_lifecycle import AdapterLifecycleManager, AdapterType
-from .adapter_registry import AdapterRegistry
-from .base import AdapterFactory, AdapterFailureType, DeliveryAdapter
-from .channel_registry import (
-    ChannelRegistry,
+from .base import (
+    AdapterFactory,
+    AdapterFailureType,
+    AdapterType,
+    ChannelRecord,
+    ChannelStatus,
+    DeliveryAdapter,
+)
+from .channel_manager import (
+    ChannelManager,
     detect_media_players,
     detect_notification_channels,
+    detect_tts_entities,
 )
 from .mobile_app import MobileAppDeliveryAdapter
 from .persistent_notification import PersistentNotificationAdapter
@@ -16,10 +22,10 @@ from .tts_mediaplayer import TTSMediaPlayerAdapter
 __all__ = [
     "AdapterFactory",
     "AdapterFailureType",
-    "AdapterLifecycleManager",
-    "AdapterRegistry",
     "AdapterType",
-    "ChannelRegistry",
+    "ChannelManager",
+    "ChannelRecord",
+    "ChannelStatus",
     "DeliveryAdapter",
     "MobileAppDeliveryAdapter",
     "PersistentNotificationAdapter",
@@ -27,4 +33,5 @@ __all__ = [
     "TTSMediaPlayerAdapter",
     "detect_media_players",
     "detect_notification_channels",
+    "detect_tts_entities",
 ]

@@ -8,8 +8,6 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
-from .channels.adapter_registry import validate_channel_adapter_consistency
-from .const import DOMAIN
 from .models import ChannelScope
 
 _LOGGER = logging.getLogger(__name__)
@@ -47,47 +45,34 @@ async def async_get_config_entry_diagnostics(
         diagnostics["error"] = "Config repository not initialized"
         return diagnostics
 
-    # Channel registry info
-    channel_registry = config_repo.channel_registry
-    diagnostics["channels"] = {
-        "total": channel_registry.count(),
-        "by_scope": {
-            "system": len(channel_registry.filter_by_scope(ChannelScope.SYSTEM)),
-            "recipient": len(channel_registry.filter_by_scope(ChannelScope.RECIPIENT)),
-        },
-        "channels": [
-            {
-                "id": ch.id,
-                "label": ch.label,
-                "scope": ch.scope.value,
-                "integration": ch.integration,
-            }
-            for ch in channel_registry.get_all()
-        ],
-    }
-
-    # Adapter registry info
-    if DOMAIN in hass.data:
-        for entry_data in hass.data[DOMAIN].values():
-            if "adapter_registry" in entry_data:
-                adapter_registry = entry_data["adapter_registry"]
-
-                diagnostics["adapters"] = {
-                    "total": len(adapter_registry.channels()),
-                    "channels": adapter_registry.channels(),
+    # Channel manager info
+    channel_manager = config_repo.channel_manager
+    if channel_manager:
+        all_infos = channel_manager.get_all_infos()
+        diagnostics["channels"] = {
+            "detected": channel_manager.count_detected(),
+            "active": channel_manager.count_active(),
+            "by_scope": {
+                "system": len([i for i in all_infos if i.scope == ChannelScope.SYSTEM]),
+                "recipient": len(
+                    [i for i in all_infos if i.scope == ChannelScope.RECIPIENT]
+                ),
+                "tts": len([i for i in all_infos if i.scope == ChannelScope.TTS]),
+            },
+            "records": [
+                {
+                    "id": rec.info.id,
+                    "label": rec.info.label,
+                    "scope": rec.info.scope.value,
+                    "integration": rec.info.integration,
+                    "status": rec.status.value,
+                    "has_adapter": rec.adapter is not None,
                 }
-
-                # Validation results
-                validation = validate_channel_adapter_consistency(
-                    channel_registry, adapter_registry
-                )
-                diagnostics["validation"] = {
-                    "missing_adapters": validation["missing_adapters"],
-                    "orphaned_adapters": validation["orphaned_adapters"],
-                    "status": "ok" if not validation["missing_adapters"] else "warning",
-                }
-
-                break
+                for rec in channel_manager.get_all_records()
+            ],
+        }
+    else:
+        diagnostics["channels"] = {"error": "ChannelManager not initialized"}
 
     # System config
     if config_repo.system_config:

@@ -23,11 +23,6 @@ from homeassistant.config_entries import (
 )
 from homeassistant.helpers.selector import SelectOptionDict
 
-from ..channels.channel_registry import (
-    ChannelRegistry,
-    detect_media_players,
-    detect_notification_channels,
-)
 from ..const import (
     PERSISTENT_NOTIFICATION_CHANNEL,
     RCPT_CONFIG_CONFIGURED_CHANNELS_KEY,
@@ -498,9 +493,8 @@ class RecipientConfigFlow(ConfigSubentryFlow):
 
         # Get available channels filtered by recipient type
         available_channels = await self._get_available_channels()
-        filtered_channels = ChannelRegistry.filter_channels_by_recipient_type(
-            available_channels, recipient_type
-        )
+        # _get_available_channels() already filters by recipient type
+        filtered_channels = available_channels
 
         # Further filter channels based on available contact information
         # Extract channel IDs for filtering
@@ -515,9 +509,9 @@ class RecipientConfigFlow(ConfigSubentryFlow):
         from .. import get_config_repository  # noqa: PLC0415
 
         _config_repo = get_config_repository(self.hass)
-        if _config_repo is not None:
+        if _config_repo is not None and _config_repo.channel_manager is not None:
             available_channel_ids, unavailable_channels = (
-                _config_repo.channel_registry.filter_channels_by_contact_info(
+                _config_repo.channel_manager.filter_channels_by_contact_info(
                     all_channel_ids,
                     has_email=has_email,
                     has_phone=has_phone,
@@ -893,7 +887,11 @@ class RecipientConfigFlow(ConfigSubentryFlow):
         from .. import get_config_repository  # noqa: PLC0415
 
         config_repo = get_config_repository(self.hass)
-        if config_repo and config_repo.channel_registry.count() > 0:
+        if (
+            config_repo
+            and config_repo.channel_manager
+            and config_repo.channel_manager.count_detected() > 0
+        ):
             # Get channels filtered by recipient type if available
             recipient_type = self._recipient_meta.get(RCPT_CONFIG_TYPE_KEY)
             if recipient_type:
@@ -908,26 +906,12 @@ class RecipientConfigFlow(ConfigSubentryFlow):
                 len(all_channels),
             )
         else:
-            # Fallback: Direct detection (less preferred, logs warning)
+            # Fallback: channel manager not yet populated (e.g. during early setup).
+            # Return empty — the form will show no channels rather than stale data.
             _LOGGER.warning(
-                "Config repository unavailable or empty, falling back to direct channel detection"
+                "ChannelManager unavailable or empty, returning no channels for UI"
             )
-            recipient_type = self._recipient_meta.get(RCPT_CONFIG_TYPE_KEY)
-            if recipient_type and RecipientType(recipient_type) == RecipientType.TTS:
-                all_channels = detect_media_players(self.hass)
-            else:
-                all_channels = detect_notification_channels(self.hass)
-
-            # Apply recipient type filtering manually if needed
-            if recipient_type:
-                all_channels = ChannelRegistry.filter_channels_by_recipient_type(
-                    all_channels, RecipientType(recipient_type)
-                )
-
-            _LOGGER.debug(
-                "Detected %d channels directly",
-                len(all_channels),
-            )
+            return []
 
         # Filter to only enabled channels from system config
         enabled_channels = [

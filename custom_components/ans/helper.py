@@ -6,7 +6,7 @@ This module contains general-purpose helper functions for:
 - Validation utilities
 - Form data conversion
 
-Note: Channel detection functions live in ``channels.channel_registry`` as
+Note: Channel detection functions live in ``channels.channel_manager`` as
 module-level functions (``detect_notification_channels``, ``detect_media_players``).
 """
 

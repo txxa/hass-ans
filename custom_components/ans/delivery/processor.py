@@ -12,9 +12,10 @@ import logging
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from homeassistant.core import HomeAssistant
 from homeassistant.util import dt
 
-from ..channels.adapter_registry import AdapterRegistry
+from ..channels.channel_manager import ChannelManager
 from ..models import (
     Attempt,
     ChannelScope,
@@ -50,7 +51,8 @@ class NotificationDeliveryProcessor:
         *,
         filter_engine: FilterEngine,
         rate_limiter: RateLimiter,
-        adapters: AdapterRegistry,
+        channel_manager: ChannelManager,
+        hass: HomeAssistant,
         retry_policy: RetryPolicy,
         notification_registry: NotificationRegistry,
         attempt_log: DeliveryAttemptLog,
@@ -61,7 +63,8 @@ class NotificationDeliveryProcessor:
         Args:
             filter_engine: Filter evaluation engine.
             rate_limiter: Rate limiting instance.
-            adapters: AdapterRegistry for channel -> DeliveryAdapter lookup.
+            channel_manager: ChannelManager for channel -> DeliveryAdapter lookup.
+            hass: HomeAssistant instance (for fire-and-forget resync tasks).
             retry_policy: Retry policy.
             notification_registry: Notification registry for tracking.
             attempt_log: Delivery attempt log for audit trail.
@@ -70,7 +73,8 @@ class NotificationDeliveryProcessor:
         """
         self._filter_engine = filter_engine
         self._rate_limiter = rate_limiter
-        self._adapters = adapters
+        self._channel_manager = channel_manager
+        self._hass = hass
         self._retry_policy = retry_policy
         self._notification_registry = notification_registry
         self._attempt_log = attempt_log
@@ -154,7 +158,7 @@ class NotificationDeliveryProcessor:
         # as they deliver to the HA instance, not to a person
         if task.channel_info.scope == ChannelScope.RECIPIENT:
             # Get adapter to check its requirements
-            adapter = self._adapters.get(task.channel_info.id)
+            adapter = self._channel_manager.get_adapter(task.channel_info.id)
 
             if adapter:
                 requirements = adapter.get_requirements()
@@ -224,7 +228,7 @@ class NotificationDeliveryProcessor:
             attempt: Attempt record.
 
         """
-        adapter = self._adapters.get(task.channel_info.id)
+        adapter = self._channel_manager.get_adapter(task.channel_info.id)
 
         if not adapter:
             error_msg = (
@@ -239,7 +243,13 @@ class NotificationDeliveryProcessor:
                 task.recipient_id,
             )
 
-            # Permanent failure - no retry (adapter won't magically appear)
+            # Fire-and-forget channel resync so the adapter may be available
+            # for the next retry attempt (L4 fix).  The ChannelManager's
+            # internal lock prevents concurrent sync races.
+            self._hass.async_create_task(self._channel_manager.resync())
+
+            # Permanent failure for this attempt — retry will pick up the
+            # refreshed adapter if one becomes available.
             await self._handle_permanent_failure(
                 task,
                 attempt,

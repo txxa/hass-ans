@@ -23,7 +23,7 @@ from homeassistant.core import callback
 
 from custom_components.ans.config.validator import FieldValidationError
 
-from .channels.channel_registry import (
+from .channels.channel_manager import (
     detect_media_players,
     detect_notification_channels,
 )

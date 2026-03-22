@@ -13,8 +13,10 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ServiceNotFound
 from homeassistant.util import dt
 
+from ..channels.base import TTSDeliveryOptions
 from ..channels.channel_manager import ChannelManager
 from ..models import (
     Attempt,
@@ -42,7 +44,8 @@ class NotificationDeliveryProcessor:
     - retry decision
     - persistence coordination
 
-    Stateless in memory. All durable state is persisted.
+    Note: rate_limiter state is held in-memory and resets on HA restart.
+    All other durable state (delivery attempts, retry queue) is persisted.
     Safe to re-run after crashes (idempotency via attempt tracking).
     """
 
@@ -176,6 +179,12 @@ class NotificationDeliveryProcessor:
                     and not task.contact_info.phone_number
                 ):
                     missing_requirements.append("phone number")
+                # TODO: remove check of requires_ha_user
+                if (
+                    requirements.get("requires_ha_user", False)
+                    and not task.contact_info.mobile_device_id
+                ):
+                    missing_requirements.append("Home Assistant user")
 
                 if missing_requirements:
                     # Log attempt with validation failure
@@ -236,21 +245,18 @@ class NotificationDeliveryProcessor:
                 f"This channel may not be properly configured. "
                 f"Expected adapter type: {task.channel_info.integration}"
             )
-            _LOGGER.error(
-                "%s (job_id=%s, recipient=%s)",
+            _LOGGER.warning(
+                "%s (job_id=%s, recipient=%s) — treating as transient, will retry",
                 error_msg,
                 task.job_id,
                 task.recipient_id,
             )
 
-            # Fire-and-forget channel resync so the adapter may be available
-            # for the next retry attempt (L4 fix).  The ChannelManager's
-            # internal lock prevents concurrent sync races.
-            self._hass.async_create_task(self._channel_manager.resync())
-
-            # Permanent failure for this attempt — retry will pick up the
-            # refreshed adapter if one becomes available.
-            await self._handle_permanent_failure(
+            # Transient failure: event listeners in __init__.py handle resync
+            # when adapters become available (_on_media_player_added,
+            # _on_entity_registry_updated). The adapter should be present by
+            # the time the retry fires.
+            await self._handle_transient_failure(
                 task,
                 attempt,
                 error=error_msg,
@@ -262,8 +268,20 @@ class NotificationDeliveryProcessor:
                 payload=task.payload,
                 contact_info=task.contact_info,
                 idempotency_key=attempt.idempotency_key,
-                tts_settings=task.tts_settings,
+                options=TTSDeliveryOptions(tts_settings=task.tts_settings)
+                if task.tts_settings
+                else None,
             )
+        except ServiceNotFound as exc:
+            _LOGGER.warning(
+                "Service not found during delivery job_id=%s channel=%s: %s "
+                "— treating as transient failure, will retry",
+                task.job_id,
+                task.channel_info.id,
+                exc,
+            )
+            await self._handle_transient_failure(task, attempt, error=str(exc))
+            return
         except Exception as exc:
             _LOGGER.exception(
                 "Adapter exception job_id=%s channel=%s",

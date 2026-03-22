@@ -22,11 +22,13 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from ..channels.channel_manager import ChannelManager
 from ..config.repository import ConfigRepository
 from ..models import (
     ConfigSnapshot,
     NotificationDeliveryTask,
     NotificationPayload,
+    RecipientType,
 )
 from .deduplication import DeduplicationService
 from .queue import NotificationDeliveryTaskQueue
@@ -56,6 +58,7 @@ class NotificationOrchestrator:
         config_repo: ConfigRepository,
         task_queue: NotificationDeliveryTaskQueue,
         notification_registry,
+        channel_manager: ChannelManager,
         deduplication_service: DeduplicationService | None = None,
     ) -> None:
         """Initialize the Orchestrator.
@@ -64,12 +67,14 @@ class NotificationOrchestrator:
             config_repo: Repository for managing configuration data.
             task_queue: Queue for managing asynchronous tasks.
             notification_registry: Notification registry for tracking.
+            channel_manager: ChannelManager for live channel and adapter lookups.
             deduplication_service: Optional deduplication service for preventing duplicate deliveries.
 
         """
         self._config_repo = config_repo
         self._task_queue = task_queue
         self._notification_registry = notification_registry
+        self._channel_manager = channel_manager
         self._deduplication_service = deduplication_service
 
     async def handle_notification(self, payload: NotificationPayload) -> None:
@@ -88,10 +93,7 @@ class NotificationOrchestrator:
             return
 
         # Validate channels are populated (critical error if none detected)
-        if (
-            self._config_repo.channel_manager is None
-            or self._config_repo.channel_manager.count_detected() == 0
-        ):
+        if self._channel_manager is None or self._channel_manager.count_detected() == 0:
             _LOGGER.error(
                 "Cannot process notification %s: No channels registered. "
                 "This indicates a system configuration error. "
@@ -253,12 +255,6 @@ class NotificationOrchestrator:
 
         This is logical routing only — no endpoints.
         """
-        # return self._channel_selector.resolve(
-        #     recipient_id=recipient_id,
-        #     payload=payload,
-        #     snapshot=snapshot,
-        # )
-
         return snapshot.getRecipientChannels(recipient_id, payload.criticality)
 
     async def _deduplicate_channels(
@@ -330,7 +326,7 @@ class NotificationOrchestrator:
 
         # Resolve channel ID to ChannelInfo via live lookup (ChannelInfo is
         # frozen and safe to read without snapshotting).
-        channel_manager = self._config_repo.channel_manager
+        channel_manager = self._channel_manager
         if channel_manager is None:
             raise ValueError(
                 f"Channel '{channel}' not found: ChannelManager is not initialized."
@@ -359,8 +355,6 @@ class NotificationOrchestrator:
         recipient_config = snapshot.recipient_configs.get(recipient_id)
 
         if recipient_data and recipient_config:
-            from ..models.recipient import RecipientType  # noqa: PLC0415
-
             if (
                 recipient_data.type == RecipientType.TTS
                 and recipient_config.tts_settings

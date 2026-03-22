@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, TypedDict
@@ -12,7 +12,6 @@ if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
     from ..delivery.factory import AdapterDeps
-    from ..models.recipient import TTSSettings
 
 from ..models import (
     ChannelInfo,
@@ -21,6 +20,7 @@ from ..models import (
     NotificationPayload,
     RecipientContactInfo,
 )
+from ..models.recipient import TTSSettings
 
 
 class AdapterType(str, Enum):
@@ -64,7 +64,22 @@ class ChannelStatus(str, Enum):
     STALE = "stale"
 
 
-@dataclass
+@dataclass(frozen=True)
+class DeliveryOptions:
+    """Channel-agnostic per-delivery options base class.
+
+    Co-located with the deliver() ABC. Subclass to add adapter-specific fields.
+    """
+
+
+@dataclass(frozen=True)
+class TTSDeliveryOptions(DeliveryOptions):
+    """TTS-specific delivery options."""
+
+    tts_settings: TTSSettings | None = None
+
+
+@dataclass(frozen=True)
 class ChannelRecord:
     """Unified record holding channel metadata and its live adapter.
 
@@ -134,17 +149,12 @@ class AdapterMetadata:
         Channel identifier or prefix.
     integration : str | None
         Integration name (for logging/diagnostics).
-    channel_separator : str
-        Character that separates the prefix from the variant portion of a
-        channel ID.  Defaults to ``"_"`` (e.g. ``notify.mobile_app_sm_s911b``).
-        Use ``"."`` for period-separated namespaces such as ``media_player.*``.
 
     """
 
     adapter_type: AdapterType
     channel_prefix: str
     integration: str | None = None
-    channel_separator: str = "_"
 
 
 @dataclass
@@ -163,10 +173,6 @@ class AdapterFactory:
         The concrete adapter class that owns this factory.  Used by the
         lifecycle manager to call ``matches_channel()`` and
         ``extract_variant()`` without hardcoding prefix strings.
-    channel_separator : str
-        Character between the prefix and variant portion of a channel ID.
-        Must match :attr:`AdapterMetadata.channel_separator`. Defaults to
-        ``"_"``.
     cleanup_fn : Callable | None
         Optional cleanup function when adapter is unregistered.
 
@@ -176,8 +182,7 @@ class AdapterFactory:
     channel_prefix: str
     factory_fn: Callable[[HomeAssistant, str | None], DeliveryAdapter]
     adapter_class: type[DeliveryAdapter]
-    channel_separator: str = "_"
-    cleanup_fn: Callable[[DeliveryAdapter], None] | None = None
+    cleanup_fn: Callable[[DeliveryAdapter], None | Awaitable[None]] | None = None
 
 
 class DeliveryAdapter(ABC):
@@ -273,7 +278,7 @@ class DeliveryAdapter(ABC):
         payload: NotificationPayload,
         contact_info: RecipientContactInfo,
         idempotency_key: str,
-        tts_settings: TTSSettings | None = None,
+        options: DeliveryOptions | None = None,
     ) -> DeliveryResult:
         """Perform exactly one delivery attempt.
 
@@ -389,6 +394,5 @@ class DeliveryAdapter(ABC):
             channel_prefix=meta.channel_prefix,
             factory_fn=factory_fn,
             adapter_class=cls,
-            channel_separator=meta.channel_separator,
             cleanup_fn=cleanup_fn,
         )

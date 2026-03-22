@@ -210,10 +210,6 @@ def create_system(
     # NOTE: sync() is async and is called from async_setup_entry after
     # create_system() returns.  Dynamic adapters are not yet registered.
 
-    # Inject ChannelManager into config_repo so orchestrator/repository
-    # can do live channel lookups without snapshotting registry state.
-    config_repo.channel_manager = channel_manager
-
     # Create processor factory for queue
     processor_factory = _create_processor_factory(
         filter_engine=filter_engine,
@@ -245,6 +241,7 @@ def create_system(
         config_repo=config_repo,
         task_queue=task_queue,
         notification_registry=notification_registry,
+        channel_manager=channel_manager,
         deduplication_service=deduplication_service,
     )
 

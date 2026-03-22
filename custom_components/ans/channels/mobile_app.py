@@ -21,11 +21,11 @@ from .base import (
     AdapterType,
     ChannelRequirement,
     DeliveryAdapter,
+    DeliveryOptions,
 )
 
 if TYPE_CHECKING:
     from ..delivery.factory import AdapterDeps
-    from ..models.recipient import TTSSettings
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -53,9 +53,7 @@ class MobileAppDeliveryAdapter(DeliveryAdapter):
     )
     # Full channel prefix including separator, derived from metadata.
     # Eliminates hardcoded "notify.mobile_app_" literals throughout the class.
-    _PREFIX: ClassVar[str] = (
-        ADAPTER_METADATA.channel_prefix + ADAPTER_METADATA.channel_separator
-    )
+    _CHANNEL_PREFIX: ClassVar[str] = ADAPTER_METADATA.channel_prefix + "_"
 
     @classmethod
     def get_metadata(cls) -> AdapterMetadata:
@@ -65,13 +63,13 @@ class MobileAppDeliveryAdapter(DeliveryAdapter):
     @classmethod
     def matches_channel(cls, channel_id: str) -> bool:
         """Return True if channel_id belongs to this adapter."""
-        return channel_id.startswith(cls._PREFIX)
+        return channel_id.startswith(cls._CHANNEL_PREFIX)
 
     @classmethod
     def extract_variant(cls, channel_id: str) -> str | None:
         """Return the device_id portion of a mobile_app channel_id."""
         if cls.matches_channel(channel_id):
-            return channel_id[len(cls._PREFIX) :]
+            return channel_id[len(cls._CHANNEL_PREFIX) :]
         return None
 
     @classmethod
@@ -114,7 +112,7 @@ class MobileAppDeliveryAdapter(DeliveryAdapter):
 
         """
         # Extract device ID from channel_id
-        device_id = channel_id[len(cls._PREFIX) :]
+        device_id = channel_id[len(cls._CHANNEL_PREFIX) :]
         # Format device name nicely
         device_name = device_id.replace("_", " ").title()
         return f"Mobile App ({device_name})"
@@ -163,12 +161,17 @@ class MobileAppDeliveryAdapter(DeliveryAdapter):
         self._hass = hass
         self.device_id = device_id
         # Full channel name derived from class-level prefix
-        self._channel = f"{self._PREFIX}{device_id}"
+        self._channel = f"{self._CHANNEL_PREFIX}{device_id}"
 
     @property
     def channel(self) -> str:  # type: ignore[override]  # mypy false positive: abstract property
         """Return the channel identifier for this device."""
         return self._channel
+
+    @property
+    def service_name(self) -> str:
+        """Return the notify service name for this device."""
+        return self.channel.removeprefix("notify.")
 
     async def deliver(
         self,
@@ -176,7 +179,7 @@ class MobileAppDeliveryAdapter(DeliveryAdapter):
         payload: NotificationPayload,
         contact_info: RecipientContactInfo,
         idempotency_key: str,
-        tts_settings: TTSSettings | None = None,  # noqa: ARG002
+        options: DeliveryOptions | None = None,
     ) -> DeliveryResult:
         """Deliver notification via mobile_app notify service.
 
@@ -188,8 +191,8 @@ class MobileAppDeliveryAdapter(DeliveryAdapter):
             Recipient contact information including mobile_device_id.
         idempotency_key : str
             Unique key for idempotent retries.
-        tts_settings : TTSSettings | None
-            Per-recipient TTS settings (not used by the mobile app adapter).
+        options : DeliveryOptions | None
+            Per-delivery options (not used by the mobile app adapter).
 
         Returns
         -------
@@ -198,7 +201,7 @@ class MobileAppDeliveryAdapter(DeliveryAdapter):
 
         """
         # Build the service name from device_id
-        service_name = f"mobile_app_{self.device_id}"
+        service_name = self.service_name
 
         try:
             # Build notification data

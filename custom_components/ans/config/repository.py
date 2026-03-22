@@ -5,9 +5,13 @@ from __future__ import annotations
 import copy
 import logging
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from homeassistant.core import HomeAssistant
+
+if TYPE_CHECKING:
+    from ..channels.channel_manager import ChannelManager
 
 from ..const import (
     # CONFIG_IDENTITY_DEFAULT_SETTINGS_KEY,
@@ -22,6 +26,7 @@ from ..models import (
     RecipientType,
     SystemConfig,
 )
+from .validator import ConfigValidator, FieldValidationError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -41,9 +46,7 @@ class ConfigRepository:
         self.recipients: dict[str, RecipientData] = {}
         self.recipient_configs: dict[str, RecipientConfig] = {}
 
-        # Injected by create_system() after ChannelManager construction.
-        from ..channels.channel_manager import ChannelManager  # noqa: PLC0415
-
+        # Set after ChannelManager is constructed (see __init__.py async_setup_entry).
         self.channel_manager: ChannelManager | None = None
 
     # ---------------------------
@@ -106,13 +109,28 @@ class ConfigRepository:
                 recipient_id = entry.data.get(RCPT_CONFIG_ID_KEY)
                 if recipient_id:
                     # Load receivers
-                    self.recipients[recipient_id] = RecipientData.from_dict(
+                    recipient_data = RecipientData.from_dict(
                         dict(entry.data)  # .get("data", {}))
                     )
                     # Load receiver configs
-                    self.recipient_configs[recipient_id] = RecipientConfig.from_dict(
+                    recipient_config = RecipientConfig.from_dict(
                         dict(entry.data)  # .get("options", {}))
                     )
+                    # Enforce channel-type consistency at load time
+                    try:
+                        ConfigValidator.validate_recipient_consistency(
+                            recipient_data, recipient_config
+                        )
+                    except FieldValidationError:
+                        _LOGGER.exception(
+                            "Sub-entry %s has incompatible channel mapping for recipient type '%s'; skipping",
+                            entry.subentry_id,
+                            recipient_data.type.value,
+                        )
+                        loaded = False
+                        continue
+                    self.recipients[recipient_id] = recipient_data
+                    self.recipient_configs[recipient_id] = recipient_config
                 else:
                     _LOGGER.warning(
                         "Sub-entry %s has no identity ID, skipping", entry.subentry_id
@@ -167,24 +185,6 @@ class ConfigRepository:
     # ---------------------------
     # Channel Management
     # ---------------------------
-
-    async def refresh_and_sync(self) -> None:
-        """Refresh channel detection and synchronize adapter state in one step.
-
-        Delegates to ChannelManager.sync() which is the single source of
-        truth for both channel metadata and live adapters.
-        """
-        if self.channel_manager is None:
-            _LOGGER.warning(
-                "refresh_and_sync called before ChannelManager was injected; skipping"
-            )
-            return
-        if not self.system_config:
-            _LOGGER.warning(
-                "refresh_and_sync called with no system_config available; skipping"
-            )
-            return
-        await self.channel_manager.sync(list(self.system_config.enabled_channels))
 
     def get_channels_for_ui(
         self, recipient_type: RecipientType | None = None

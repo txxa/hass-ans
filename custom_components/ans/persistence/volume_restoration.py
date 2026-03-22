@@ -122,6 +122,12 @@ class VolumeRestorationRegistry:
         self._persist_task = None
         self._persist_pending = False
         self._background_tasks: set[asyncio.Task] = set()  # Track background tasks
+        # Per-entity _delayed_restore tasks — tracked separately so they can be
+        # cancelled when a new delivery starts for the same entity.
+        self._restore_tasks: dict[str, asyncio.Task] = {}
+        # Per-entity fallback restore tasks — registered by the TTS adapter after
+        # each successful delivery and shared across adapter instances via the registry.
+        self._fallback_tasks: dict[str, asyncio.Task] = {}
 
     async def async_load(self) -> None:
         """Load restoration intents from storage and start state tracking.
@@ -176,6 +182,27 @@ class VolumeRestorationRegistry:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._persist_task
 
+        # Cancel all background tasks (e.g. _delayed_restore from state changes)
+        for task in list(self._background_tasks):
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        self._background_tasks.clear()
+
+        # Cancel per-entity delayed restore tasks
+        for task in list(self._restore_tasks.values()):
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        self._restore_tasks.clear()
+
+        # Cancel per-entity fallback tasks (registered by the TTS adapter)
+        for task in list(self._fallback_tasks.values()):
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        self._fallback_tasks.clear()
+
         # Stop state change listeners
         for unsub in self._entity_listeners.values():
             unsub()
@@ -221,12 +248,33 @@ class VolumeRestorationRegistry:
             now = dt_util.utcnow()
             timeout_time = now + timedelta(seconds=timeout_seconds)
 
+            # If an unexpired intent already exists, carry forward its original_volume
+            # rather than re-reading from entity state, which may already be at the
+            # TTS-set level from a prior rapid delivery (back-to-back scenario).
+            existing = self._intents.get(entity_id)
+            if existing is not None and datetime.fromisoformat(existing.timeout) > now:
+                original_volume = existing.original_volume
+                _LOGGER.debug(
+                    "Carrying forward original volume for %s: %.2f "
+                    "(active intent exists; current level may be TTS-set)",
+                    entity_id,
+                    original_volume,
+                )
+            else:
+                original_volume = float(current_volume)
+
+            # Cancel any pending _delayed_restore for this entity: it belongs to
+            # the prior delivery and would restore prematurely if left running.
+            pending_restore = self._restore_tasks.pop(entity_id, None)
+            if pending_restore and not pending_restore.done():
+                pending_restore.cancel()
+
             intent = VolumeIntent(
                 entity_id=entity_id,
-                original_volume=float(current_volume),
+                original_volume=original_volume,
                 override_volume=float(override_volume)
                 if override_volume is not None
-                else float(current_volume),
+                else original_volume,
                 timestamp=now.isoformat(),
                 timeout=timeout_time.isoformat(),
             )
@@ -243,7 +291,7 @@ class VolumeRestorationRegistry:
             _LOGGER.debug(
                 "Captured volume intent for %s: original=%.2f",
                 entity_id,
-                current_volume,
+                original_volume,
             )
 
     async def restore_volume(self, entity_id: str) -> None:
@@ -365,10 +413,17 @@ class VolumeRestorationRegistry:
                 entity_id,
                 new_state_val,
             )
-            # Schedule restoration with delay to ensure TTS fully completed
+            # Schedule restoration with delay to ensure TTS fully completed.
+            # Track per-entity so it can be cancelled if a new delivery starts
+            # before this task fires, preventing premature or wrong restoration.
+            existing_restore = self._restore_tasks.pop(entity_id, None)
+            if existing_restore and not existing_restore.done():
+                existing_restore.cancel()
             task = asyncio.create_task(self._delayed_restore(entity_id))
+            self._restore_tasks[entity_id] = task
             self._background_tasks.add(task)
             task.add_done_callback(self._background_tasks.discard)
+            task.add_done_callback(lambda _: self._restore_tasks.pop(entity_id, None))
 
     async def _delayed_restore(self, entity_id: str) -> None:
         """Restore volume after delay.
@@ -486,8 +541,23 @@ class VolumeRestorationRegistry:
                         expired.append(entity_id)
 
                 for entity_id in expired:
-                    _LOGGER.info(
-                        "Removing expired volume restoration intent: %s", entity_id
+                    _LOGGER.warning(
+                        "Volume restoration intent for %s expired without restoration "
+                        "— volume may be stuck at TTS level. "
+                        "Notifying user.",
+                        entity_id,
+                    )
+                    from homeassistant.components.persistent_notification import (  # noqa: PLC0415
+                        async_create as pn_async_create,
+                    )
+
+                    pn_async_create(
+                        self._hass,
+                        f"The volume on **{entity_id}** was not automatically "
+                        "restored after TTS playback. It may still be at the "
+                        "TTS volume level. Please check and adjust manually.",
+                        title="ANS: Volume Not Restored",
+                        notification_id=f"ans_volume_expired_{entity_id.replace('.', '_')}",
                     )
                     await self.complete_intent(entity_id)
 
@@ -527,6 +597,38 @@ class VolumeRestorationRegistry:
 
         except (OSError, ValueError) as e:
             _LOGGER.error("Failed to persist volume restoration registry: %s", e)
+
+    def set_fallback_task(self, entity_id: str, task: asyncio.Task) -> None:
+        """Register a fallback restore task for an entity in the shared registry.
+
+        Called by the TTS adapter after a successful delivery to schedule a
+        safety-net restore in case the PLAYING\u2192IDLE event is never received.
+        Cancels any previously registered fallback for the same entity so that
+        only one fallback task runs at a time regardless of adapter instance.
+
+        Args:
+            entity_id: Media player entity ID.
+            task: Asyncio Task running the fallback restore coroutine.
+
+        """
+        self.cancel_fallback_task(entity_id)
+        self._fallback_tasks[entity_id] = task
+        task.add_done_callback(lambda _: self._fallback_tasks.pop(entity_id, None))
+
+    def cancel_fallback_task(self, entity_id: str) -> None:
+        """Cancel any pending fallback restore task for an entity.
+
+        Called at the start of each delivery to prevent a stale fallback task
+        (from a prior or concurrently replaced adapter) from restoring volume
+        while the new delivery is in progress.
+
+        Args:
+            entity_id: Media player entity ID.
+
+        """
+        task = self._fallback_tasks.pop(entity_id, None)
+        if task and not task.done():
+            task.cancel()
 
     def _get_lock(self, entity_id: str) -> asyncio.Lock:
         """Get or create lock for entity.

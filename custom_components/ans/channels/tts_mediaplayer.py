@@ -236,9 +236,9 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
         self._channel = f"{self._CHANNEL_PREFIX}{entity_name}"
         # Per-device lock to prevent concurrent deliveries to same media player
         self._delivery_lock = asyncio.Lock()
-        # Fallback restore tasks: ensure volume is restored even when PLAYING→IDLE
-        # event is missed (e.g. Bluetooth disconnect before playback completes).
-        self._fallback_restore_tasks: dict[str, asyncio.Task] = {}
+        # Fallback restore tasks are tracked in VolumeRestorationRegistry (via
+        # VolumeController) so that all adapter generations share the same task
+        # map and a new adapter can cancel the old task on the next delivery.
 
         _LOGGER.debug(
             "Initialized TTSMediaPlayerAdapter: channel=%s",
@@ -289,22 +289,29 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
             idempotency_key,
         )
 
-        # Acquire per-device lock to prevent concurrent deliveries
+        # Acquire per-device lock to prevent concurrent deliveries.
+        # Only the lock-wait is bounded by the timeout; the delivery body itself
+        # runs to completion so that a CancelledError raised mid-delivery cannot
+        # leave the volume changed without a corresponding restore.
         try:
-            async with asyncio.timeout(DELIVERY_LOCK_TIMEOUT):
-                async with self._delivery_lock:
-                    return await self._deliver_with_volume_management(
-                        entity_id=entity_id,
-                        payload=payload,
-                        tts_settings=tts_settings,
-                        idempotency_key=idempotency_key,
-                    )
+            await asyncio.wait_for(
+                self._delivery_lock.acquire(), timeout=DELIVERY_LOCK_TIMEOUT
+            )
         except TimeoutError:
             error_msg = (
                 f"Delivery lock timeout for {entity_id} (another TTS in progress)"
             )
             _LOGGER.warning(error_msg)
             return self.transient_failure(error=error_msg)
+        try:
+            return await self._deliver_with_volume_management(
+                entity_id=entity_id,
+                payload=payload,
+                tts_settings=tts_settings,
+                idempotency_key=idempotency_key,
+            )
+        finally:
+            self._delivery_lock.release()
 
     async def _deliver_with_volume_management(
         self,
@@ -369,10 +376,9 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
             )
 
             # Cancel any pending fallback restore for this entity from a concurrent
-            # or prior delivery before capturing a fresh volume intent.
-            existing_fallback = self._fallback_restore_tasks.pop(entity_id, None)
-            if existing_fallback:
-                existing_fallback.cancel()
+            # or prior delivery (possibly from a prior adapter instance) before
+            # capturing a fresh volume intent.
+            self._volume_controller.cancel_fallback_task(entity_id)
 
             # Step 3: Capture original volume, set target volume, track override
             try:
@@ -404,10 +410,10 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
                 )
                 # Schedule a fallback restore in case the PLAYING→IDLE event is
                 # missed (e.g. Bluetooth disconnect before playback completes).
-                # The event-driven path in VolumeRestorationRegistry will complete
-                # the intent before this fires under normal conditions.
+                # Stored in the shared VolumeRestorationRegistry so all adapter
+                # generations can cancel it on the next delivery.
                 fallback = asyncio.create_task(self._fallback_restore(entity_id))
-                self._fallback_restore_tasks[entity_id] = fallback
+                self._volume_controller.set_fallback_task(entity_id, fallback)
                 return self.success()
 
             except ServiceNotFound as e:
@@ -497,13 +503,27 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
         """Sanitize message to prevent control-character injection and truncate.
 
         Sanitization steps (in order):
-        1. Remove control characters (non-printable)
-        2. Enforce maximum length
+        1. Remove control characters (non-printable), bidi overrides, and
+           zero-width characters (see ``CONTROL_CHAR_PATTERN``).
+        2. Enforce maximum length.
 
-        Note: HTML/XML escaping is intentionally omitted. Most TTS engines
-        accept plain text; escaping would cause engines to speak entity names
-        aloud (e.g., "&amp;" instead of "&"). SSML-aware engines should handle
-        their own escaping at the service layer.
+        .. warning:: SSML injection risk with SSML-aware TTS engines
+
+            HTML/XML escaping is intentionally omitted here. Most local TTS
+            engines (e.g. Piper) treat the message as plain text and would
+            speak escaped entities aloud (e.g. ``&amp;`` instead of ``&``).
+
+            However, **SSML-aware engines** (e.g. Google Cloud TTS, Amazon
+            Polly, Microsoft Azure TTS) evaluate ``<speak>``, ``<phoneme>``,
+            ``<break/>``, and similar tags embedded in the message. If message
+            content originates from untrusted sources (e.g. user input,
+            external automations, webhook data), an attacker could inject
+            arbitrary SSML markup to alter speech synthesis behaviour.
+
+            **Do not use SSML-aware TTS engines with untrusted message
+            sources** unless you add SSML escaping (``<`` → ``&lt;``,
+            ``>`` → ``&gt;``, ``&`` → ``&amp;``) before this method is
+            called. Piper and other plain-text engines are not affected.
 
         Parameters
         ----------
@@ -513,7 +533,7 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
         Returns
         -------
         str
-            Sanitized message safe for TTS service.
+            Sanitized message safe for plain-text TTS engines.
 
         """
         # Step 1: Remove control characters (non-printable ASCII)
@@ -572,20 +592,20 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
     async def _fallback_restore(self, entity_id: str) -> None:
         """Restore volume after a fallback timeout if PLAYING\u2192IDLE was missed.
 
-        Scheduled after every successful TTS delivery. Cancelled at the start of
-        the next delivery for the same entity. Runs as a safety net when the
-        state-change event never fires (e.g. Bluetooth disconnect mid-playback).
+        Scheduled after every successful TTS delivery and registered in the
+        shared VolumeRestorationRegistry via VolumeController, so that a new
+        adapter instance created by resync() can cancel this task on the next
+        delivery. Runs as a safety net when the state-change event never fires
+        (e.g. Bluetooth disconnect mid-playback).
         """
         try:
             await asyncio.sleep(FALLBACK_RESTORE_TIMEOUT)
             _LOGGER.warning(
                 "Fallback volume restore triggered for %s "
-                "\u2014 no PLAYING\u2192IDLE event received within %ds",
+                "— no PLAYING→IDLE event received within %ds",
                 entity_id,
                 FALLBACK_RESTORE_TIMEOUT,
             )
             await self._volume_controller.safe_restore_volume(entity_id)
         except asyncio.CancelledError:
             pass
-        finally:
-            self._fallback_restore_tasks.pop(entity_id, None)

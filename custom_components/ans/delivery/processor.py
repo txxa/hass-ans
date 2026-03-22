@@ -179,12 +179,12 @@ class NotificationDeliveryProcessor:
                     and not task.contact_info.phone_number
                 ):
                     missing_requirements.append("phone number")
-                # TODO: remove check of requires_ha_user
-                if (
-                    requirements.get("requires_ha_user", False)
-                    and not task.contact_info.mobile_device_id
-                ):
-                    missing_requirements.append("Home Assistant user")
+                # TODO: remove check of requires_ha_user, the mobile device id is not stored in the contact info but part of the channel name
+                # if (
+                #     requirements.get("requires_ha_user", False)
+                #     and not task.contact_info.mobile_device_id
+                # ):
+                #     missing_requirements.append("Home Assistant user")
 
                 if missing_requirements:
                     # Log attempt with validation failure

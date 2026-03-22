@@ -369,6 +369,22 @@ class NotificationOrchestrator:
                     tts_settings.volume_evening,
                     tts_settings.volume_night,
                 )
+            elif (
+                channel.startswith("media_player.")
+                and recipient_data.type != RecipientType.TTS
+            ):
+                # A non-TTS recipient routed to a media_player.* channel will
+                # deliver with default TTS settings (volume, format), which may
+                # not match the user's intent. This indicates a misconfiguration
+                # that should be corrected in the recipient's channel assignment.
+                _LOGGER.warning(
+                    "Recipient '%s' (type=%s) is assigned media_player channel '%s' "
+                    "but is not of type TTS — TTS settings will use defaults. "
+                    "Check the recipient configuration.",
+                    recipient_id,
+                    recipient_data.type.value,
+                    channel,
+                )
 
         return NotificationDeliveryTask(
             job_id=uuid4(),

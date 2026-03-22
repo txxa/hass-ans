@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING
 
@@ -165,6 +166,38 @@ class VolumeController:
                 entity_id,
                 exc_info=True,
             )
+
+    def set_fallback_task(self, entity_id: str, task: asyncio.Task) -> None:
+        """Register a fallback restore task in the shared registry for *entity_id*.
+
+        Delegates to :meth:`VolumeRestorationRegistry.set_fallback_task`.
+        Stores the task in the long-lived registry so that all adapter generations
+        share the same task map and a new adapter can cancel the old task.
+
+        Parameters
+        ----------
+        entity_id : str
+            Media player entity ID.
+        task : asyncio.Task
+            Task running the fallback restore coroutine.
+
+        """
+        self._volume_registry.set_fallback_task(entity_id, task)
+
+    def cancel_fallback_task(self, entity_id: str) -> None:
+        """Cancel any pending fallback restore task for *entity_id* in the registry.
+
+        Delegates to :meth:`VolumeRestorationRegistry.cancel_fallback_task`.
+        Must be called at the start of each delivery to prevent a stale fallback
+        task from a prior adapter instance from running concurrently.
+
+        Parameters
+        ----------
+        entity_id : str
+            Media player entity ID.
+
+        """
+        self._volume_registry.cancel_fallback_task(entity_id)
 
     async def _set_volume(self, entity_id: str, volume_level: float) -> None:
         """Set the media player volume via the HA service API.

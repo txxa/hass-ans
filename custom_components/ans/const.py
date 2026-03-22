@@ -1,5 +1,7 @@
 """Constants for the ANS integration."""
 
+from homeassistant.components.media_player.const import MediaPlayerEntityFeature
+
 # Integration identification
 DOMAIN = "ans"
 NAME = "Advanced Notification System"
@@ -167,3 +169,8 @@ TTS_DEFAULT_VOLUME_EVENING = 40
 TTS_DEFAULT_VOLUME_NIGHT = 20
 TTS_DEFAULT_VOLUME_OVERRIDE_LEVEL = 80
 TTS_DEFAULT_MESSAGE_FORMAT = "title_and_message"
+
+# Channel detection
+REQUIRED_MP_FEATURES = (
+    MediaPlayerEntityFeature.PLAY_MEDIA | MediaPlayerEntityFeature.VOLUME_SET
+)

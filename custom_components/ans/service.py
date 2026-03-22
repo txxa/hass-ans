@@ -80,7 +80,8 @@ async def async_setup_services(
             return
 
         # Refresh channels and re-sync adapters via the new unified manager
-        await config_repo.refresh_and_sync()
+        if config_repo.channel_manager:
+            await config_repo.channel_manager.resync()
         _LOGGER.info(
             "Channels refreshed: %d detected channels",
             config_repo.channel_manager.count_detected()

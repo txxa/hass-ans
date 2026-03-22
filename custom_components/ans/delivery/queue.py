@@ -73,30 +73,6 @@ class NotificationDeliveryTaskQueue:
     # Public API
     # --------------------
 
-    async def update_concurrency(self, max_concurrency: int) -> None:
-        """Update the maximum concurrency limit.
-
-        Args:
-            max_concurrency: New maximum number of concurrent deliveries.
-
-        """
-        if max_concurrency == self._max_concurrency:
-            return  # No change needed
-
-        old_value = self._max_concurrency
-        self._max_concurrency = max_concurrency
-
-        # Replace semaphore with new limit
-        # Note: We can't modify the existing semaphore, so we create a new one
-        # This is safe because workers acquire/release independently
-        self._semaphore = asyncio.Semaphore(max_concurrency)
-
-        _LOGGER.info(
-            "Updated queue concurrency limit from %d to %d",
-            old_value,
-            max_concurrency,
-        )
-
     async def enqueue(self, task: NotificationDeliveryTask) -> None:
         """Enqueue a delivery task for processing.
 
@@ -198,8 +174,8 @@ class NotificationDeliveryTaskQueue:
                 # Wait for next task with a timeout to check stop flag periodically
                 task = await asyncio.wait_for(self._queue.get(), timeout=1.0)
                 background_task = asyncio.create_task(self._run_task(task))
-                # Let task run in background without blocking
-                _ = background_task
+                self._background_tasks.add(background_task)
+                background_task.add_done_callback(self._background_tasks.discard)
             except TimeoutError:
                 # Check stopped flag and continue
                 continue

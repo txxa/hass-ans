@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
@@ -100,10 +101,7 @@ class VolumeRestorationRegistry:
         "volume_level": 0.5
     })
 
-    # Step 3: Update tracking with new volume (for user-change detection)
-    await registry.update_override_volume(entity_id, 0.5)
-
-    # Step 4: Play TTS (registry automatically restores volume when media player becomes idle)
+    # Step 3: Play TTS (registry automatically restores volume when media player becomes idle)
     await hass.services.async_call("tts", "speak", {...})
     ```
     """
@@ -119,7 +117,7 @@ class VolumeRestorationRegistry:
         self._store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
         self._intents: dict[str, VolumeIntent] = {}
         self._locks: dict[str, asyncio.Lock] = {}
-        self._state_unsubscribe = None
+        self._entity_listeners: dict[str, Callable[[], None]] = {}
         self._cleanup_task = None
         self._persist_task = None
         self._persist_pending = False
@@ -142,17 +140,22 @@ class VolumeRestorationRegistry:
                     len(self._intents),
                 )
 
-                # Attempt to restore any pending volumes immediately
-                await self._restore_pending_volumes()
-
         except (OSError, ValueError, KeyError) as e:
             _LOGGER.error("Failed to load volume restoration registry: %s", e)
             self._intents = {}
 
-        # Start state change listener
-        self._state_unsubscribe = async_track_state_change_event(
-            self._hass, list(self._intents.keys()), self._handle_state_change
-        )
+        # Register state change listeners BEFORE restoring volumes so that no
+        # PLAYING→IDLE transitions are missed during _restore_pending_volumes() awaits.
+        for entity_id in self._intents:
+            self._entity_listeners[entity_id] = async_track_state_change_event(
+                self._hass, [entity_id], self._handle_state_change
+            )
+
+        # Attempt to restore any pending volumes from previous session.
+        # Listeners are already registered above, so state transitions during
+        # these service calls will be captured.
+        if self._intents:
+            await self._restore_pending_volumes()
 
         # Start periodic cleanup task
         self._cleanup_task = asyncio.create_task(self._periodic_cleanup())
@@ -173,15 +176,20 @@ class VolumeRestorationRegistry:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._persist_task
 
-        # Stop state change listener
-        if self._state_unsubscribe:
-            self._state_unsubscribe()
+        # Stop state change listeners
+        for unsub in self._entity_listeners.values():
+            unsub()
+        self._entity_listeners.clear()
 
         # Persist final state
         await self._persist()
 
     async def capture_volume_intent(
-        self, entity_id: str, timeout_seconds: int = DEFAULT_TIMEOUT
+        self,
+        entity_id: str,
+        timeout_seconds: int = DEFAULT_TIMEOUT,
+        *,
+        override_volume: float | None = None,
     ) -> None:
         """Capture current volume for future restoration.
 
@@ -191,6 +199,9 @@ class VolumeRestorationRegistry:
         Args:
             entity_id: Media player entity ID.
             timeout_seconds: Intent expires after this many seconds (default: 1 hour).
+            override_volume: Volume that will be set for TTS. Initialising the
+                intent with the correct override avoids a stale-value window
+                between capture and the subsequent volume_set call.
 
         Raises:
             HomeAssistantError: If media player state cannot be retrieved.
@@ -213,7 +224,9 @@ class VolumeRestorationRegistry:
             intent = VolumeIntent(
                 entity_id=entity_id,
                 original_volume=float(current_volume),
-                override_volume=float(current_volume),  # Will be updated later
+                override_volume=float(override_volume)
+                if override_volume is not None
+                else float(current_volume),
                 timestamp=now.isoformat(),
                 timeout=timeout_time.isoformat(),
             )
@@ -221,9 +234,9 @@ class VolumeRestorationRegistry:
             self._intents[entity_id] = intent
             await self._schedule_persist()
 
-            # Start listening for state changes on this entity if not already
-            if self._state_unsubscribe is None:
-                self._state_unsubscribe = async_track_state_change_event(
+            # Start listening for state changes on this entity if not already tracking
+            if entity_id not in self._entity_listeners:
+                self._entity_listeners[entity_id] = async_track_state_change_event(
                     self._hass, [entity_id], self._handle_state_change
                 )
 
@@ -231,30 +244,6 @@ class VolumeRestorationRegistry:
                 "Captured volume intent for %s: original=%.2f",
                 entity_id,
                 current_volume,
-            )
-
-    async def update_override_volume(self, entity_id: str, volume: float) -> None:
-        """Update the override volume for user-change detection.
-
-        Should be called AFTER setting the volume for TTS.
-
-        Args:
-            entity_id: Media player entity ID.
-            volume: Volume level that was set (0.0-1.0).
-
-        """
-        async with self._get_lock(entity_id):
-            if entity_id not in self._intents:
-                _LOGGER.warning(
-                    "Cannot update override volume for %s: no intent found", entity_id
-                )
-                return
-
-            self._intents[entity_id].override_volume = float(volume)
-            await self._schedule_persist()
-
-            _LOGGER.debug(
-                "Updated override volume for %s: override=%.2f", entity_id, volume
             )
 
     async def restore_volume(self, entity_id: str) -> None:
@@ -294,7 +283,20 @@ class VolumeRestorationRegistry:
                 # Always remove the intent so the state-change listener does not
                 # fire a second restoration attempt later.
                 del self._intents[entity_id]
+                unsub = self._entity_listeners.pop(entity_id, None)
+                if unsub:
+                    unsub()
                 await self._schedule_persist()
+
+    async def _complete_intent_unlocked(self, entity_id: str) -> None:
+        """Remove intent and unsubscribe listener. Caller MUST hold the entity lock."""
+        if entity_id in self._intents:
+            del self._intents[entity_id]
+            unsub = self._entity_listeners.pop(entity_id, None)
+            if unsub:
+                unsub()
+            await self._schedule_persist()
+            _LOGGER.debug("Completed volume restoration intent for %s", entity_id)
 
     async def complete_intent(self, entity_id: str) -> None:
         """Mark volume restoration as complete and remove intent.
@@ -304,10 +306,7 @@ class VolumeRestorationRegistry:
 
         """
         async with self._get_lock(entity_id):
-            if entity_id in self._intents:
-                del self._intents[entity_id]
-                await self._schedule_persist()
-                _LOGGER.debug("Completed volume restoration intent for %s", entity_id)
+            await self._complete_intent_unlocked(entity_id)
 
     @callback
     def _handle_state_change(self, event: Event[Any]) -> None:
@@ -392,7 +391,7 @@ class VolumeRestorationRegistry:
                 _LOGGER.warning(
                     "Volume restoration intent for %s expired, removing", entity_id
                 )
-                await self.complete_intent(entity_id)
+                await self._complete_intent_unlocked(entity_id)
                 return
 
             # Restore original volume
@@ -408,7 +407,7 @@ class VolumeRestorationRegistry:
                     entity_id,
                     intent.original_volume,
                 )
-                await self.complete_intent(entity_id)
+                await self._complete_intent_unlocked(entity_id)
 
             except (HomeAssistantError, ValueError, KeyError) as e:
                 _LOGGER.error(

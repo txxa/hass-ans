@@ -7,19 +7,20 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from homeassistant.components.media_player.const import MediaPlayerEntityFeature
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_SERVICE_REGISTERED
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.entity_registry import (
     EVENT_ENTITY_REGISTRY_UPDATED,
     EventEntityRegistryUpdatedData,
 )
-from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.event import async_track_state_added_domain
 
+from .channels.channel_manager import ChannelManager
 from .config.repository import ConfigRepository
 from .const import (
+    REQUIRED_MP_FEATURES,
     SYS_DEFAULT_QUEUE_CONCURRENCY,
 )
 from .delivery.factory import ANSSystem, create_system
@@ -29,10 +30,6 @@ from .persistence.volume_restoration import VolumeRestorationRegistry
 from .service import async_setup_services
 
 _LOGGER = logging.getLogger(__name__)
-
-_REQUIRED_MP_FEATURES = (
-    MediaPlayerEntityFeature.PLAY_MEDIA | MediaPlayerEntityFeature.VOLUME_SET
-)
 
 
 # ---------------------------------------------------------------------------
@@ -46,7 +43,9 @@ async def _setup_config(hass: HomeAssistant, entry: ConfigEntry) -> ConfigReposi
     Parameters
     ----------
     hass : HomeAssistant
+        Home Assistant instance used to initialize and load integration data.
     entry : ConfigEntry
+        Config entry being set up for this integration instance.
 
     Returns
     -------
@@ -77,7 +76,9 @@ async def _setup_system(
     Parameters
     ----------
     hass : HomeAssistant
+        Home Assistant instance used to initialize system components.
     config_repo : ConfigRepository
+        Loaded configuration repository containing system settings and recipients.
     volume_registry : VolumeRestorationRegistry
         Must be already loaded before this call.
 
@@ -115,7 +116,9 @@ async def _setup_persistence(
     Parameters
     ----------
     hass : HomeAssistant
+        Home Assistant instance used to initialize persistence state.
     system : ANSSystem
+        Active ANS system whose registries and queues are restored from storage.
 
     Returns
     -------
@@ -148,6 +151,7 @@ async def _setup_tasks(
     Parameters
     ----------
     system : ANSSystem
+        Active ANS system whose queue and schedulers are started.
     pending_tasks : list
         ``(task, scheduled_time)`` pairs from persistence recovery.
     orphaned_retries : list
@@ -195,7 +199,7 @@ async def _setup_services(hass: HomeAssistant, system: ANSSystem) -> None:
 def _setup_listeners(
     hass: HomeAssistant,
     entry: ConfigEntry,
-    config_repo: ConfigRepository,
+    channel_manager: ChannelManager,
 ) -> None:
     """Register all event listeners for the lifetime of this config entry.
 
@@ -208,8 +212,11 @@ def _setup_listeners(
     Parameters
     ----------
     hass : HomeAssistant
+        Home Assistant instance used to register event bus and state listeners.
     entry : ConfigEntry
-    config_repo : ConfigRepository
+        Config entry whose unload callbacks own the listener lifecycle.
+    channel_manager : ChannelManager
+        Channel manager to resync channels when relevant HA events occur.
 
     """
 
@@ -230,8 +237,11 @@ def _setup_listeners(
             "New notify service 'notify.%s' registered — refreshing ANS channels",
             service,
         )
+        if channel_manager._setup_in_progress:
+            channel_manager._pending_resync = True
+            return
         try:
-            await config_repo.refresh_and_sync()
+            await channel_manager.resync()
         except Exception:
             _LOGGER.exception(
                 "Failed to refresh channels after notify service 'notify.%s' was registered",
@@ -249,7 +259,7 @@ def _setup_listeners(
         supported = (
             new_state.attributes.get("supported_features", 0) if new_state else 0
         )
-        if (supported & _REQUIRED_MP_FEATURES) != _REQUIRED_MP_FEATURES:
+        if (supported & REQUIRED_MP_FEATURES) != REQUIRED_MP_FEATURES:
             _LOGGER.debug(
                 "Ignoring media_player '%s': missing required features (0x%x)",
                 entity_id,
@@ -259,8 +269,11 @@ def _setup_listeners(
         _LOGGER.debug(
             "Capable media_player '%s' added — refreshing ANS channels", entity_id
         )
+        if channel_manager._setup_in_progress:
+            channel_manager._pending_resync = True
+            return
         try:
-            await config_repo.refresh_and_sync()
+            await channel_manager.resync()
         except Exception:
             _LOGGER.exception(
                 "Failed to refresh channels after media_player '%s' was added",
@@ -284,8 +297,11 @@ def _setup_listeners(
             "media_player entity '%s' removed — refreshing ANS channels",
             entity_id,
         )
+        if channel_manager._setup_in_progress:
+            channel_manager._pending_resync = True
+            return
         try:
-            await config_repo.refresh_and_sync()
+            await channel_manager.resync()
         except Exception:
             _LOGGER.exception(
                 "Failed to refresh channels after media_player '%s' was removed",
@@ -333,6 +349,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         system = await _setup_system(hass, config_repo, volume_registry)
         entry_data["system"] = system
 
+        # Wire ChannelManager into config_repo for UI-facing lookups
+        # (diagnostics, config flows, service handler).
+        config_repo.channel_manager = system.channel_manager
+
+        # Register event listeners early so no channel events are missed
+        # during the remaining setup phases. Resync calls are suppressed
+        # until finalize_setup() clears the _setup_in_progress flag.
+        _setup_listeners(hass, entry, system.channel_manager)
+
         # Phase 3 — persistence
         pending_tasks, orphaned_retries = await _setup_persistence(hass, system)
 
@@ -342,8 +367,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Phase 5 — HA services
         await _setup_services(hass, system)
 
-        # Register event listeners
-        _setup_listeners(hass, entry, config_repo)
+        # Finalize setup: clear suppression flag and flush any deferred resync.
+        await system.channel_manager.finalize_setup()
 
         _LOGGER.info("Successfully set up ANS config entry: %s", entry.entry_id)
 

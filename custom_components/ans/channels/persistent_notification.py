@@ -13,10 +13,16 @@ from homeassistant.exceptions import (
 )
 
 from ..models import DeliveryResult, NotificationPayload, RecipientContactInfo
-from .base import AdapterMetadata, AdapterType, ChannelRequirement, DeliveryAdapter
+from .base import (
+    AdapterMetadata,
+    AdapterType,
+    ChannelRequirement,
+    DeliveryAdapter,
+    DeliveryOptions,
+)
 
 if TYPE_CHECKING:
-    from ..models.recipient import TTSSettings
+    pass
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -41,7 +47,7 @@ class PersistentNotificationAdapter(DeliveryAdapter):
     )
     # Channel identifier derived from metadata — no separator appended for
     # STATIC adapters since the prefix IS the full channel ID.
-    _PREFIX: ClassVar[str] = ADAPTER_METADATA.channel_prefix
+    _CHANNEL_ID: ClassVar[str] = ADAPTER_METADATA.channel_prefix
 
     @classmethod
     def get_metadata(cls) -> AdapterMetadata:
@@ -51,7 +57,7 @@ class PersistentNotificationAdapter(DeliveryAdapter):
     @classmethod
     def matches_channel(cls, channel_id: str) -> bool:
         """Return True if channel_id belongs to this adapter."""
-        return channel_id == cls._PREFIX
+        return channel_id == cls._CHANNEL_ID
 
     @classmethod
     def extract_variant(cls, channel_id: str) -> str | None:  # noqa: ARG003
@@ -61,7 +67,7 @@ class PersistentNotificationAdapter(DeliveryAdapter):
     @property
     def channel(self) -> str:  # type: ignore[override]  # mypy false positive: abstract property
         """Return the channel identifier."""
-        return self._PREFIX
+        return self._CHANNEL_ID
 
     @classmethod
     def get_requirements(cls) -> ChannelRequirement:
@@ -114,7 +120,7 @@ class PersistentNotificationAdapter(DeliveryAdapter):
         payload: NotificationPayload,
         contact_info: RecipientContactInfo,
         idempotency_key: str,
-        tts_settings: TTSSettings | None = None,  # noqa: ARG002
+        options: DeliveryOptions | None = None,
     ) -> DeliveryResult:
         """Deliver notification via persistent notification service.
 
@@ -126,8 +132,8 @@ class PersistentNotificationAdapter(DeliveryAdapter):
             Recipient contact information (not used for persistent notifications).
         idempotency_key : str
             Unique key for idempotent retries.
-        tts_settings : TTSSettings | None
-            Per-recipient TTS settings (not used by this adapter).
+        options : DeliveryOptions | None
+            Per-delivery options (not used by this adapter).
 
         Returns
         -------
@@ -138,7 +144,9 @@ class PersistentNotificationAdapter(DeliveryAdapter):
         try:
             message = payload.message
 
-            # Add metadata as notification data if present
+            # Metadata is appended verbatim to the notification body by design.
+            # Persistent notifications are a system-wide channel; the raw key=value
+            # format is intentional for operator visibility and debugging.
             if payload.metadata:
                 message += "\n\nMetadata:\n"
                 for key, value in payload.metadata.items():

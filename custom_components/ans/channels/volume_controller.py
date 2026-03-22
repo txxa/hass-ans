@@ -133,9 +133,16 @@ class VolumeController:
             If capturing or setting the volume fails.
 
         """
-        await self._volume_registry.capture_volume_intent(entity_id)
-        await self._set_volume(entity_id, target_volume)
-        await self._volume_registry.update_override_volume(entity_id, target_volume)
+        await self._volume_registry.capture_volume_intent(
+            entity_id, override_volume=target_volume
+        )
+        try:
+            await self._set_volume(entity_id, target_volume)
+        except TTSVolumeControlError:
+            # _set_volume failed before the volume changed; clear the stale intent
+            # so the event-driven restore path doesn't fire later.
+            await self._volume_registry.complete_intent(entity_id)
+            raise
 
     async def safe_restore_volume(self, entity_id: str) -> None:
         """Attempt to restore the original volume, logging errors without re-raising.

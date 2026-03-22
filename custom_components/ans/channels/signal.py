@@ -13,10 +13,16 @@ from homeassistant.exceptions import (
 )
 
 from ..models import DeliveryResult, NotificationPayload, RecipientContactInfo
-from .base import AdapterMetadata, AdapterType, ChannelRequirement, DeliveryAdapter
+from .base import (
+    AdapterMetadata,
+    AdapterType,
+    ChannelRequirement,
+    DeliveryAdapter,
+    DeliveryOptions,
+)
 
 if TYPE_CHECKING:
-    from ..models.recipient import TTSSettings
+    pass
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -52,7 +58,7 @@ class SignalDeliveryAdapter(DeliveryAdapter):
     )
     # Channel identifier derived from metadata — no separator appended for
     # DYNAMIC_SINGLE adapters since the prefix IS the full channel ID.
-    _PREFIX: ClassVar[str] = ADAPTER_METADATA.channel_prefix
+    _CHANNEL_ID: ClassVar[str] = ADAPTER_METADATA.channel_prefix
 
     @classmethod
     def get_metadata(cls) -> AdapterMetadata:
@@ -62,7 +68,7 @@ class SignalDeliveryAdapter(DeliveryAdapter):
     @classmethod
     def matches_channel(cls, channel_id: str) -> bool:
         """Return True if channel_id belongs to this adapter."""
-        return channel_id == cls._PREFIX
+        return channel_id == cls._CHANNEL_ID
 
     @classmethod
     def extract_variant(cls, channel_id: str) -> str | None:  # noqa: ARG003
@@ -72,7 +78,7 @@ class SignalDeliveryAdapter(DeliveryAdapter):
     @property
     def channel(self) -> str:  # type: ignore[override]  # mypy false positive: abstract property
         """Return the channel identifier."""
-        return self._PREFIX
+        return self._CHANNEL_ID
 
     @property
     def service_name(self) -> str:
@@ -234,7 +240,7 @@ class SignalDeliveryAdapter(DeliveryAdapter):
         payload: NotificationPayload,
         contact_info: RecipientContactInfo,
         idempotency_key: str,
-        tts_settings: TTSSettings | None = None,  # noqa: ARG002
+        options: DeliveryOptions | None = None,
     ) -> DeliveryResult:
         """Deliver notification via Signal messenger notify service.
 
@@ -254,8 +260,8 @@ class SignalDeliveryAdapter(DeliveryAdapter):
             Recipient contact information including phone number.
         idempotency_key : str
             Unique key for idempotent retries.
-        tts_settings : TTSSettings | None
-            Per-recipient TTS settings (not used by the Signal adapter).
+        options : DeliveryOptions | None
+            Per-delivery options (not used by the Signal adapter).
 
         Returns
         -------

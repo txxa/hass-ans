@@ -52,6 +52,7 @@ from ..models import (
     NotificationType,
     RecipientConfig,
     RecipientData,
+    RecipientType,
     SystemConfig,
 )
 
@@ -345,9 +346,20 @@ class ConfigValidator:
         channels_high: list[str] | None,
         channels_critical: list[str] | None,
         available_channels: list[str] | None = None,
+        recipient_type=None,
     ) -> None:
         """Validate channel mapping consistency."""
         from ..models import NotificationCriticality  # noqa: PLC0415
+
+        # Choose allowed channel pattern based on recipient type.
+        # TTS recipients use media_player.* channels; all others use notify.* channels.
+        # When recipient_type is None (e.g. called from __post_init__), both are allowed.
+        if recipient_type is None:
+            regex_pattern = "^(notify|media_player)\\.[a-zA-Z0-9_]+$"
+        elif recipient_type == RecipientType.TTS:
+            regex_pattern = "^media_player\\.[a-zA-Z0-9_]+$"
+        else:
+            regex_pattern = "^notify\\.[a-zA-Z0-9_]+$"
 
         # Validate each channel list
         for channels, level in [
@@ -362,7 +374,7 @@ class ConfigValidator:
                         channels,
                         min_length=0,
                         allowed_values=available_channels,
-                        regex_pattern="^(notify|media_player)\\.[a-zA-Z0-9_]+$",
+                        regex_pattern=regex_pattern,
                     )
                 except ValueError as e:
                     raise FieldValidationError(
@@ -372,6 +384,28 @@ class ConfigValidator:
                     raise FieldValidationError(
                         f"{RCPT_CONFIG_CHANNELS_KEY}_{level}", str(e)
                     ) from e
+
+    @staticmethod
+    def validate_recipient_consistency(
+        recipient_data: RecipientData, recipient_config: RecipientConfig
+    ) -> None:
+        """Validate that a RecipientConfig's channels are compatible with its RecipientData type.
+
+        Args:
+            recipient_data: The recipient metadata (carries the type).
+            recipient_config: The recipient delivery configuration (carries channel lists).
+
+        Raises:
+            FieldValidationError: If channels are incompatible with the recipient type.
+
+        """
+        ConfigValidator._validate_recipient_channel_mapping(
+            recipient_config.channels_low,
+            recipient_config.channels_medium,
+            recipient_config.channels_high,
+            recipient_config.channels_critical,
+            recipient_type=recipient_data.type,
+        )
 
     @staticmethod
     def _validate_recipient_dnd_settings(  # noqa: C901
@@ -763,8 +797,6 @@ class ConfigValidator:
             raise FieldValidationError(RCPT_CONFIG_ID_KEY, str(e)) from e
 
         # Validate type
-        from ..models import RecipientType  # noqa: PLC0415
-
         if not isinstance(recipient.type, RecipientType):
             raise FieldValidationError(
                 RCPT_CONFIG_TYPE_KEY,

@@ -214,9 +214,10 @@ class RecipientConfigFlow(ConfigSubentryFlow):
                 for user in not_configured_ha_users
             ]
         )
-        options.append(
-            SelectOptionDict(value=RECIPIENT_CHOICE_TTS, label=RECIPIENT_CHOICE_TTS)
-        )
+        if self.system_config and self.system_config.tts_service:
+            options.append(
+                SelectOptionDict(value=RECIPIENT_CHOICE_TTS, label=RECIPIENT_CHOICE_TTS)
+            )
         options.append(
             SelectOptionDict(
                 value=RECIPIENT_CHOICE_VIRTUAL, label=RECIPIENT_CHOICE_VIRTUAL
@@ -729,6 +730,10 @@ class RecipientConfigFlow(ConfigSubentryFlow):
             # Set recipient_id in settings to link them
             self._recipient_settings[RCPT_CONFIG_RECIPIENT_ID_KEY] = recipient_data.id
             recipient_config = RecipientConfig.from_dict(self._recipient_settings)
+
+            ConfigValidator.validate_recipient_consistency(
+                recipient_data, recipient_config
+            )
 
             # Combine both into a single data dict for ConfigSubentry
             data = recipient_data.to_dict()

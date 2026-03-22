@@ -13,10 +13,9 @@ import inspect
 import logging
 from typing import TYPE_CHECKING
 
-from homeassistant.components.media_player.const import MediaPlayerEntityFeature
 from homeassistant.core import HomeAssistant
 
-from ..const import PERSISTENT_NOTIFICATION_CHANNEL
+from ..const import PERSISTENT_NOTIFICATION_CHANNEL, REQUIRED_MP_FEATURES
 from ..models import ChannelInfo, ChannelScope, RecipientType
 from .base import (
     AdapterFactory,
@@ -31,10 +30,8 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-_REQUIRED_MP_FEATURES = (
-    MediaPlayerEntityFeature.PLAY_MEDIA | MediaPlayerEntityFeature.VOLUME_SET
-)
 _TTS_ACTION_ENTITY_SUFFIXES: frozenset[str] = frozenset({"speak", "clear_cache"})
+_NOTIFY_SERVICE_EXCLUDE: frozenset[str] = frozenset({"notify", "send_message"})
 
 
 class ChannelManager:
@@ -69,6 +66,8 @@ class ChannelManager:
         self._factories: dict[str, AdapterFactory] = {}
         self._sync_lock = asyncio.Lock()
         self._last_enabled: list[str] = []
+        self._setup_in_progress: bool = True
+        self._pending_resync: bool = False
 
     # ------------------------------------------------------------------
     # Registration
@@ -139,6 +138,9 @@ class ChannelManager:
             }
 
             # Detect all non-STATIC channels currently visible in HA.
+            # STATIC channels (e.g. persistent_notification) are excluded from
+            # detection — HA guarantees core services are always available, so
+            # they never go STALE.
             detected_infos = [
                 info
                 for info in self._detect_all_channels()
@@ -250,6 +252,13 @@ class ChannelManager:
         """
         await self.sync(self._last_enabled)
 
+    async def finalize_setup(self) -> None:
+        """Mark setup complete and flush any deferred resync."""
+        self._setup_in_progress = False
+        if self._pending_resync:
+            self._pending_resync = False
+            await self.resync()
+
     # ------------------------------------------------------------------
     # Detection helpers (absorbed from channel_registry.py)
     # ------------------------------------------------------------------
@@ -266,14 +275,14 @@ class ChannelManager:
         notify_services = services.get("notify", {})
 
         if not notify_services:
-            _LOGGER.warning(
+            _LOGGER.debug(
                 "No notify services found during channel detection. "
                 "This can happen if ANS loads before notify integrations."
             )
 
         results: list[ChannelInfo] = []
         for service_id in sorted(notify_services.keys()):
-            if service_id in ("notify", "send_message"):
+            if service_id in _NOTIFY_SERVICE_EXCLUDE:
                 continue
 
             channel_id = f"notify.{service_id}"
@@ -315,7 +324,7 @@ class ChannelManager:
                 continue
 
             supported = state.attributes.get("supported_features", 0)
-            if (supported & _REQUIRED_MP_FEATURES) != _REQUIRED_MP_FEATURES:
+            if (supported & REQUIRED_MP_FEATURES) != REQUIRED_MP_FEATURES:
                 _LOGGER.debug(
                     "Skipping media player %s: missing required features (supported=0x%x)",
                     entity_id,
@@ -356,8 +365,6 @@ class ChannelManager:
 
     def _find_factory(self, channel_id: str) -> AdapterFactory | None:
         """Return the factory that handles *channel_id*, or None."""
-        if channel_id in self._factories:
-            return self._factories[channel_id]
         for factory in self._factories.values():
             if factory.adapter_class.matches_channel(channel_id):
                 return factory
@@ -527,7 +534,7 @@ def detect_notification_channels(
 
     results: list[ChannelInfo] = []
     for service_id in sorted(notify_services.keys()):
-        if service_id in ("notify", "send_message"):
+        if service_id in _NOTIFY_SERVICE_EXCLUDE:
             continue
 
         channel_id = f"notify.{service_id}"
@@ -573,7 +580,7 @@ def detect_media_players(hass: HomeAssistant) -> list[ChannelInfo]:
             continue
 
         supported = state.attributes.get("supported_features", 0)
-        if (supported & _REQUIRED_MP_FEATURES) != _REQUIRED_MP_FEATURES:
+        if (supported & REQUIRED_MP_FEATURES) != REQUIRED_MP_FEATURES:
             continue
 
         friendly_name = state.attributes.get("friendly_name", entity_id)

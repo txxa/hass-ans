@@ -8,7 +8,6 @@ import re
 from typing import TYPE_CHECKING, ClassVar
 
 from homeassistant.const import (
-    ATTR_ENTITY_ID,
     STATE_OFF,
     STATE_UNAVAILABLE,
 )
@@ -32,6 +31,8 @@ from .base import (
     AdapterType,
     ChannelRequirement,
     DeliveryAdapter,
+    DeliveryOptions,
+    TTSDeliveryOptions,
 )
 from .volume_controller import VolumeController
 
@@ -43,11 +44,18 @@ _LOGGER = logging.getLogger(__name__)
 
 # TTS Message Sanitization Constants
 MAX_MESSAGE_LENGTH = 1000  # Maximum characters before truncation
-CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x1f\x7f-\x9f]")  # Non-printable characters
+# C0/C1 non-printable control chars, Unicode bidi override/embedding controls,
+# and bidi isolate controls — prevents log corruption and text rendering attacks.
+CONTROL_CHAR_PATTERN = re.compile(
+    r"[\x00-\x1f\x7f-\x9f"  # C0 and C1 control characters
+    r"\u200b-\u200f"  # Zero-width chars and directional marks
+    r"\u202a-\u202e"  # Bidi embedding/override controls
+    r"\u2066-\u2069]"  # Bidi isolate controls
+)
 
 # Delivery timing constants
 DELIVERY_LOCK_TIMEOUT = 30  # seconds to wait for device lock
-POWER_ON_WAIT_SECONDS = 1.0  # seconds to wait after powering on a media player
+FALLBACK_RESTORE_TIMEOUT = 60  # seconds before fallback volume restore fires
 
 
 class TTSMediaPlayerAdapter(DeliveryAdapter):
@@ -70,13 +78,10 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
         adapter_type=AdapterType.DYNAMIC_MULTI,
         channel_prefix="media_player",
         integration="media_player",
-        channel_separator=".",
     )
     # Full channel prefix including separator, derived from metadata.
     # Eliminates hardcoded "media_player." literals throughout the class.
-    _PREFIX: ClassVar[str] = (
-        ADAPTER_METADATA.channel_prefix + ADAPTER_METADATA.channel_separator
-    )
+    _CHANNEL_PREFIX: ClassVar[str] = "media_player."
 
     @classmethod
     def get_requirements(cls) -> ChannelRequirement:
@@ -118,7 +123,7 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
 
         """
         # Extract entity name from channel_id
-        entity_name = channel_id[len(cls._PREFIX) :]
+        entity_name = channel_id[len(cls._CHANNEL_PREFIX) :]
         # Format name nicely: underscores to spaces, title case
         return entity_name.replace("_", " ").title()
 
@@ -130,13 +135,13 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
     @classmethod
     def matches_channel(cls, channel_id: str) -> bool:
         """Return True if channel_id belongs to this adapter."""
-        return channel_id.startswith(cls._PREFIX)
+        return channel_id.startswith(cls._CHANNEL_PREFIX)
 
     @classmethod
     def extract_variant(cls, channel_id: str) -> str | None:
         """Return the entity_name portion of a media_player channel_id."""
         if cls.matches_channel(channel_id):
-            return channel_id[len(cls._PREFIX) :]
+            return channel_id[len(cls._CHANNEL_PREFIX) :]
         return None
 
     @classmethod
@@ -228,9 +233,12 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
         self._config_repo = config_repo
         self._volume_controller = volume_controller
         # Full channel name derived from class-level prefix
-        self._channel = f"{self._PREFIX}{entity_name}"
+        self._channel = f"{self._CHANNEL_PREFIX}{entity_name}"
         # Per-device lock to prevent concurrent deliveries to same media player
         self._delivery_lock = asyncio.Lock()
+        # Fallback restore tasks: ensure volume is restored even when PLAYING→IDLE
+        # event is missed (e.g. Bluetooth disconnect before playback completes).
+        self._fallback_restore_tasks: dict[str, asyncio.Task] = {}
 
         _LOGGER.debug(
             "Initialized TTSMediaPlayerAdapter: channel=%s",
@@ -248,7 +256,7 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
         payload: NotificationPayload,
         contact_info: RecipientContactInfo,
         idempotency_key: str,
-        tts_settings: TTSSettings | None = None,
+        options: DeliveryOptions | None = None,
     ) -> DeliveryResult:
         """Deliver notification via TTS to media player.
 
@@ -260,8 +268,8 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
             Recipient contact information (unused for TTS).
         idempotency_key : str
             Unique key for idempotent retries.
-        tts_settings : TTSSettings | None
-            Per-recipient TTS configuration (volume, format, etc.).
+        options : DeliveryOptions | None
+            Per-delivery options including TTS settings.
 
         Returns
         -------
@@ -269,6 +277,9 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
             Result of delivery attempt (success or failure).
 
         """
+        tts_settings = (
+            options.tts_settings if isinstance(options, TTSDeliveryOptions) else None
+        )
         entity_id = self.channel  # Full entity ID: media_player.living_room
 
         _LOGGER.info(
@@ -339,43 +350,10 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
                 _LOGGER.error(error)
                 return self.permanent_failure(error=error)
 
-            if state.state == STATE_UNAVAILABLE:
-                error = f"Media player {entity_id} is unavailable"
+            if state.state in (STATE_UNAVAILABLE, STATE_OFF):
+                error = f"Media player {entity_id} is {state.state}, delivery skipped; will retry"
                 _LOGGER.warning(error)
                 return self.transient_failure(error=error)
-
-            if state.state == STATE_OFF:
-                # Attempt to power on (some media players support this)
-                _LOGGER.info(
-                    "Media player %s is off, attempting to power on", entity_id
-                )
-                try:
-                    await self._hass.services.async_call(
-                        "media_player",
-                        "turn_on",
-                        {ATTR_ENTITY_ID: entity_id},
-                        blocking=True,
-                    )
-                    # Wait a moment for device to power on
-                    await asyncio.sleep(POWER_ON_WAIT_SECONDS)
-                    # Re-check state
-                    new_state = self._hass.states.get(entity_id)
-                    if new_state and new_state.state in (STATE_OFF, STATE_UNAVAILABLE):
-                        error = f"Media player {entity_id} could not be powered on"
-                        _LOGGER.warning(error)
-                        return self.transient_failure(error=error)
-                except ServiceNotFound as e:
-                    error = f"Failed to power on {entity_id}: {e}"
-                    _LOGGER.error(error)
-                    return self.permanent_failure(error=error)
-                except ServiceValidationError as e:
-                    error = f"Failed to power on {entity_id}: {e}"
-                    _LOGGER.error(error)
-                    return self.permanent_failure(error=error)
-                except HomeAssistantError as e:
-                    error = f"Failed to power on {entity_id}: {e}"
-                    _LOGGER.warning(error)
-                    return self.transient_failure(error=error)
 
             _LOGGER.debug("Media player %s state: %s", entity_id, state.state)
 
@@ -389,6 +367,12 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
                 target_volume * 100,
                 payload.criticality.value,
             )
+
+            # Cancel any pending fallback restore for this entity from a concurrent
+            # or prior delivery before capturing a fresh volume intent.
+            existing_fallback = self._fallback_restore_tasks.pop(entity_id, None)
+            if existing_fallback:
+                existing_fallback.cancel()
 
             # Step 3: Capture original volume, set target volume, track override
             try:
@@ -418,9 +402,12 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
                     entity_id,
                     payload.notification_id,
                 )
-                # Success: the player will enter PLAYING then transition to IDLE;
-                # the event-driven volume restoration in VolumeRestorationRegistry
-                # handles cleanup automatically.
+                # Schedule a fallback restore in case the PLAYING→IDLE event is
+                # missed (e.g. Bluetooth disconnect before playback completes).
+                # The event-driven path in VolumeRestorationRegistry will complete
+                # the intent before this fires under normal conditions.
+                fallback = asyncio.create_task(self._fallback_restore(entity_id))
+                self._fallback_restore_tasks[entity_id] = fallback
                 return self.success()
 
             except ServiceNotFound as e:
@@ -581,3 +568,24 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
         )
 
         _LOGGER.debug("TTS speak called: engine=%s, player=%s", tts_service, entity_id)
+
+    async def _fallback_restore(self, entity_id: str) -> None:
+        """Restore volume after a fallback timeout if PLAYING\u2192IDLE was missed.
+
+        Scheduled after every successful TTS delivery. Cancelled at the start of
+        the next delivery for the same entity. Runs as a safety net when the
+        state-change event never fires (e.g. Bluetooth disconnect mid-playback).
+        """
+        try:
+            await asyncio.sleep(FALLBACK_RESTORE_TIMEOUT)
+            _LOGGER.warning(
+                "Fallback volume restore triggered for %s "
+                "\u2014 no PLAYING\u2192IDLE event received within %ds",
+                entity_id,
+                FALLBACK_RESTORE_TIMEOUT,
+            )
+            await self._volume_controller.safe_restore_volume(entity_id)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            self._fallback_restore_tasks.pop(entity_id, None)

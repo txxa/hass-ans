@@ -22,6 +22,9 @@ _LOGGER = logging.getLogger(__name__)
 
 # HA volume scale: API accepts 0.0–1.0, UI and config expose 0–100.
 VOLUME_SCALE = 100
+# Maximum seconds to wait for a media_player.volume_set service call to complete.
+# Guards against hung media player integrations stalling the event loop.
+VOLUME_SET_TIMEOUT = 10
 
 
 class VolumeController:
@@ -159,6 +162,11 @@ class VolumeController:
         """
         try:
             await self._volume_registry.restore_volume(entity_id)
+        except asyncio.CancelledError:
+            # CancelledError is BaseException, not Exception — propagate it so
+            # that task cancellation (e.g. during HA shutdown) is not swallowed
+            # here and the caller's cleanup/finally blocks remain aware of it.
+            raise
         except Exception:  # noqa: BLE001
             _LOGGER.warning(
                 "Failed to restore volume for %s after delivery error; "
@@ -199,6 +207,27 @@ class VolumeController:
         """
         self._volume_registry.cancel_fallback_task(entity_id)
 
+    def get_delivery_lock(self, entity_id: str) -> asyncio.Lock:
+        """Get the shared delivery lock for *entity_id* from the registry.
+
+        Delegates to :meth:`VolumeRestorationRegistry.get_delivery_lock`.
+        Callers acquire this lock (via ``asyncio.timeout``) in
+        :meth:`TTSMediaPlayerAdapter.deliver` to serialise concurrent deliveries
+        to the same media player across all adapter instances and generations.
+
+        Parameters
+        ----------
+        entity_id : str
+            Media player entity ID.
+
+        Returns
+        -------
+        asyncio.Lock
+            Shared delivery lock for this entity.
+
+        """
+        return self._volume_registry.get_delivery_lock(entity_id)
+
     async def _set_volume(self, entity_id: str, volume_level: float) -> None:
         """Set the media player volume via the HA service API.
 
@@ -216,16 +245,21 @@ class VolumeController:
 
         """
         try:
-            await self._hass.services.async_call(
-                "media_player",
-                SERVICE_VOLUME_SET,
-                {
-                    ATTR_ENTITY_ID: entity_id,
-                    "volume_level": volume_level,
-                },
-                blocking=True,
-            )
+            async with asyncio.timeout(VOLUME_SET_TIMEOUT):
+                await self._hass.services.async_call(
+                    "media_player",
+                    SERVICE_VOLUME_SET,
+                    {
+                        ATTR_ENTITY_ID: entity_id,
+                        "volume_level": volume_level,
+                    },
+                    blocking=True,
+                )
             _LOGGER.debug("Set volume for %s: %.0f%%", entity_id, volume_level * 100)
+        except TimeoutError as e:
+            raise TTSVolumeControlError(
+                f"Volume set timed out for {entity_id} after {VOLUME_SET_TIMEOUT}s"
+            ) from e
         except (HomeAssistantError, ServiceNotFound) as e:
             raise TTSVolumeControlError(
                 f"Failed to set volume for {entity_id}: {e}"

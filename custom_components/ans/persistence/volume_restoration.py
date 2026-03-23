@@ -13,8 +13,6 @@ from typing import TYPE_CHECKING
 from homeassistant.const import (
     STATE_IDLE,
     STATE_OFF,
-    STATE_PAUSED,
-    STATE_PLAYING,
     STATE_UNAVAILABLE,
 )
 from homeassistant.core import HomeAssistant, callback
@@ -37,6 +35,9 @@ DEFAULT_TIMEOUT = 3600  # 1 hour
 VOLUME_CHANGE_THRESHOLD = 0.02  # 2% difference to detect user changes
 RESTORATION_DELAY = 2.0  # seconds after idle before restoration
 DEBOUNCE_DELAY = 5.0  # seconds to debounce persistence
+# Maximum seconds to wait for a media_player.volume_set service call to complete.
+# Guards against hung media player integrations stalling the event loop.
+VOLUME_SET_TIMEOUT = 10
 
 
 @dataclass
@@ -117,6 +118,10 @@ class VolumeRestorationRegistry:
         self._store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
         self._intents: dict[str, VolumeIntent] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        # Delivery locks — one per entity, shared across all adapter instances.
+        # Used by TTSMediaPlayerAdapter to serialise concurrent deliveries to the
+        # same media player even when the adapter is recreated by resync().
+        self._delivery_locks: dict[str, asyncio.Lock] = {}
         self._entity_listeners: dict[str, Callable[[], None]] = {}
         self._cleanup_task = None
         self._persist_task = None
@@ -312,18 +317,22 @@ class VolumeRestorationRegistry:
 
             intent = self._intents[entity_id]
             try:
-                await self._hass.services.async_call(
-                    "media_player",
-                    "volume_set",
-                    {"entity_id": entity_id, "volume_level": intent.original_volume},
-                    blocking=True,
-                )
+                async with asyncio.timeout(VOLUME_SET_TIMEOUT):
+                    await self._hass.services.async_call(
+                        "media_player",
+                        "volume_set",
+                        {
+                            "entity_id": entity_id,
+                            "volume_level": intent.original_volume,
+                        },
+                        blocking=True,
+                    )
                 _LOGGER.debug(
                     "Immediately restored volume for %s: %.2f",
                     entity_id,
                     intent.original_volume,
                 )
-            except (HomeAssistantError, ValueError) as e:
+            except (TimeoutError, HomeAssistantError, ValueError) as e:
                 _LOGGER.warning(
                     "Failed to immediately restore volume for %s: %s", entity_id, e
                 )
@@ -397,21 +406,22 @@ class VolumeRestorationRegistry:
             # Remove intent without restoration
             task = asyncio.create_task(self.complete_intent(entity_id))
             self._background_tasks.add(task)
-            task.add_done_callback(self._background_tasks.discard)
+            task.add_done_callback(self._on_background_task_done)
             return
 
-        # Check if media player transitioned to idle/paused (restoration trigger)
+        # Trigger restoration when the player reaches idle from any non-idle state.
+        # This covers PLAYING→IDLE (normal), PAUSED→IDLE, BUFFERING→IDLE, and the
+        # case where a fast player skips STATE_PLAYING entirely (direct IDLE→IDLE
+        # is excluded by old_state_val != STATE_IDLE to avoid spurious triggers
+        # on HA state-refresh events where both old and new state are IDLE).
         new_state_val = new_state.state
         old_state_val = old_state.state if old_state else None
 
-        if old_state_val == STATE_PLAYING and new_state_val in (
-            STATE_IDLE,
-            STATE_PAUSED,
-        ):
+        if new_state_val == STATE_IDLE and old_state_val != STATE_IDLE:
             _LOGGER.debug(
-                "Media player %s transitioned to %s, scheduling volume restoration",
+                "Media player %s transitioned from %s to idle, scheduling volume restoration",
                 entity_id,
-                new_state_val,
+                old_state_val,
             )
             # Schedule restoration with delay to ensure TTS fully completed.
             # Track per-entity so it can be cancelled if a new delivery starts
@@ -421,8 +431,10 @@ class VolumeRestorationRegistry:
                 existing_restore.cancel()
             task = asyncio.create_task(self._delayed_restore(entity_id))
             self._restore_tasks[entity_id] = task
-            self._background_tasks.add(task)
-            task.add_done_callback(self._background_tasks.discard)
+            # Not added to _background_tasks — _restore_tasks is the canonical
+            # owner for per-entity cancellation (and async_unload cancels it).
+            # _on_background_task_done is attached directly for exception surfacing.
+            task.add_done_callback(self._on_background_task_done)
             task.add_done_callback(lambda _: self._restore_tasks.pop(entity_id, None))
 
     async def _delayed_restore(self, entity_id: str) -> None:
@@ -451,12 +463,16 @@ class VolumeRestorationRegistry:
 
             # Restore original volume
             try:
-                await self._hass.services.async_call(
-                    "media_player",
-                    "volume_set",
-                    {"entity_id": entity_id, "volume_level": intent.original_volume},
-                    blocking=True,
-                )
+                async with asyncio.timeout(VOLUME_SET_TIMEOUT):
+                    await self._hass.services.async_call(
+                        "media_player",
+                        "volume_set",
+                        {
+                            "entity_id": entity_id,
+                            "volume_level": intent.original_volume,
+                        },
+                        blocking=True,
+                    )
                 _LOGGER.info(
                     "Restored volume for %s: %.2f",
                     entity_id,
@@ -464,7 +480,7 @@ class VolumeRestorationRegistry:
                 )
                 await self._complete_intent_unlocked(entity_id)
 
-            except (HomeAssistantError, ValueError, KeyError) as e:
+            except (TimeoutError, HomeAssistantError, ValueError, KeyError) as e:
                 _LOGGER.error(
                     "Failed to restore volume for %s: %s (will retry)", entity_id, e
                 )
@@ -500,12 +516,16 @@ class VolumeRestorationRegistry:
 
             # Attempt restoration
             try:
-                await self._hass.services.async_call(
-                    "media_player",
-                    "volume_set",
-                    {"entity_id": entity_id, "volume_level": intent.original_volume},
-                    blocking=True,
-                )
+                async with asyncio.timeout(VOLUME_SET_TIMEOUT):
+                    await self._hass.services.async_call(
+                        "media_player",
+                        "volume_set",
+                        {
+                            "entity_id": entity_id,
+                            "volume_level": intent.original_volume,
+                        },
+                        blocking=True,
+                    )
                 _LOGGER.info(
                     "Restored volume for %s after restart: %.2f",
                     entity_id,
@@ -513,7 +533,7 @@ class VolumeRestorationRegistry:
                 )
                 restored.append(entity_id)
 
-            except (HomeAssistantError, ValueError, KeyError) as e:
+            except (TimeoutError, HomeAssistantError, ValueError, KeyError) as e:
                 _LOGGER.error(
                     "Failed to restore volume for %s after restart: %s (will retry)",
                     entity_id,
@@ -535,7 +555,11 @@ class VolumeRestorationRegistry:
                 now = dt_util.utcnow()
                 expired = []
 
-                for entity_id, intent in self._intents.items():
+                # Snapshot to a list: the loop below awaits complete_intent(),
+                # which yields and allows other coroutines to modify _intents.
+                # Without the snapshot this would raise RuntimeError if a new
+                # intent is captured while iterating.
+                for entity_id, intent in list(self._intents.items()):
                     timeout = datetime.fromisoformat(intent.timeout)
                     if now > timeout:
                         expired.append(entity_id)
@@ -643,3 +667,41 @@ class VolumeRestorationRegistry:
         if entity_id not in self._locks:
             self._locks[entity_id] = asyncio.Lock()
         return self._locks[entity_id]
+
+    def get_delivery_lock(self, entity_id: str) -> asyncio.Lock:
+        """Get or create a delivery lock for a media player entity.
+
+        Separate from the volume-intent lock (_get_lock) and used solely to
+        serialise concurrent TTS deliveries to the same entity. Stored here
+        so the lock survives adapter recreation during ChannelManager.resync()
+        — all adapter generations for the same entity share a single lock.
+
+        Args:
+            entity_id: Media player entity ID.
+
+        Returns:
+            Asyncio lock for this entity's TTS delivery serialisation.
+
+        """
+        if entity_id not in self._delivery_locks:
+            self._delivery_locks[entity_id] = asyncio.Lock()
+        return self._delivery_locks[entity_id]
+
+    def _on_background_task_done(self, task: asyncio.Task) -> None:
+        """Discard a completed background task and log any unexpected exceptions.
+
+        Used as a done-callback on all background tasks spawned in
+        _handle_state_change so that unhandled exceptions surface in the HA
+        log rather than being silently swallowed by asyncio.
+
+        Args:
+            task: The completed asyncio Task.
+
+        """
+        self._background_tasks.discard(task)
+        if not task.cancelled() and (exc := task.exception()):
+            _LOGGER.error(
+                "Background volume restoration task failed: %s",
+                exc,
+                exc_info=exc,
+            )

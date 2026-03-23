@@ -355,20 +355,24 @@ class NotificationOrchestrator:
         recipient_config = snapshot.recipient_configs.get(recipient_id)
 
         if recipient_data and recipient_config:
-            if (
-                recipient_data.type == RecipientType.TTS
-                and recipient_config.tts_settings
-            ):
-                tts_settings = recipient_config.tts_settings
-                _LOGGER.debug(
-                    "Task for recipient '%s' includes TTS settings: format=%s, volumes=(%d,%d,%d,%d)",
-                    recipient_id,
-                    tts_settings.message_format,
-                    tts_settings.volume_morning,
-                    tts_settings.volume_daytime,
-                    tts_settings.volume_evening,
-                    tts_settings.volume_night,
-                )
+            if recipient_data.type == RecipientType.TTS:
+                if recipient_config.tts_settings:
+                    tts_settings = recipient_config.tts_settings
+                    _LOGGER.debug(
+                        "Task for recipient '%s' includes TTS settings: format=%s, volumes=(%d,%d,%d,%d)",
+                        recipient_id,
+                        tts_settings.message_format,
+                        tts_settings.volume_morning,
+                        tts_settings.volume_daytime,
+                        tts_settings.volume_evening,
+                        tts_settings.volume_night,
+                    )
+                else:
+                    _LOGGER.warning(
+                        "TTS recipient '%s' has no tts_settings configured — "
+                        "delivery will use system defaults. Reconfigure via the ANS UI.",
+                        recipient_id,
+                    )
             elif (
                 channel.startswith("media_player.")
                 and recipient_data.type != RecipientType.TTS

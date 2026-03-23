@@ -54,8 +54,19 @@ CONTROL_CHAR_PATTERN = re.compile(
 )
 
 # Delivery timing constants
-DELIVERY_LOCK_TIMEOUT = 30  # seconds to wait for device lock
-FALLBACK_RESTORE_TIMEOUT = 60  # seconds before fallback volume restore fires
+# Must exceed TTS_SPEAK_TIMEOUT + VOLUME_SET_TIMEOUT (from volume_controller.py)
+# + headroom so that a concurrent delivery waiting for the lock outlasts
+# a hung first delivery completing its full cleanup (TTS timeout + volume restore).
+DELIVERY_LOCK_TIMEOUT = 60  # seconds to wait for device lock
+TTS_SPEAK_TIMEOUT = 30  # seconds to wait for tts.speak service call to complete
+
+# Fallback restore timeout — computed dynamically per delivery from message length.
+# Formula: max(MIN, len(message) // CPS + BUFFER)
+# This prevents the fallback from firing mid-playback for long messages while
+# keeping the safety-net tight for short ones.
+CHARS_PER_SECOND_ESTIMATE = 12  # German Thorsten / Piper; ~15 for English engines
+FALLBACK_RESTORE_BUFFER = 10  # seconds: player buffering + IDLE event latency
+FALLBACK_RESTORE_MIN = 30  # floor: short or empty messages still get a safety net
 
 
 class TTSMediaPlayerAdapter(DeliveryAdapter):
@@ -234,8 +245,9 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
         self._volume_controller = volume_controller
         # Full channel name derived from class-level prefix
         self._channel = f"{self._CHANNEL_PREFIX}{entity_name}"
-        # Per-device lock to prevent concurrent deliveries to same media player
-        self._delivery_lock = asyncio.Lock()
+        # Delivery lock is stored in VolumeRestorationRegistry (via
+        # VolumeController) so it survives adapter recreation during resync()
+        # and all adapter generations for the same entity share a single lock.
         # Fallback restore tasks are tracked in VolumeRestorationRegistry (via
         # VolumeController) so that all adapter generations share the same task
         # map and a new adapter can cancel the old task on the next delivery.
@@ -289,14 +301,22 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
             idempotency_key,
         )
 
-        # Acquire per-device lock to prevent concurrent deliveries.
-        # Only the lock-wait is bounded by the timeout; the delivery body itself
-        # runs to completion so that a CancelledError raised mid-delivery cannot
-        # leave the volume changed without a corresponding restore.
+        # Acquire the shared per-entity delivery lock to serialise concurrent
+        # deliveries to the same media player. The lock is held in the
+        # VolumeRestorationRegistry (accessed via VolumeController) so it
+        # survives adapter recreation during ChannelManager.resync().
+        #
+        # IMPORTANT: asyncio.timeout() is scoped to cover ONLY the lock
+        # acquisition, not the delivery body. The delivery body has its own
+        # independent timeout (TTS_SPEAK_TIMEOUT) inside _speak_message.
+        # Wrapping both in one timeout would cause a slow tts.speak call to
+        # exhaust the DELIVERY_LOCK_TIMEOUT and produce a misleading
+        # "Delivery lock timeout (another TTS in progress)" error even though
+        # no other delivery is competing for the lock.
+        lock = self._volume_controller.get_delivery_lock(entity_id)
         try:
-            await asyncio.wait_for(
-                self._delivery_lock.acquire(), timeout=DELIVERY_LOCK_TIMEOUT
-            )
+            async with asyncio.timeout(DELIVERY_LOCK_TIMEOUT):
+                await lock.acquire()
         except TimeoutError:
             error_msg = (
                 f"Delivery lock timeout for {entity_id} (another TTS in progress)"
@@ -311,7 +331,7 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
                 idempotency_key=idempotency_key,
             )
         finally:
-            self._delivery_lock.release()
+            lock.release()
 
     async def _deliver_with_volume_management(
         self,
@@ -412,7 +432,22 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
                 # missed (e.g. Bluetooth disconnect before playback completes).
                 # Stored in the shared VolumeRestorationRegistry so all adapter
                 # generations can cancel it on the next delivery.
-                fallback = asyncio.create_task(self._fallback_restore(entity_id))
+                # Timeout is computed from message length so it won't fire
+                # mid-playback for long messages yet stays tight for short ones.
+                fallback_timeout = max(
+                    FALLBACK_RESTORE_MIN,
+                    len(sanitized_message) // CHARS_PER_SECOND_ESTIMATE
+                    + FALLBACK_RESTORE_BUFFER,
+                )
+                _LOGGER.debug(
+                    "Fallback restore timeout for %s: %ds (message=%d chars)",
+                    entity_id,
+                    fallback_timeout,
+                    len(sanitized_message),
+                )
+                fallback = asyncio.create_task(
+                    self._fallback_restore(entity_id, timeout=fallback_timeout)
+                )
                 self._volume_controller.set_fallback_task(entity_id, fallback)
                 return self.success()
 
@@ -431,6 +466,16 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
                 await self._volume_controller.safe_restore_volume(entity_id)
                 volume_captured = False
                 return self.permanent_failure(error=error_msg)
+
+            except TimeoutError:
+                error_msg = (
+                    f"TTS speak timed out for {entity_id} after {TTS_SPEAK_TIMEOUT}s"
+                    " — TTS engine may be overloaded or unresponsive"
+                )
+                _LOGGER.warning(error_msg)
+                await self._volume_controller.safe_restore_volume(entity_id)
+                volume_captured = False
+                return self.transient_failure(error=error_msg)
 
             except HomeAssistantError as e:
                 error_msg = f"TTS service call failed for {entity_id}: {e}"
@@ -576,35 +621,45 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
             If the ``tts.speak`` action is unavailable.
 
         """
-        await self._hass.services.async_call(
-            domain="tts",
-            service="speak",
-            service_data={
-                "media_player_entity_id": entity_id,
-                "message": message,
-            },
-            target={"entity_id": tts_service},
-            blocking=True,
-        )
+        async with asyncio.timeout(TTS_SPEAK_TIMEOUT):
+            await self._hass.services.async_call(
+                domain="tts",
+                service="speak",
+                service_data={
+                    "media_player_entity_id": entity_id,
+                    "message": message,
+                },
+                target={"entity_id": tts_service},
+                blocking=True,
+            )
 
         _LOGGER.debug("TTS speak called: engine=%s, player=%s", tts_service, entity_id)
 
-    async def _fallback_restore(self, entity_id: str) -> None:
-        """Restore volume after a fallback timeout if PLAYING\u2192IDLE was missed.
+    async def _fallback_restore(self, entity_id: str, *, timeout: int) -> None:
+        """Restore volume after a fallback timeout if PLAYING→IDLE was missed.
 
         Scheduled after every successful TTS delivery and registered in the
         shared VolumeRestorationRegistry via VolumeController, so that a new
         adapter instance created by resync() can cancel this task on the next
         delivery. Runs as a safety net when the state-change event never fires
         (e.g. Bluetooth disconnect mid-playback).
+
+        Parameters
+        ----------
+        entity_id : str
+            Media player entity ID.
+        timeout : int
+            Seconds to wait before triggering the restore. Computed dynamically
+            from message length by the caller via CHARS_PER_SECOND_ESTIMATE.
+
         """
         try:
-            await asyncio.sleep(FALLBACK_RESTORE_TIMEOUT)
+            await asyncio.sleep(timeout)
             _LOGGER.warning(
                 "Fallback volume restore triggered for %s "
                 "— no PLAYING→IDLE event received within %ds",
                 entity_id,
-                FALLBACK_RESTORE_TIMEOUT,
+                timeout,
             )
             await self._volume_controller.safe_restore_volume(entity_id)
         except asyncio.CancelledError:

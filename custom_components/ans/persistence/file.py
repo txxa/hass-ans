@@ -376,30 +376,7 @@ class RetryQueue:
             "notification_id": task.payload.notification_id,  # Link for debugging
             "scheduled_at": scheduled_at.isoformat(),
             "reason": reason,
-            "task_snapshot": {
-                "recipient_id": task.recipient_id,
-                "channel_info": {
-                    "id": task.channel_info.id,
-                    "label": task.channel_info.label,
-                    "integration": task.channel_info.integration,
-                },
-                "payload": {
-                    "title": task.payload.title,
-                    "message": task.payload.message,
-                    "notification_id": task.payload.notification_id,
-                    "timestamp": task.payload.created_at.isoformat(),
-                    "metadata": task.payload.metadata,
-                },
-                "policy": {
-                    "rate_limit": task.policy.rate_limit,
-                    "rate_limit_window": task.policy.rate_limit_window,
-                    "retry_attempts": task.policy.retry_attempts,
-                },
-                "contact_info": {
-                    "email": task.contact_info.email_address,
-                    "phone": task.contact_info.phone_number,
-                },
-            },
+            "task_snapshot": task.to_dict(),
         }
 
         self._retries.append(retry_entry)

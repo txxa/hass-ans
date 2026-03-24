@@ -60,6 +60,7 @@ class NotificationDeliveryTask:
 
     created_at: datetime
     snapshot_id: str | None = None
+    is_retry: bool = False
 
     @classmethod
     def from_snapshot(cls, job_id: UUID, snapshot: dict) -> NotificationDeliveryTask:
@@ -96,24 +97,36 @@ class NotificationDeliveryTask:
             payload_data = snapshot["payload"]
             payload = NotificationPayload(
                 notification_id=payload_data.get("notification_id", str(job_id)),
-                source=payload_data.get("metadata", {}).get("source", "ans_recovery"),
+                source=payload_data.get(
+                    "source",
+                    payload_data.get("metadata", {}).get("source", "ans_recovery"),
+                ),
                 title=payload_data["title"],
                 message=payload_data["message"],
-                type=NotificationType.INFO,  # Default for recovered tasks
-                criticality=NotificationCriticality.MEDIUM,  # Default for recovered tasks
+                type=NotificationType(
+                    payload_data.get("type", NotificationType.INFO.value)
+                ),
+                criticality=NotificationCriticality(
+                    payload_data.get(
+                        "criticality", NotificationCriticality.MEDIUM.value
+                    )
+                ),
                 created_at=datetime.fromisoformat(payload_data["timestamp"]),
                 metadata=payload_data.get("metadata", {}),
             )
 
             # Reconstruct RecipientNotificationPolicy
             policy_data = snapshot["policy"]
+            _allowed_types_raw = policy_data.get(
+                "allowed_types", [t.value for t in NotificationType]
+            )
             policy = RecipientNotificationPolicy(
                 rate_limit=policy_data["rate_limit"],
                 rate_limit_window=policy_data["rate_limit_window"],
                 retry_attempts=policy_data["retry_attempts"],
-                allowed_types=list(NotificationType),  # Allow all for recovered tasks
-                blocked_sources_regex=None,
-                dnd=None,  # DND config not persisted
+                allowed_types=[NotificationType(t) for t in _allowed_types_raw],
+                blocked_sources_regex=policy_data.get("blocked_sources_regex"),
+                dnd=None,  # DND is time-sensitive; evaluated fresh, not persisted
             )
 
             # Reconstruct RecipientContactInfo
@@ -140,6 +153,7 @@ class NotificationDeliveryTask:
                 tts_settings=tts_settings,
                 created_at=datetime.now(UTC),  # New timestamp for retry
                 snapshot_id=None,
+                is_retry=True,
             )
 
         except (KeyError, ValueError, TypeError) as e:
@@ -163,8 +177,11 @@ class NotificationDeliveryTask:
             },
             "payload": {
                 "notification_id": self.payload.notification_id,
+                "source": self.payload.source,
                 "title": self.payload.title,
                 "message": self.payload.message,
+                "type": self.payload.type.value,
+                "criticality": self.payload.criticality.value,
                 "timestamp": self.payload.created_at.isoformat(),
                 "metadata": self.payload.metadata,
             },
@@ -172,12 +189,15 @@ class NotificationDeliveryTask:
                 "rate_limit": self.policy.rate_limit,
                 "rate_limit_window": self.policy.rate_limit_window,
                 "retry_attempts": self.policy.retry_attempts,
+                "allowed_types": [t.value for t in self.policy.allowed_types],
+                "blocked_sources_regex": self.policy.blocked_sources_regex,
             },
             "contact_info": {
                 "email": self.contact_info.email_address,
                 "phone": self.contact_info.phone_number,
             },
             "created_at": self.created_at.isoformat(),
+            "is_retry": self.is_retry,
         }
 
         # Include TTS settings if present

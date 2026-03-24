@@ -13,6 +13,8 @@ from .processor import NotificationDeliveryProcessor
 
 _LOGGER = logging.getLogger(__name__)
 
+_MAX_RETRY_AGE = timedelta(hours=2)
+
 
 class NotificationDeliveryTaskQueue:
     """Task queue for asynchronous notification delivery processing.
@@ -150,6 +152,29 @@ class NotificationDeliveryTaskQueue:
                     _last_job_id = job_id
                     # Check if retry is due
                     if scheduled_at <= now:
+                        # Max-age guard: drop retries for notifications older than
+                        # _MAX_RETRY_AGE to avoid stale deliveries (e.g. waking a
+                        # user hours after the original event, or bypassing a DND
+                        # window that has since closed).
+                        try:
+                            notification_ts = datetime.fromisoformat(
+                                task_snapshot["payload"]["timestamp"]
+                            )
+                            if now - notification_ts > _MAX_RETRY_AGE:
+                                _LOGGER.warning(
+                                    "Dropping stale retry for job_id=%s: notification "
+                                    "age exceeds %s (notification_id=%s)",
+                                    job_id,
+                                    _MAX_RETRY_AGE,
+                                    task_snapshot.get("payload", {}).get(
+                                        "notification_id", "unknown"
+                                    ),
+                                )
+                                await self._retry_queue.remove_retry(job_id)
+                                continue
+                        except (KeyError, ValueError):
+                            pass  # Malformed/old snapshot; proceed to from_snapshot()
+
                         _LOGGER.info(
                             "Executing pending retry for job_id=%s (scheduled at %s)",
                             job_id,

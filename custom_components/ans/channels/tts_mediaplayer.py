@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 from typing import TYPE_CHECKING, ClassVar
 
 from homeassistant.const import (
@@ -318,11 +319,15 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
             async with asyncio.timeout(DELIVERY_LOCK_TIMEOUT):
                 await lock.acquire()
         except TimeoutError:
-            error_msg = (
-                f"Delivery lock timeout for {entity_id} (another TTS in progress)"
+            _LOGGER.warning(
+                "Delivery lock timeout for %s notification_id=%s "
+                "(another TTS delivery in progress)",
+                entity_id,
+                payload.notification_id,
             )
-            _LOGGER.warning(error_msg)
-            return self.transient_failure(error=error_msg)
+            return self.transient_failure(
+                error=f"Delivery lock timeout for {entity_id} (another TTS in progress)"
+            )
         try:
             return await self._deliver_with_volume_management(
                 entity_id=entity_id,
@@ -373,26 +378,44 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
             # Step 1: Validate media player state
             state = self._hass.states.get(entity_id)
             if state is None:
-                error = f"Media player {entity_id} not found"
-                _LOGGER.error(error)
-                return self.permanent_failure(error=error)
+                _LOGGER.error(
+                    "Media player %s not found: notification_id=%s",
+                    entity_id,
+                    payload.notification_id,
+                )
+                return self.permanent_failure(
+                    error=f"Media player {entity_id} not found"
+                )
 
             if state.state in (STATE_UNAVAILABLE, STATE_OFF):
-                error = f"Media player {entity_id} is {state.state}, delivery skipped; will retry"
-                _LOGGER.warning(error)
-                return self.transient_failure(error=error)
+                _LOGGER.warning(
+                    "Media player %s is %s, delivery skipped: notification_id=%s "
+                    "— will retry",
+                    entity_id,
+                    state.state,
+                    payload.notification_id,
+                )
+                return self.transient_failure(
+                    error=f"Media player {entity_id} is {state.state}, delivery skipped; will retry"
+                )
 
-            _LOGGER.debug("Media player %s state: %s", entity_id, state.state)
+            _LOGGER.debug(
+                "Media player %s state: %s notification_id=%s",
+                entity_id,
+                state.state,
+                payload.notification_id,
+            )
 
             # Step 2: Calculate target volume
             target_volume = self._volume_controller.calculate_target_volume(
-                payload.criticality, tts_settings
+                payload.criticality, tts_settings, entity_id
             )
             _LOGGER.debug(
-                "Target volume for %s: %.0f%% (criticality=%s)",
+                "Target volume for %s: %.0f%% (criticality=%s notification_id=%s)",
                 entity_id,
                 target_volume * 100,
                 payload.criticality.value,
+                payload.notification_id,
             )
 
             # Cancel any pending fallback restore for this entity from a concurrent
@@ -406,23 +429,35 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
                 volume_captured = True  # Volume is now changed; restoration is required
             except TTSVolumeControlError as e:
                 # Volume was never changed; no restoration needed.
-                error_msg = f"Volume control failed for {entity_id}: {e}"
-                _LOGGER.warning(error_msg)
-                return self.transient_failure(error=error_msg)
+                _LOGGER.warning(
+                    "Volume control failed for %s: notification_id=%s: %s",
+                    entity_id,
+                    payload.notification_id,
+                    e,
+                )
+                return self.transient_failure(
+                    error=f"Volume control failed for {entity_id}: {e}"
+                )
 
             # Step 4: Format and sanitize message
             message_text = self._format_message(payload, tts_settings)
-            sanitized_message = self._sanitize_message(message_text)
+            sanitized_message = self._sanitize_message(message_text, entity_id)
             _LOGGER.debug(
-                "TTS message for %s: length=%d, format=%s",
+                "TTS message for %s: length=%d format=%s notification_id=%s",
                 entity_id,
                 len(sanitized_message),
                 tts_settings.message_format if tts_settings else "default",
+                payload.notification_id,
             )
 
             # Step 5: Call TTS service
             try:
-                await self._speak_message(entity_id, sanitized_message, tts_service)
+                await self._speak_message(
+                    entity_id,
+                    sanitized_message,
+                    tts_service,
+                    notification_id=payload.notification_id,
+                )
                 _LOGGER.info(
                     "TTS delivery successful: entity=%s, notification_id=%s",
                     entity_id,
@@ -440,49 +475,80 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
                     + FALLBACK_RESTORE_BUFFER,
                 )
                 _LOGGER.debug(
-                    "Fallback restore timeout for %s: %ds (message=%d chars)",
+                    "Fallback restore timeout for %s: %ds "
+                    "(message=%d chars) notification_id=%s",
                     entity_id,
                     fallback_timeout,
                     len(sanitized_message),
+                    payload.notification_id,
                 )
                 fallback = asyncio.create_task(
-                    self._fallback_restore(entity_id, timeout=fallback_timeout)
+                    self._fallback_restore(
+                        entity_id,
+                        timeout=fallback_timeout,
+                        notification_id=payload.notification_id,
+                    )
                 )
                 self._volume_controller.set_fallback_task(entity_id, fallback)
                 return self.success()
 
             except ServiceNotFound as e:
-                error_msg = f"TTS service not found for {entity_id}: {e}"
-                _LOGGER.error(error_msg)
+                _LOGGER.error(
+                    "TTS service not found for %s: notification_id=%s: %s",
+                    entity_id,
+                    payload.notification_id,
+                    e,
+                )
                 # TTS never started → player won't enter PLAYING → event-driven
                 # restoration (PLAYING→IDLE) won't fire → restore volume immediately.
                 await self._volume_controller.safe_restore_volume(entity_id)
                 volume_captured = False
-                return self.permanent_failure(error=error_msg)
+                return self.permanent_failure(
+                    error=f"TTS service not found for {entity_id}: {e}"
+                )
 
             except ServiceValidationError as e:
-                error_msg = f"TTS service validation error for {entity_id}: {e}"
-                _LOGGER.error(error_msg)
+                _LOGGER.error(
+                    "TTS service validation error for %s: notification_id=%s: %s",
+                    entity_id,
+                    payload.notification_id,
+                    e,
+                )
                 await self._volume_controller.safe_restore_volume(entity_id)
                 volume_captured = False
-                return self.permanent_failure(error=error_msg)
+                return self.permanent_failure(
+                    error=f"TTS service validation error for {entity_id}: {e}"
+                )
 
             except TimeoutError:
-                error_msg = (
-                    f"TTS speak timed out for {entity_id} after {TTS_SPEAK_TIMEOUT}s"
-                    " — TTS engine may be overloaded or unresponsive"
+                _LOGGER.warning(
+                    "TTS speak timed out for %s after %ds: notification_id=%s "
+                    "— TTS engine may be overloaded or unresponsive",
+                    entity_id,
+                    TTS_SPEAK_TIMEOUT,
+                    payload.notification_id,
                 )
-                _LOGGER.warning(error_msg)
                 await self._volume_controller.safe_restore_volume(entity_id)
                 volume_captured = False
-                return self.transient_failure(error=error_msg)
+                return self.transient_failure(
+                    error=(
+                        f"TTS speak timed out for {entity_id} after {TTS_SPEAK_TIMEOUT}s"
+                        " — TTS engine may be overloaded or unresponsive"
+                    )
+                )
 
             except HomeAssistantError as e:
-                error_msg = f"TTS service call failed for {entity_id}: {e}"
-                _LOGGER.warning(error_msg)
+                _LOGGER.warning(
+                    "TTS service call failed for %s: notification_id=%s: %s",
+                    entity_id,
+                    payload.notification_id,
+                    e,
+                )
                 await self._volume_controller.safe_restore_volume(entity_id)
                 volume_captured = False
-                return self.transient_failure(error=error_msg)
+                return self.transient_failure(
+                    error=f"TTS service call failed for {entity_id}: {e}"
+                )
 
         except TTSDeliveryError as e:
             # Handle known TTS delivery errors
@@ -496,9 +562,14 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
             # Catch-all for unexpected errors
             if volume_captured:
                 await self._volume_controller.safe_restore_volume(entity_id)
-            error_msg = f"Unexpected error during TTS delivery to {entity_id}: {e}"
-            _LOGGER.exception(error_msg)
-            return self.transient_failure(error=error_msg)
+            _LOGGER.exception(
+                "Unexpected error during TTS delivery to %s: notification_id=%s",
+                entity_id,
+                payload.notification_id,
+            )
+            return self.transient_failure(
+                error=f"Unexpected error during TTS delivery to {entity_id}: {e}"
+            )
 
     def _format_message(
         self,
@@ -544,7 +615,7 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
             f"Unknown message_format: {message_format!r}", is_permanent=True
         )
 
-    def _sanitize_message(self, message: str) -> str:
+    def _sanitize_message(self, message: str, entity_id: str = "unknown") -> str:
         """Sanitize message to prevent control-character injection and truncate.
 
         Sanitization steps (in order):
@@ -574,6 +645,8 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
         ----------
         message : str
             Raw message text.
+        entity_id : str
+            Media player entity ID used for truncation warning logs.
 
         Returns
         -------
@@ -589,14 +662,20 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
         if len(message) > MAX_MESSAGE_LENGTH:
             message = message[: MAX_MESSAGE_LENGTH - 1] + "…"
             _LOGGER.warning(
-                "TTS message truncated to %d characters (truncation marker appended)",
+                "TTS message truncated to %d characters (entity=%s)",
                 MAX_MESSAGE_LENGTH,
+                entity_id,
             )
 
         return message
 
     async def _speak_message(
-        self, entity_id: str, message: str, tts_service: str
+        self,
+        entity_id: str,
+        message: str,
+        tts_service: str,
+        *,
+        notification_id: str = "unknown",
     ) -> None:
         """Deliver a message via the modern ``tts.speak`` service action.
 
@@ -612,6 +691,8 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
         tts_service : str
             TTS engine entity ID (e.g. ``"tts.piper"`` or
             ``"tts.google_translate"``), used as the service call target.
+        notification_id : str
+            Unique identifier for the notification (used for logging).
 
         Raises
         ------
@@ -621,6 +702,16 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
             If the ``tts.speak`` action is unavailable.
 
         """
+        _t0 = time.monotonic()
+        _LOGGER.debug(
+            "TTS speak initiating: engine=%s player=%s message_len=%d notification_id=%s",
+            tts_service,
+            entity_id,
+            len(message),
+            notification_id,
+        )
+        # HA transport-level errors (e.g. ClientConnectionResetError) surface in
+        # homeassistant.components.tts logs, not here — see HA core for full trace.
         async with asyncio.timeout(TTS_SPEAK_TIMEOUT):
             await self._hass.services.async_call(
                 domain="tts",
@@ -633,9 +724,17 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
                 blocking=True,
             )
 
-        _LOGGER.debug("TTS speak called: engine=%s, player=%s", tts_service, entity_id)
+        _LOGGER.debug(
+            "TTS speak completed: engine=%s player=%s notification_id=%s elapsed_ms=%d",
+            tts_service,
+            entity_id,
+            notification_id,
+            int((time.monotonic() - _t0) * 1000),
+        )
 
-    async def _fallback_restore(self, entity_id: str, *, timeout: int) -> None:
+    async def _fallback_restore(
+        self, entity_id: str, *, timeout: int, notification_id: str = "unknown"
+    ) -> None:
         """Restore volume after a fallback timeout if PLAYING→IDLE was missed.
 
         Scheduled after every successful TTS delivery and registered in the
@@ -651,15 +750,18 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
         timeout : int
             Seconds to wait before triggering the restore. Computed dynamically
             from message length by the caller via CHARS_PER_SECOND_ESTIMATE.
+        notification_id : str
+            Unique identifier for the notification (used for logging).
 
         """
         try:
             await asyncio.sleep(timeout)
             _LOGGER.warning(
                 "Fallback volume restore triggered for %s "
-                "— no PLAYING→IDLE event received within %ds",
+                "— no PLAYING→IDLE event received within %ds notification_id=%s",
                 entity_id,
                 timeout,
+                notification_id,
             )
             await self._volume_controller.safe_restore_volume(entity_id)
         except asyncio.CancelledError:

@@ -6,6 +6,7 @@ Evaluates notification eligibility based on recipient policies:
 - do-not-disturb windows with bypass rules
 """
 
+import logging
 import re
 from datetime import UTC, datetime, time
 
@@ -15,6 +16,8 @@ from ..models import (
     FilterReason,
     NotificationDeliveryTask,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class FilterEngine:
@@ -44,9 +47,23 @@ class FilterEngine:
         # ------------------------------------------------------------
         if task.policy.allowed_types:
             if task.payload.type not in task.policy.allowed_types:
+                _LOGGER.debug(
+                    "FilterEngine: TYPE_NOT_ALLOWED notification_id=%s "
+                    "channel_id=%s type=%s allowed_types=%s",
+                    task.payload.notification_id,
+                    task.channel_info.id,
+                    task.payload.type,
+                    task.policy.allowed_types,
+                )
                 return FilterDecision(
                     decision=FilterDecisionType.FILTERED,
                     reason=FilterReason.TYPE_NOT_ALLOWED,
+                    details={
+                        "type": str(task.payload.type),
+                        "allowed_types": ",".join(
+                            str(t) for t in task.policy.allowed_types
+                        ),
+                    },
                 )
 
         # ------------------------------------------------------------
@@ -55,6 +72,14 @@ class FilterEngine:
         if task.policy.blocked_sources_regex and re.match(
             task.policy.blocked_sources_regex, task.payload.source
         ):
+            _LOGGER.debug(
+                "FilterEngine: SOURCE_BLOCKED notification_id=%s "
+                "channel_id=%s source='%s' pattern='%s'",
+                task.payload.notification_id,
+                task.channel_info.id,
+                task.payload.source,
+                task.policy.blocked_sources_regex,
+            )
             return FilterDecision(
                 decision=FilterDecisionType.FILTERED,
                 reason=FilterReason.SOURCE_BLOCKED,
@@ -79,6 +104,14 @@ class FilterEngine:
                 if task.policy.dnd.allowed_sources_regex and re.match(
                     task.policy.dnd.allowed_sources_regex, task.payload.source
                 ):
+                    _LOGGER.debug(
+                        "FilterEngine: DND_BYPASS(source) notification_id=%s "
+                        "channel_id=%s source='%s' pattern='%s'",
+                        task.payload.notification_id,
+                        task.channel_info.id,
+                        task.payload.source,
+                        task.policy.dnd.allowed_sources_regex,
+                    )
                     return FilterDecision(
                         decision=FilterDecisionType.ALLOWED,
                         reason=FilterReason.DND_BYPASS,
@@ -90,6 +123,14 @@ class FilterEngine:
                     and task.payload.criticality
                     in task.policy.dnd.allowed_criticalities
                 ):
+                    _LOGGER.debug(
+                        "FilterEngine: DND_BYPASS(criticality) notification_id=%s "
+                        "channel_id=%s criticality=%s allowed=%s",
+                        task.payload.notification_id,
+                        task.channel_info.id,
+                        task.payload.criticality,
+                        task.policy.dnd.allowed_criticalities,
+                    )
                     return FilterDecision(
                         decision=FilterDecisionType.ALLOWED,
                         reason=FilterReason.DND_BYPASS,
@@ -100,14 +141,38 @@ class FilterEngine:
                     task.policy.dnd.allowed_types
                     and task.payload.type in task.policy.dnd.allowed_types
                 ):
+                    _LOGGER.debug(
+                        "FilterEngine: DND_BYPASS(type) notification_id=%s "
+                        "channel_id=%s type=%s allowed=%s",
+                        task.payload.notification_id,
+                        task.channel_info.id,
+                        task.payload.type,
+                        task.policy.dnd.allowed_types,
+                    )
                     return FilterDecision(
                         decision=FilterDecisionType.ALLOWED,
                         reason=FilterReason.DND_BYPASS,
                     )
 
+                _LOGGER.debug(
+                    "FilterEngine: DND_ACTIVE notification_id=%s "
+                    "channel_id=%s source='%s' time=%s window=%s–%s "
+                    "(no bypass matched)",
+                    task.payload.notification_id,
+                    task.channel_info.id,
+                    task.payload.source,
+                    current.isoformat(),
+                    start.isoformat(),
+                    end.isoformat(),
+                )
                 return FilterDecision(
                     decision=FilterDecisionType.FILTERED,
                     reason=FilterReason.DND_ACTIVE,
+                    details={
+                        "current_time": current.isoformat(),
+                        "dnd_start": start.isoformat(),
+                        "dnd_end": end.isoformat(),
+                    },
                 )
 
         # Allowed normally

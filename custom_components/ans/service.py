@@ -40,18 +40,24 @@ async def async_setup_services(
             call: Service call with notification data.
 
         """
+        notification_id: str | None = None
         try:
             payload = _build_payload(call)
+            notification_id = payload.notification_id
             _LOGGER.debug(
                 "ANS service called: notification_id=%s source=%s type=%s criticality=%s",
                 payload.notification_id,
                 payload.source,
-                payload.type,
-                payload.criticality,
+                payload.type.value,
+                payload.criticality.value,
             )
             await orchestrator.handle_notification(payload)
         except ValueError as exc:
-            _LOGGER.error("ANS service error: %s", exc)
+            _LOGGER.error(
+                "ANS service error notification_id=%s: %s",
+                notification_id or "unknown",
+                exc,
+            )
             raise
 
     hass.services.async_register(

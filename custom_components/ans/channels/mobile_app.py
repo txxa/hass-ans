@@ -227,32 +227,53 @@ class MobileAppDeliveryAdapter(DeliveryAdapter):
             )
 
             _LOGGER.debug(
-                "Sent mobile app notification to device '%s' with key '%s'",
+                "Mobile app notification sent: device=%s notification_id=%s key=%s",
                 self.device_id,
+                payload.notification_id,
                 idempotency_key,
             )
             return self.success(remote_id=idempotency_key)
 
         except ServiceNotFound as exc:
-            _LOGGER.error("Mobile app service '%s' not found: %s", service_name, exc)
+            _LOGGER.warning(
+                "Mobile app service 'notify.%s' not found (permanent): "
+                "notification_id=%s key=%s: %s",
+                self.device_id,
+                payload.notification_id,
+                idempotency_key,
+                exc,
+            )
             return self.permanent_failure(
                 error=f"Mobile app service '{service_name}' not found: {exc}"
             )
         except ServiceValidationError as exc:
-            _LOGGER.error(
-                "Mobile app service '%s' validation error: %s", service_name, exc
+            _LOGGER.warning(
+                "Mobile app service 'notify.%s' validation error (permanent): "
+                "notification_id=%s key=%s: %s",
+                self.device_id,
+                payload.notification_id,
+                idempotency_key,
+                exc,
             )
             return self.permanent_failure(
                 error=f"Mobile app service '{service_name}' validation error: {exc}"
             )
         except HomeAssistantError as exc:
             _LOGGER.warning(
-                "Mobile app service error for device '%s': %s", self.device_id, exc
+                "Mobile app service error for device '%s': notification_id=%s key=%s: %s",
+                self.device_id,
+                payload.notification_id,
+                idempotency_key,
+                exc,
             )
             return self.transient_failure(error=f"Mobile app service error: {exc}")
 
         except Exception as exc:
-            _LOGGER.exception("Unexpected mobile app adapter failure")
+            _LOGGER.exception(
+                "Unexpected mobile app adapter failure: notification_id=%s key=%s",
+                payload.notification_id,
+                idempotency_key,
+            )
             # Unexpected errors are treated as transient: they are more likely
             # caused by runtime conditions (OOM, event loop issues) than by
             # permanent misconfiguration.

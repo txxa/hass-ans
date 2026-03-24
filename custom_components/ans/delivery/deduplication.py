@@ -153,7 +153,14 @@ class DeduplicationService:
                         f"to channel={channel_id} within {age:.1f}s "
                         f"(window={self._window_seconds}s)"
                     )
-                    _LOGGER.debug(reason)
+                    _LOGGER.debug(
+                        "Duplicate delivery blocked: notification=%s channel=%s "
+                        "within %.1fs (window=%ds)",
+                        notification_id,
+                        channel_id,
+                        age,
+                        self._window_seconds,
+                    )
                     return True, reason
 
                 # Entry expired, remove it

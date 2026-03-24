@@ -127,6 +127,8 @@ class NotificationDeliveryTaskQueue:
     async def _retry_poller_loop(self) -> None:
         """Poll retry queue and enqueue ready tasks."""
         while not self._stopped.is_set():
+            _pending_count = 0
+            _last_job_id = None
             try:
                 # Check every 10 seconds for pending retries
                 await asyncio.sleep(10)
@@ -135,9 +137,17 @@ class NotificationDeliveryTaskQueue:
                     continue
 
                 pending_retries = await self._retry_queue.get_pending_retries()
+                _pending_count = len(pending_retries)
+                # Only log when there's work to report — silent at idle to avoid noise
+                if _pending_count > 0:
+                    _LOGGER.debug(
+                        "Retry poller ran: %d pending entries checked",
+                        _pending_count,
+                    )
                 now = datetime.now(UTC)
 
                 for job_id, scheduled_at, task_snapshot in pending_retries:
+                    _last_job_id = job_id
                     # Check if retry is due
                     if scheduled_at <= now:
                         _LOGGER.info(
@@ -165,7 +175,11 @@ class NotificationDeliveryTaskQueue:
                             await self._retry_queue.remove_retry(job_id)
 
             except Exception:  # noqa: BLE001
-                _LOGGER.exception("Error in retry poller loop")
+                _LOGGER.exception(
+                    "Error in retry poller loop (pending_count=%d, last_job_id=%s)",
+                    _pending_count,
+                    _last_job_id,
+                )
 
     async def _worker_loop(self) -> None:
         """Process tasks from the queue in a loop."""
@@ -192,10 +206,16 @@ class NotificationDeliveryTaskQueue:
                 processor = self._processor_factory()
                 await processor.process(task)
 
-            except Exception:
+            except Exception:  # noqa: BLE001
+                # Last-resort handler: processor.process() has its own error handling
+                # and logs; this only fires for truly unexpected exceptions (e.g.
+                # programming errors) that escape the processor entirely. It is NOT
+                # double-logging in normal failure scenarios.
                 _LOGGER.exception(
-                    "Unhandled exception while processing task job_id=%s",
+                    "Unhandled exception while processing task job_id=%s "
+                    "notification_id=%s",
                     task.job_id,
+                    task.payload.notification_id,
                 )
             finally:
                 self._queue.task_done()

@@ -134,13 +134,16 @@ class NotificationOrchestrator:
         for recipient_id in recipients:
             channels = list(self._resolve_channels(recipient_id, payload, snapshot))
 
-            _LOGGER.debug(
-                "Recipient '%s': Resolved %d channels for criticality '%s': %s",
-                recipient_id,
-                len(channels),
-                payload.criticality,
-                channels,
-            )
+            if channels:
+                _LOGGER.debug(
+                    "Recipient '%s': Resolved %d channels for criticality '%s' "
+                    "(notification_id=%s): %s",
+                    recipient_id,
+                    len(channels),
+                    payload.criticality,
+                    payload.notification_id,
+                    channels,
+                )
 
             # Log warning if no channels configured for this criticality level
             if not channels:
@@ -157,6 +160,12 @@ class NotificationOrchestrator:
             if self._deduplication_service:
                 channels = await self._deduplicate_channels(
                     payload.notification_id, channels
+                )
+            else:
+                _LOGGER.debug(
+                    "Deduplication disabled for notification_id=%s recipient='%s'",
+                    payload.notification_id,
+                    recipient_id,
                 )
 
                 # Check if all channels were deduplicated
@@ -183,16 +192,52 @@ class NotificationOrchestrator:
                 }
             )
 
-            tasks.extend(
-                self._create_task(
-                    snapshot_id=snapshot.snapshot_id,
-                    recipient_id=recipient_id,
-                    payload=payload,
-                    channel=channel,
-                    snapshot=snapshot,
-                )
-                for channel in channels
-            )
+            # Log TTS settings once per recipient (not per channel — avoids duplicate
+            # lines when a TTS recipient has more than one channel assigned)
+            _r_data = snapshot.recipients.get(recipient_id)
+            _r_config = snapshot.recipient_configs.get(recipient_id)
+            if _r_data and _r_config and _r_data.type == RecipientType.TTS:
+                if _r_config.tts_settings:
+                    _tts = _r_config.tts_settings
+                    _LOGGER.debug(
+                        "Task for recipient '%s' includes TTS settings: "
+                        "notification_id=%s format=%s volumes=(%d,%d,%d,%d)",
+                        recipient_id,
+                        payload.notification_id,
+                        _tts.message_format,
+                        _tts.volume_morning,
+                        _tts.volume_daytime,
+                        _tts.volume_evening,
+                        _tts.volume_night,
+                    )
+                else:
+                    _LOGGER.warning(
+                        "TTS recipient '%s' has no tts_settings configured "
+                        "(notification_id=%s) — "
+                        "delivery will use system defaults. Reconfigure via the ANS UI.",
+                        recipient_id,
+                        payload.notification_id,
+                    )
+
+            for channel in channels:
+                try:
+                    task = self._create_task(
+                        snapshot_id=snapshot.snapshot_id,
+                        recipient_id=recipient_id,
+                        payload=payload,
+                        channel=channel,
+                        snapshot=snapshot,
+                    )
+                    tasks.append(task)
+                except ValueError:
+                    _LOGGER.error(
+                        "Task creation failed: notification_id=%s recipient='%s' "
+                        "channel='%s' — %d task(s) already assembled will still be enqueued",
+                        payload.notification_id,
+                        recipient_id,
+                        channel,
+                        len(tasks),
+                    )
 
         # Register notification ONCE before fan-out
         if recipients_data:
@@ -216,8 +261,18 @@ class NotificationOrchestrator:
             payload.notification_id,
         )
 
+        _LOGGER.info(
+            "Enqueueing %d delivery task(s) for notification_id=%s",
+            len(tasks),
+            payload.notification_id,
+        )
         for task in tasks:
             await self._task_queue.enqueue(task)
+        _LOGGER.debug(
+            "Fan-out complete: all %d task(s) enqueued for notification_id=%s",
+            len(tasks),
+            payload.notification_id,
+        )
 
     # ------------------------------------------------------------------
     # Snapshotting
@@ -335,10 +390,11 @@ class NotificationOrchestrator:
         if not channel_info:
             available_channels = [info.id for info in channel_manager.get_all_infos()]
             _LOGGER.error(
-                "Channel '%s' not found in ChannelManager for recipient '%s'. "
-                "Available channels: %s. "
-                "This indicates a configuration error or that channels weren't loaded during startup.",
+                "Channel '%s' not found in ChannelManager: notification_id=%s "
+                "recipient='%s'. Available channels: %s. "
+                "This indicates a configuration error or channels were not loaded at startup.",
                 channel,
+                payload.notification_id,
                 recipient_id,
                 available_channels,
             )
@@ -358,21 +414,6 @@ class NotificationOrchestrator:
             if recipient_data.type == RecipientType.TTS:
                 if recipient_config.tts_settings:
                     tts_settings = recipient_config.tts_settings
-                    _LOGGER.debug(
-                        "Task for recipient '%s' includes TTS settings: format=%s, volumes=(%d,%d,%d,%d)",
-                        recipient_id,
-                        tts_settings.message_format,
-                        tts_settings.volume_morning,
-                        tts_settings.volume_daytime,
-                        tts_settings.volume_evening,
-                        tts_settings.volume_night,
-                    )
-                else:
-                    _LOGGER.warning(
-                        "TTS recipient '%s' has no tts_settings configured — "
-                        "delivery will use system defaults. Reconfigure via the ANS UI.",
-                        recipient_id,
-                    )
             elif (
                 channel.startswith("media_player.")
                 and recipient_data.type != RecipientType.TTS
@@ -383,11 +424,13 @@ class NotificationOrchestrator:
                 # that should be corrected in the recipient's channel assignment.
                 _LOGGER.warning(
                     "Recipient '%s' (type=%s) is assigned media_player channel '%s' "
-                    "but is not of type TTS — TTS settings will use defaults. "
+                    "(notification_id=%s) but is not of type TTS — "
+                    "TTS settings will use defaults. "
                     "Check the recipient configuration.",
                     recipient_id,
                     recipient_data.type.value,
                     channel,
+                    payload.notification_id,
                 )
 
         return NotificationDeliveryTask(

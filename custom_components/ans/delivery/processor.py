@@ -97,7 +97,8 @@ class NotificationDeliveryProcessor:
 
         """
         _LOGGER.debug(
-            "Processing task job_id=%s recipient=%s channel=%s",
+            "Processing task notification_id=%s job_id=%s recipient=%s channel=%s",
+            task.payload.notification_id,
             task.job_id,
             task.recipient_id,
             task.channel_info.id,
@@ -120,10 +121,13 @@ class NotificationDeliveryProcessor:
             await self._attempt_log.log_attempt(attempt, task)
 
             _LOGGER.info(
-                "Task job_id=%s recipient_id=%s filtered (%s)",
+                "Task filtered: notification_id=%s job_id=%s recipient_id=%s channel=%s reason=%s details=%s",
+                task.payload.notification_id,
                 task.job_id,
                 task.recipient_id,
+                task.channel_info.id,
                 filter_decision.reason,
+                filter_decision.details or {},
             )
             return
 
@@ -140,20 +144,16 @@ class NotificationDeliveryProcessor:
 
             await self._attempt_log.log_attempt(attempt, task)
 
-            if limit_type == "GLOBAL":
-                _LOGGER.debug(
-                    "Task job_id=%s recipient_id=%s hit global rate limit, scheduling retry",
-                    task.job_id,
-                    task.recipient_id,
-                )
-                await self._schedule_retry(task, reason="rate_limited")
-            else:  # RECIPIENT
-                _LOGGER.debug(
-                    "Task job_id=%s recipient_id=%s hit recipient rate limit, scheduling retry",
-                    task.job_id,
-                    task.recipient_id,
-                )
-                await self._schedule_retry(task, reason="rate_limited")
+            _LOGGER.warning(
+                "Rate limited (%s): notification_id=%s job_id=%s recipient_id=%s channel=%s "
+                "— scheduling retry",
+                limit_type,
+                task.payload.notification_id,
+                task.job_id,
+                task.recipient_id,
+                task.channel_info.id,
+            )
+            await self._schedule_retry(task, reason="rate_limited")
             return
 
         # CONTACT INFO VALIDATION (terminal decision if missing/invalid)
@@ -196,7 +196,9 @@ class NotificationDeliveryProcessor:
                     await self._attempt_log.log_attempt(attempt, task)
 
                     _LOGGER.warning(
-                        "Task job_id=%s skipped: missing required contact information for recipient %s on channel %s: %s",
+                        "Task skipped (missing contact info): notification_id=%s job_id=%s "
+                        "recipient=%s channel=%s missing=%s",
+                        task.payload.notification_id,
                         task.job_id,
                         task.recipient_id,
                         task.channel_info.id,
@@ -211,7 +213,9 @@ class NotificationDeliveryProcessor:
             await self._execute_delivery(task, attempt)
         except Exception as exc:  # defensive catch for unexpected errors
             _LOGGER.exception(
-                "Unhandled exception during delivery job_id=%s recipient_id=%s",
+                "Unhandled exception during delivery notification_id=%s "
+                "job_id=%s recipient_id=%s",
+                task.payload.notification_id,
                 task.job_id,
                 task.recipient_id,
             )
@@ -246,8 +250,10 @@ class NotificationDeliveryProcessor:
                 f"Expected adapter type: {task.channel_info.integration}"
             )
             _LOGGER.warning(
-                "%s (job_id=%s, recipient=%s) — treating as transient, will retry",
-                error_msg,
+                "No adapter for channel '%s': notification_id=%s job_id=%s recipient=%s "
+                "— treating as transient, will retry",
+                task.channel_info.id,
+                task.payload.notification_id,
                 task.job_id,
                 task.recipient_id,
             )
@@ -274,19 +280,23 @@ class NotificationDeliveryProcessor:
             )
         except ServiceNotFound as exc:
             _LOGGER.warning(
-                "Service not found during delivery job_id=%s channel=%s: %s "
-                "— treating as transient failure, will retry",
+                "ServiceNotFound during delivery: notification_id=%s job_id=%s "
+                "channel=%s recipient=%s: %s — treating as transient, will retry",
+                task.payload.notification_id,
                 task.job_id,
                 task.channel_info.id,
+                task.recipient_id,
                 exc,
             )
             await self._handle_transient_failure(task, attempt, error=str(exc))
             return
         except Exception as exc:
             _LOGGER.exception(
-                "Adapter exception job_id=%s channel=%s",
+                "Adapter exception: notification_id=%s job_id=%s channel=%s recipient=%s",
+                task.payload.notification_id,
                 task.job_id,
                 task.channel_info.id,
+                task.recipient_id,
             )
             result = DeliveryResult(
                 status=DeliveryStatus.TRANSIENT_FAIL,
@@ -356,14 +366,23 @@ class NotificationDeliveryProcessor:
         attempt.ended_at = datetime.now(UTC)
         attempt.remote_id = result.remote_id
 
+        duration_ms = int(
+            (attempt.ended_at - attempt.created_at).total_seconds() * 1000
+        )
+
         # Log attempt with final status (only logged once)
         await self._attempt_log.log_attempt(attempt, task)
 
         _LOGGER.info(
-            "Delivery succeeded job_id=%s recipient_id=%s attempt=%s",
+            "Delivery succeeded: notification_id=%s job_id=%s recipient_id=%s "
+            "channel=%s attempt=%s duration_ms=%d%s",
+            task.payload.notification_id,
             task.job_id,
             task.recipient_id,
+            task.channel_info.id,
             attempt.attempt_number,
+            duration_ms,
+            " (delivered on retry)" if attempt.attempt_number > 1 else "",
         )
 
     async def _handle_transient_failure(
@@ -388,7 +407,9 @@ class NotificationDeliveryProcessor:
         await self._attempt_log.log_attempt(attempt, task)
 
         _LOGGER.warning(
-            "Transient failure job_id=%s recipient_id=%s attempt=%s channel=%s error=%s",
+            "Transient failure notification_id=%s job_id=%s recipient_id=%s "
+            "attempt=%s channel=%s error=%s",
+            task.payload.notification_id,
             task.job_id,
             task.recipient_id,
             attempt.attempt_number,
@@ -419,10 +440,13 @@ class NotificationDeliveryProcessor:
         # Log attempt with final status (only logged once)
         await self._attempt_log.log_attempt(attempt, task)
 
-        _LOGGER.warning(
-            "Permanent failure job_id=%s recipient_id=%s attempt=%s error=%s",
+        _LOGGER.error(
+            "Permanent delivery failure: notification_id=%s job_id=%s "
+            "recipient_id=%s channel=%s attempt=%s error=%s",
+            task.payload.notification_id,
             task.job_id,
             task.recipient_id,
+            task.channel_info.id,
             attempt.attempt_number,
             error,
         )
@@ -449,9 +473,12 @@ class NotificationDeliveryProcessor:
         # Check against policy max attempts
         if attempt_count >= task.policy.retry_attempts:
             _LOGGER.warning(
-                "Max retries exceeded job_id=%s recipient_id=%s attempts=%s",
+                "Max retries exceeded: notification_id=%s job_id=%s "
+                "recipient_id=%s channel=%s attempts=%s",
+                task.payload.notification_id,
                 task.job_id,
                 task.recipient_id,
+                task.channel_info.id,
                 attempt_count,
             )
             return
@@ -470,14 +497,18 @@ class NotificationDeliveryProcessor:
 
         if not retry_decision.should_retry:
             _LOGGER.warning(
-                "Retry policy exceeded for job_id=%s",
+                "Retry policy exhausted: notification_id=%s job_id=%s recipient_id=%s channel=%s",
+                task.payload.notification_id,
                 task.job_id,
+                task.recipient_id,
+                task.channel_info.id,
             )
             return
 
         if retry_decision.next_run_at is None:
             _LOGGER.warning(
-                "Retry policy returned no next_run_at for job_id=%s",
+                "Retry policy returned no next_run_at: notification_id=%s job_id=%s",
+                task.payload.notification_id,
                 task.job_id,
             )
             return
@@ -490,11 +521,16 @@ class NotificationDeliveryProcessor:
             task=task,
         )
 
+        delay_seconds = (retry_decision.next_run_at - datetime.now(UTC)).total_seconds()
         _LOGGER.debug(
-            "Retry scheduled job_id=%s recipient_id=%s attempt=%s next_run=%s reason=%s",
+            "Retry scheduled: notification_id=%s job_id=%s recipient_id=%s channel=%s "
+            "attempt=%s delay_seconds=%.0f next_run=%s reason=%s",
+            task.payload.notification_id,
             task.job_id,
             task.recipient_id,
+            task.channel_info.id,
             attempt_count + 1,
-            retry_decision.next_run_at,
+            delay_seconds,
+            retry_decision.next_run_at.isoformat(),
             reason,
         )

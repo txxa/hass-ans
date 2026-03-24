@@ -256,6 +256,7 @@ class SignalDeliveryAdapter(DeliveryAdapter):
         payload: NotificationPayload,
         contact_info: RecipientContactInfo,
         idempotency_key: str,
+        job_id: str,
         options: DeliveryOptions | None = None,
     ) -> DeliveryResult:
         """Deliver notification via Signal messenger notify service.
@@ -276,6 +277,8 @@ class SignalDeliveryAdapter(DeliveryAdapter):
             Recipient contact information including phone number.
         idempotency_key : str
             Unique key for idempotent retries.
+        job_id : str
+            Job identifier for cross-layer log correlation.
         options : DeliveryOptions | None
             Per-delivery options (not used by the Signal adapter).
 
@@ -289,7 +292,8 @@ class SignalDeliveryAdapter(DeliveryAdapter):
         if not contact_info.phone_number:
             _LOGGER.warning(
                 "Signal delivery skipped: no phone number configured "
-                "for notification_id=%s key=%s",
+                "for job_id=%s notification_id=%s key=%s",
+                job_id,
                 payload.notification_id,
                 idempotency_key,
             )
@@ -309,8 +313,9 @@ class SignalDeliveryAdapter(DeliveryAdapter):
             )
 
             _LOGGER.debug(
-                "Signal notification sent: phone=%s notification_id=%s service=%s "
+                "Signal notification sent: job_id=%s phone=%s notification_id=%s service=%s "
                 "text_mode=%s attachments=%d urls=%d key=%s",
+                job_id,
                 _mask_phone(contact_info.phone_number),
                 payload.notification_id,
                 self.service_name,
@@ -324,8 +329,9 @@ class SignalDeliveryAdapter(DeliveryAdapter):
         except ServiceNotFound as exc:
             _LOGGER.warning(
                 "Signal service 'notify.%s' not found (permanent): "
-                "notification_id=%s key=%s: %s",
+                "job_id=%s notification_id=%s key=%s: %s",
                 self.service_name,
+                job_id,
                 payload.notification_id,
                 idempotency_key,
                 exc,
@@ -336,7 +342,8 @@ class SignalDeliveryAdapter(DeliveryAdapter):
         except ServiceValidationError as exc:
             _LOGGER.warning(
                 "Signal service validation error (permanent): "
-                "notification_id=%s key=%s: %s",
+                "job_id=%s notification_id=%s key=%s: %s",
+                job_id,
                 payload.notification_id,
                 idempotency_key,
                 exc,
@@ -346,7 +353,8 @@ class SignalDeliveryAdapter(DeliveryAdapter):
             )
         except HomeAssistantError as exc:
             _LOGGER.warning(
-                "Signal service error: notification_id=%s key=%s: %s",
+                "Signal service error: job_id=%s notification_id=%s key=%s: %s",
+                job_id,
                 payload.notification_id,
                 idempotency_key,
                 exc,
@@ -355,7 +363,8 @@ class SignalDeliveryAdapter(DeliveryAdapter):
 
         except Exception as exc:
             _LOGGER.exception(
-                "Unexpected Signal adapter failure: notification_id=%s key=%s",
+                "Unexpected Signal adapter failure: job_id=%s notification_id=%s key=%s",
+                job_id,
                 payload.notification_id,
                 idempotency_key,
             )

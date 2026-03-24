@@ -269,6 +269,7 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
         payload: NotificationPayload,
         contact_info: RecipientContactInfo,
         idempotency_key: str,
+        job_id: str,
         options: DeliveryOptions | None = None,
     ) -> DeliveryResult:
         """Deliver notification via TTS to media player.
@@ -281,6 +282,8 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
             Recipient contact information (unused for TTS).
         idempotency_key : str
             Unique key for idempotent retries.
+        job_id : str
+            Job identifier for cross-layer log correlation.
         options : DeliveryOptions | None
             Per-delivery options including TTS settings.
 
@@ -296,7 +299,8 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
         entity_id = self.channel  # Full entity ID: media_player.living_room
 
         _LOGGER.info(
-            "Starting TTS delivery: entity=%s, notification_id=%s, idempotency_key=%s",
+            "Starting TTS delivery: job_id=%s entity=%s, notification_id=%s, idempotency_key=%s",
+            job_id,
             entity_id,
             payload.notification_id,
             idempotency_key,
@@ -320,9 +324,10 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
                 await lock.acquire()
         except TimeoutError:
             _LOGGER.warning(
-                "Delivery lock timeout for %s notification_id=%s "
+                "Delivery lock timeout for %s job_id=%s notification_id=%s "
                 "(another TTS delivery in progress)",
                 entity_id,
+                job_id,
                 payload.notification_id,
             )
             return self.transient_failure(
@@ -334,6 +339,7 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
                 payload=payload,
                 tts_settings=tts_settings,
                 idempotency_key=idempotency_key,
+                job_id=job_id,
             )
         finally:
             lock.release()
@@ -345,6 +351,7 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
         payload: NotificationPayload,
         tts_settings: TTSSettings | None,
         idempotency_key: str,
+        job_id: str,
     ) -> DeliveryResult:
         """Deliver TTS with volume management (capture, set, restore).
 
@@ -358,6 +365,8 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
             TTS settings (if None, use defaults).
         idempotency_key : str
             Unique key for tracking.
+        job_id : str
+            Job identifier for cross-layer log correlation.
 
         Returns
         -------
@@ -379,8 +388,9 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
             state = self._hass.states.get(entity_id)
             if state is None:
                 _LOGGER.error(
-                    "Media player %s not found: notification_id=%s",
+                    "Media player %s not found: job_id=%s notification_id=%s",
                     entity_id,
+                    job_id,
                     payload.notification_id,
                 )
                 return self.permanent_failure(
@@ -389,10 +399,11 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
 
             if state.state in (STATE_UNAVAILABLE, STATE_OFF):
                 _LOGGER.warning(
-                    "Media player %s is %s, delivery skipped: notification_id=%s "
+                    "Media player %s is %s, delivery skipped: job_id=%s notification_id=%s "
                     "— will retry",
                     entity_id,
                     state.state,
+                    job_id,
                     payload.notification_id,
                 )
                 return self.transient_failure(
@@ -400,9 +411,10 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
                 )
 
             _LOGGER.debug(
-                "Media player %s state: %s notification_id=%s",
+                "Media player %s state: %s job_id=%s notification_id=%s",
                 entity_id,
                 state.state,
+                job_id,
                 payload.notification_id,
             )
 
@@ -411,10 +423,11 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
                 payload.criticality, tts_settings, entity_id
             )
             _LOGGER.debug(
-                "Target volume for %s: %.0f%% (criticality=%s notification_id=%s)",
+                "Target volume for %s: %.0f%% (criticality=%s job_id=%s notification_id=%s)",
                 entity_id,
                 target_volume * 100,
                 payload.criticality.value,
+                job_id,
                 payload.notification_id,
             )
 
@@ -430,8 +443,9 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
             except TTSVolumeControlError as e:
                 # Volume was never changed; no restoration needed.
                 _LOGGER.warning(
-                    "Volume control failed for %s: notification_id=%s: %s",
+                    "Volume control failed for %s: job_id=%s notification_id=%s: %s",
                     entity_id,
+                    job_id,
                     payload.notification_id,
                     e,
                 )
@@ -443,10 +457,11 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
             message_text = self._format_message(payload, tts_settings)
             sanitized_message = self._sanitize_message(message_text, entity_id)
             _LOGGER.debug(
-                "TTS message for %s: length=%d format=%s notification_id=%s",
+                "TTS message for %s: length=%d format=%s job_id=%s notification_id=%s",
                 entity_id,
                 len(sanitized_message),
                 tts_settings.message_format if tts_settings else "default",
+                job_id,
                 payload.notification_id,
             )
 
@@ -457,9 +472,11 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
                     sanitized_message,
                     tts_service,
                     notification_id=payload.notification_id,
+                    job_id=job_id,
                 )
                 _LOGGER.info(
-                    "TTS delivery successful: entity=%s, notification_id=%s",
+                    "TTS delivery successful: job_id=%s entity=%s, notification_id=%s",
+                    job_id,
                     entity_id,
                     payload.notification_id,
                 )
@@ -476,10 +493,11 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
                 )
                 _LOGGER.debug(
                     "Fallback restore timeout for %s: %ds "
-                    "(message=%d chars) notification_id=%s",
+                    "(message=%d chars) job_id=%s notification_id=%s",
                     entity_id,
                     fallback_timeout,
                     len(sanitized_message),
+                    job_id,
                     payload.notification_id,
                 )
                 fallback = asyncio.create_task(
@@ -487,6 +505,7 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
                         entity_id,
                         timeout=fallback_timeout,
                         notification_id=payload.notification_id,
+                        job_id=job_id,
                     )
                 )
                 self._volume_controller.set_fallback_task(entity_id, fallback)
@@ -494,8 +513,9 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
 
             except ServiceNotFound as e:
                 _LOGGER.error(
-                    "TTS service not found for %s: notification_id=%s: %s",
+                    "TTS service not found for %s: job_id=%s notification_id=%s: %s",
                     entity_id,
+                    job_id,
                     payload.notification_id,
                     e,
                 )
@@ -509,8 +529,9 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
 
             except ServiceValidationError as e:
                 _LOGGER.error(
-                    "TTS service validation error for %s: notification_id=%s: %s",
+                    "TTS service validation error for %s: job_id=%s notification_id=%s: %s",
                     entity_id,
+                    job_id,
                     payload.notification_id,
                     e,
                 )
@@ -522,10 +543,11 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
 
             except TimeoutError:
                 _LOGGER.warning(
-                    "TTS speak timed out for %s after %ds: notification_id=%s "
+                    "TTS speak timed out for %s after %ds: job_id=%s notification_id=%s "
                     "— TTS engine may be overloaded or unresponsive",
                     entity_id,
                     TTS_SPEAK_TIMEOUT,
+                    job_id,
                     payload.notification_id,
                 )
                 await self._volume_controller.safe_restore_volume(entity_id)
@@ -539,8 +561,9 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
 
             except HomeAssistantError as e:
                 _LOGGER.warning(
-                    "TTS service call failed for %s: notification_id=%s: %s",
+                    "TTS service call failed for %s: job_id=%s notification_id=%s: %s",
                     entity_id,
+                    job_id,
                     payload.notification_id,
                     e,
                 )
@@ -563,8 +586,9 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
             if volume_captured:
                 await self._volume_controller.safe_restore_volume(entity_id)
             _LOGGER.exception(
-                "Unexpected error during TTS delivery to %s: notification_id=%s",
+                "Unexpected error during TTS delivery to %s: job_id=%s notification_id=%s",
                 entity_id,
+                job_id,
                 payload.notification_id,
             )
             return self.transient_failure(
@@ -676,6 +700,7 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
         tts_service: str,
         *,
         notification_id: str = "unknown",
+        job_id: str = "unknown",
     ) -> None:
         """Deliver a message via the modern ``tts.speak`` service action.
 
@@ -693,6 +718,8 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
             ``"tts.google_translate"``), used as the service call target.
         notification_id : str
             Unique identifier for the notification (used for logging).
+        job_id : str
+            Job identifier for cross-layer log correlation.
 
         Raises
         ------
@@ -704,7 +731,8 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
         """
         _t0 = time.monotonic()
         _LOGGER.debug(
-            "TTS speak initiating: engine=%s player=%s message_len=%d notification_id=%s",
+            "TTS speak initiating: job_id=%s engine=%s player=%s message_len=%d notification_id=%s",
+            job_id,
             tts_service,
             entity_id,
             len(message),
@@ -725,7 +753,8 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
             )
 
         _LOGGER.debug(
-            "TTS speak completed: engine=%s player=%s notification_id=%s elapsed_ms=%d",
+            "TTS speak completed: job_id=%s engine=%s player=%s notification_id=%s elapsed_ms=%d",
+            job_id,
             tts_service,
             entity_id,
             notification_id,
@@ -733,7 +762,12 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
         )
 
     async def _fallback_restore(
-        self, entity_id: str, *, timeout: int, notification_id: str = "unknown"
+        self,
+        entity_id: str,
+        *,
+        timeout: int,
+        notification_id: str = "unknown",
+        job_id: str = "unknown",
     ) -> None:
         """Restore volume after a fallback timeout if PLAYING→IDLE was missed.
 
@@ -752,15 +786,18 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
             from message length by the caller via CHARS_PER_SECOND_ESTIMATE.
         notification_id : str
             Unique identifier for the notification (used for logging).
+        job_id : str
+            Job identifier for cross-layer log correlation.
 
         """
         try:
             await asyncio.sleep(timeout)
             _LOGGER.warning(
                 "Fallback volume restore triggered for %s "
-                "— no PLAYING→IDLE event received within %ds notification_id=%s",
+                "— no PLAYING→IDLE event received within %ds job_id=%s notification_id=%s",
                 entity_id,
                 timeout,
+                job_id,
                 notification_id,
             )
             await self._volume_controller.safe_restore_volume(entity_id)

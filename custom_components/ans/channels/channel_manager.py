@@ -235,13 +235,28 @@ class ChannelManager:
             self._records = new_records
 
             if added or removed:
+                # Break active channels down by type for the summary log.
+                active_notify = sum(
+                    1
+                    for rec in new_records.values()
+                    if rec.status == ChannelStatus.ACTIVE
+                    and rec.info.id.startswith("notify.")
+                )
+                active_tts = sum(
+                    1
+                    for rec in new_records.values()
+                    if rec.status == ChannelStatus.ACTIVE
+                    and not rec.info.id.startswith("notify.")
+                )
                 _LOGGER.info(
                     "Channel sync completed: +%d activated, -%d deactivated "
-                    "(detected=%d, active=%d)",
+                    "(detected=%d, active=%d [notify=%d, tts_player=%d])",
                     added,
                     removed,
                     self.count_detected(),
                     self.count_active(),
+                    active_notify,
+                    active_tts,
                 )
 
     async def resync(self) -> None:
@@ -250,12 +265,19 @@ class ChannelManager:
         Safe to call as a fire-and-forget task; the internal lock serialises
         concurrent sync requests.
         """
+        _LOGGER.debug(
+            "ChannelManager resync triggered (last_enabled_count=%d)",
+            len(self._last_enabled),
+        )
         await self.sync(self._last_enabled)
 
     async def finalize_setup(self) -> None:
         """Mark setup complete and flush any deferred resync."""
         self._setup_in_progress = False
         if self._pending_resync:
+            _LOGGER.debug(
+                "ChannelManager: flushing deferred resync after setup complete"
+            )
             self._pending_resync = False
             await self.resync()
 

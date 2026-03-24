@@ -27,6 +27,17 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 
+def _mask_phone(number: str) -> str:
+    """Return a masked phone number showing only the last 4 digits.
+
+    Prevents raw PII from appearing in log files and remote log aggregators.
+    Example: "+49123456789" → "****6789".
+    """
+    if len(number) >= 4:
+        return f"****{number[-4:]}"
+    return "****"
+
+
 class SignalDeliveryAdapter(DeliveryAdapter):
     """Deliver notifications via Home Assistant Signal Messenger notification service.
 
@@ -167,8 +178,10 @@ class SignalDeliveryAdapter(DeliveryAdapter):
                 text_mode = explicit_text_mode
             else:
                 _LOGGER.warning(
-                    "Invalid text_mode '%s', using 'normal'. Valid values: 'normal', 'styled'",
+                    "Invalid text_mode '%s' for notification_id=%s; using 'normal'. "
+                    "Valid values: 'normal', 'styled'",
                     explicit_text_mode,
+                    payload.notification_id,
                 )
                 text_mode = "normal"
             data_payload["text_mode"] = text_mode
@@ -180,7 +193,8 @@ class SignalDeliveryAdapter(DeliveryAdapter):
                     data_payload["attachments"] = attachments
                 else:
                     _LOGGER.warning(
-                        "attachments must be a list of file paths, got: %s",
+                        "attachments must be a list of file paths for notification_id=%s, got: %s",
+                        payload.notification_id,
                         type(attachments).__name__,
                     )
 
@@ -191,7 +205,8 @@ class SignalDeliveryAdapter(DeliveryAdapter):
                     data_payload["urls"] = urls
                 else:
                     _LOGGER.warning(
-                        "urls must be a list of URLs, got: %s",
+                        "urls must be a list of URLs for notification_id=%s, got: %s",
+                        payload.notification_id,
                         type(urls).__name__,
                     )
 
@@ -202,7 +217,8 @@ class SignalDeliveryAdapter(DeliveryAdapter):
                     data_payload["verify_ssl"] = verify_ssl
                 else:
                     _LOGGER.warning(
-                        "verify_ssl must be boolean, got: %s",
+                        "verify_ssl must be boolean for notification_id=%s, got: %s",
+                        payload.notification_id,
                         type(verify_ssl).__name__,
                     )
         else:
@@ -271,6 +287,12 @@ class SignalDeliveryAdapter(DeliveryAdapter):
         """
         # Signal adapter uses phone number as the target
         if not contact_info.phone_number:
+            _LOGGER.warning(
+                "Signal delivery skipped: no phone number configured "
+                "for notification_id=%s key=%s",
+                payload.notification_id,
+                idempotency_key,
+            )
             return self.permanent_failure(
                 error="No phone number configured for Signal delivery"
             )
@@ -287,8 +309,10 @@ class SignalDeliveryAdapter(DeliveryAdapter):
             )
 
             _LOGGER.debug(
-                "Sent Signal notification to '%s' via service '%s' (text_mode=%s, attachments=%d, urls=%d) with key '%s'",
-                contact_info.phone_number,
+                "Signal notification sent: phone=%s notification_id=%s service=%s "
+                "text_mode=%s attachments=%d urls=%d key=%s",
+                _mask_phone(contact_info.phone_number),
+                payload.notification_id,
                 self.service_name,
                 service_data.get("data", {}).get("text_mode", "normal"),
                 len(service_data.get("data", {}).get("attachments", [])),
@@ -298,23 +322,43 @@ class SignalDeliveryAdapter(DeliveryAdapter):
             return self.success(remote_id=idempotency_key)
 
         except ServiceNotFound as exc:
-            _LOGGER.error(
-                "Signal service 'notify.%s' not found: %s", self.service_name, exc
+            _LOGGER.warning(
+                "Signal service 'notify.%s' not found (permanent): "
+                "notification_id=%s key=%s: %s",
+                self.service_name,
+                payload.notification_id,
+                idempotency_key,
+                exc,
             )
             return self.permanent_failure(
                 error=f"Signal service 'notify.{self.service_name}' not found: {exc}"
             )
         except ServiceValidationError as exc:
-            _LOGGER.error("Signal service validation error: %s", exc)
+            _LOGGER.warning(
+                "Signal service validation error (permanent): "
+                "notification_id=%s key=%s: %s",
+                payload.notification_id,
+                idempotency_key,
+                exc,
+            )
             return self.permanent_failure(
                 error=f"Signal service validation error: {exc}"
             )
         except HomeAssistantError as exc:
-            _LOGGER.warning("Signal service error: %s", exc)
+            _LOGGER.warning(
+                "Signal service error: notification_id=%s key=%s: %s",
+                payload.notification_id,
+                idempotency_key,
+                exc,
+            )
             return self.transient_failure(error=f"Signal service error: {exc}")
 
         except Exception as exc:
-            _LOGGER.exception("Unexpected Signal adapter failure")
+            _LOGGER.exception(
+                "Unexpected Signal adapter failure: notification_id=%s key=%s",
+                payload.notification_id,
+                idempotency_key,
+            )
             # Unexpected errors are treated as transient: they are more likely
             # caused by runtime conditions (OOM, event loop issues) than by
             # permanent misconfiguration.

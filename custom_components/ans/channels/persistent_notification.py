@@ -168,27 +168,51 @@ class PersistentNotificationAdapter(DeliveryAdapter):
             )
 
             _LOGGER.debug(
-                "Created persistent notification with ID '%s'", idempotency_key
+                "Persistent notification created: id='%s' notification_id=%s",
+                idempotency_key,
+                payload.notification_id,
             )
             return self.success(remote_id=idempotency_key)
 
         except ServiceNotFound as exc:
-            _LOGGER.error("persistent_notification service not found: %s", exc)
+            _LOGGER.warning(
+                "persistent_notification service not found (permanent): "
+                "notification_id=%s key=%s: %s",
+                payload.notification_id,
+                idempotency_key,
+                exc,
+            )
             return self.permanent_failure(
                 error=f"persistent_notification service not found: {exc}"
             )
         except ServiceValidationError as exc:
-            _LOGGER.error("persistent_notification service validation error: %s", exc)
+            _LOGGER.warning(
+                "persistent_notification service validation error (permanent): "
+                "notification_id=%s key=%s: %s",
+                payload.notification_id,
+                idempotency_key,
+                exc,
+            )
             return self.permanent_failure(
                 error=f"persistent_notification service validation error: {exc}"
             )
         except HomeAssistantError as exc:
-            _LOGGER.warning("persistent_notification service error: %s", exc)
+            _LOGGER.warning(
+                "persistent_notification service error: notification_id=%s key=%s: %s",
+                payload.notification_id,
+                idempotency_key,
+                exc,
+            )
             return self.transient_failure(
                 error=f"persistent_notification service error: {exc}"
             )
         except Exception as exc:
-            _LOGGER.exception("Unexpected persistent_notification adapter failure")
+            _LOGGER.exception(
+                "Unexpected persistent_notification adapter failure: "
+                "notification_id=%s key=%s",
+                payload.notification_id,
+                idempotency_key,
+            )
             return self.transient_failure(
                 error=f"persistent_notification service error: {exc}"
             )

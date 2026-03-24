@@ -313,6 +313,7 @@ class VolumeRestorationRegistry:
         """
         async with self._get_lock(entity_id):
             if entity_id not in self._intents:
+                _LOGGER.debug("No active intent for %s, restoration skipped", entity_id)
                 return
 
             intent = self._intents[entity_id]
@@ -349,6 +350,7 @@ class VolumeRestorationRegistry:
         """Remove intent and unsubscribe listener. Caller MUST hold the entity lock."""
         if entity_id in self._intents:
             del self._intents[entity_id]
+            self.cancel_fallback_task(entity_id)
             unsub = self._entity_listeners.pop(entity_id, None)
             if unsub:
                 unsub()
@@ -397,11 +399,21 @@ class VolumeRestorationRegistry:
         # Detect user volume change (significant difference from override volume)
         volume_diff = abs(current_volume - intent.override_volume)
         if volume_diff > VOLUME_CHANGE_THRESHOLD:
+            # Guard against device echo: HA state feedback can arrive milliseconds
+            # after ANS sets the volume. Changes within 500ms of intent creation
+            # are treated as device acknowledgement, not a user adjustment.
+            elapsed_since_set = (
+                dt_util.utcnow() - datetime.fromisoformat(intent.timestamp)
+            ).total_seconds()
+            if elapsed_since_set < 0.5:
+                return  # device echo — ignore
             _LOGGER.info(
-                "User changed volume on %s (%.2f -> %.2f), aborting restoration",
+                "User changed volume on %s (%.2f -> %.2f), "
+                "aborting restoration (elapsed_ms=%d)",
                 entity_id,
                 intent.override_volume,
                 current_volume,
+                int(elapsed_since_set * 1000),
             )
             # Remove intent without restoration
             task = asyncio.create_task(self.complete_intent(entity_id))
@@ -588,7 +600,12 @@ class VolumeRestorationRegistry:
             except asyncio.CancelledError:
                 break
             except (OSError, ValueError, KeyError) as e:
-                _LOGGER.error("Error in periodic cleanup: %s", e)
+                _LOGGER.error(
+                    "Error in periodic cleanup (intent_count=%d expired_count=%d): %s",
+                    len(self._intents),
+                    len(expired),
+                    e,
+                )
 
     async def _schedule_persist(self) -> None:
         """Schedule persistence with debouncing to reduce disk writes."""
@@ -620,7 +637,11 @@ class VolumeRestorationRegistry:
             _LOGGER.debug("Persisted %d volume restoration intents", len(self._intents))
 
         except (OSError, ValueError) as e:
-            _LOGGER.error("Failed to persist volume restoration registry: %s", e)
+            _LOGGER.error(
+                "Failed to persist volume restoration registry (intent_count=%d): %s",
+                len(self._intents),
+                e,
+            )
 
     def set_fallback_task(self, entity_id: str, task: asyncio.Task) -> None:
         """Register a fallback restore task for an entity in the shared registry.
@@ -701,7 +722,8 @@ class VolumeRestorationRegistry:
         self._background_tasks.discard(task)
         if not task.cancelled() and (exc := task.exception()):
             _LOGGER.error(
-                "Background volume restoration task failed: %s",
+                "Background volume restoration task failed (active_intents=%d): %s",
+                len(self._intents),
                 exc,
                 exc_info=exc,
             )

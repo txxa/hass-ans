@@ -4,8 +4,11 @@ Implements per-recipient token bucket rate limiting combined with
 a global system-wide limit to prevent overwhelming delivery systems.
 """
 
+import logging
 import time
 from dataclasses import dataclass
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -139,6 +142,14 @@ class RateLimiter:
             if not self._global_bucket.consume(1.0):
                 # Restore the token since we're not allowing this delivery
                 self._global_bucket.tokens += 1.0
+                _LOGGER.debug(
+                    "Global rate bucket exhausted for recipient '%s': "
+                    "tokens=%.2f capacity=%d refill_rate=%.3f/s",
+                    task.recipient_id,
+                    self._global_bucket.tokens,
+                    self._global_bucket.capacity,
+                    self._global_bucket.refill_rate,
+                )
                 return False, "GLOBAL"
 
         # Check recipient-level rate limit
@@ -164,6 +175,14 @@ class RateLimiter:
             # Restore global token if we consumed it but recipient limit blocks
             if self._global_bucket:
                 self._global_bucket.tokens += 1.0
+            _LOGGER.debug(
+                "Recipient '%s' rate bucket exhausted: "
+                "tokens=%.2f capacity=%d window=%ds",
+                task.recipient_id,
+                bucket.tokens,
+                bucket.capacity,
+                self._rate_limit_window,
+            )
             return False, "RECIPIENT"
 
         return True, None

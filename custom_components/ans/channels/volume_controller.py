@@ -65,6 +65,7 @@ class VolumeController:
         self,
         criticality: NotificationCriticality,
         tts_settings: TTSSettings | None,
+        entity_id: str = "unknown",
     ) -> float:
         """Calculate the delivery volume based on time of day and criticality.
 
@@ -74,6 +75,8 @@ class VolumeController:
             Notification criticality level.
         tts_settings : TTSSettings | None
             Per-recipient TTS settings; defaults are used when ``None``.
+        entity_id : str
+            Media player entity ID for logging purposes.
 
         Returns
         -------
@@ -88,9 +91,10 @@ class VolumeController:
         if criticality.value in tts_settings.volume_override_criticalities:
             volume_percent = tts_settings.volume_override_level
             _LOGGER.debug(
-                "Using volume override for criticality %s: %d%%",
+                "Using volume override for criticality %s: %d%% (entity=%s)",
                 criticality.value,
                 volume_percent,
+                entity_id,
             )
             return volume_percent / VOLUME_SCALE
 
@@ -111,7 +115,12 @@ class VolumeController:
             volume_percent = tts_settings.volume_night
             time_frame = "night"
 
-        _LOGGER.debug("Time-based volume: %s (%d%%)", time_frame, volume_percent)
+        _LOGGER.debug(
+            "Time-based volume: %s (%d%%) (entity=%s)",
+            time_frame,
+            volume_percent,
+            entity_id,
+        )
         return volume_percent / VOLUME_SCALE
 
     async def apply_volume(
@@ -257,6 +266,11 @@ class VolumeController:
                 )
             _LOGGER.debug("Set volume for %s: %.0f%%", entity_id, volume_level * 100)
         except TimeoutError as e:
+            _LOGGER.debug(
+                "Volume set timed out for %s after %ds",
+                entity_id,
+                VOLUME_SET_TIMEOUT,
+            )
             raise TTSVolumeControlError(
                 f"Volume set timed out for {entity_id} after {VOLUME_SET_TIMEOUT}s"
             ) from e

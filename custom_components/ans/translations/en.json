@@ -3,7 +3,7 @@
     "selector": {
         "recipient_type": {
             "options": {
-                "TTS": "TTS Speaker (Audio Notifications)"
+                "tts": "TTS Speaker (Audio Notifications)"
             }
         },
         "message_format": {
@@ -15,7 +15,7 @@
         },
         "recipient_choice": {
             "options": {
-                "system_home_assistant": "System: Home Assistant ",
+                "system_home_assistant": "System: Home Assistant",
                 "tts_new": "TTS: Text-to-Speech recipient",
                 "virtual_new": "Virtual: Custom recipient"
             }
@@ -190,7 +190,8 @@
                         "volume_night": "Night Volume (22:00-6:00)",
                         "volume_override_level": "Override Volume Level",
                         "volume_override_criticalities": "Override for Criticalities",
-                        "message_format": "Message Format"
+                        "message_format": "Message Format",
+                        "trailing_silence_ms": "Trailing Silence Padding"
                     },
                     "data_description": {
                         "volume_morning": "Volume level (0-100) for notifications delivered between 6:00 AM and 9:00 AM.",
@@ -199,7 +200,8 @@
                         "volume_night": "Volume level (0-100) for notifications delivered between 10:00 PM and 6:00 AM.",
                         "volume_override_level": "Volume level (0-100) to use when a notification matches the override criticalities below.",
                         "volume_override_criticalities": "Select criticality levels that should use the override volume instead of time-based volumes (e.g., always play CRITICAL notifications at maximum volume).",
-                        "message_format": "Choose how notification content is formatted for TTS: 'Title and Message' speaks both, 'Message Only' speaks just the message, 'Title Only' speaks just the title."
+                        "message_format": "Choose how notification content is formatted for TTS: 'Title and Message' speaks both, 'Message Only' speaks just the message, 'Title Only' speaks just the title.",
+                        "trailing_silence_ms": "Extra silence (in milliseconds) to append after the message as an SSML <break> tag if the value is greater than 0. This helps prevent the end of the message from being cut off (e.g., to compensate for buffer clearing in Snapcast). If set to 0, no extra silence is added."
                     }
                 },
                 "recipient_channel_mapping": {

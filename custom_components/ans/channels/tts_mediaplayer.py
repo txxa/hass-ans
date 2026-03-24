@@ -19,6 +19,8 @@ from homeassistant.exceptions import (
     ServiceValidationError,
 )
 
+from custom_components.ans.const import TTS_DEFAULT_TRAILING_SILENCE_MS
+
 from ..exceptions import TTSDeliveryError, TTSVolumeControlError
 from ..models import (
     DeliveryResult,
@@ -471,6 +473,11 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
                     entity_id,
                     sanitized_message,
                     tts_service,
+                    trailing_silence_ms=(
+                        tts_settings.trailing_silence_ms
+                        if tts_settings is not None
+                        else TTS_DEFAULT_TRAILING_SILENCE_MS
+                    ),
                     notification_id=payload.notification_id,
                     job_id=job_id,
                 )
@@ -699,6 +706,7 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
         message: str,
         tts_service: str,
         *,
+        trailing_silence_ms: int = 0,
         notification_id: str = "unknown",
         job_id: str = "unknown",
     ) -> None:
@@ -716,6 +724,13 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
         tts_service : str
             TTS engine entity ID (e.g. ``"tts.piper"`` or
             ``"tts.google_translate"``), used as the service call target.
+        trailing_silence_ms : int
+            Additional milliseconds to wait after ``tts.speak`` returns before
+            returning to the caller.  ``tts.speak`` with ``blocking=True``
+            resolves when HA acknowledges the service call, which may be before
+            the media player transitions to PLAYING.  A non-zero value lets the
+            player settle before the fallback-restore timer is scheduled.
+            Defaults to 0 (no extra wait).
         notification_id : str
             Unique identifier for the notification (used for logging).
         job_id : str
@@ -738,6 +753,12 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
             len(message),
             notification_id,
         )
+        # Append trailing silence as SSML (e.g. ``<break time="500ms"/>``) to the message
+        # to give the player time to transition to PLAYING before the fallback timer starts
+        # or to overcome delays due to player buffering resulting in end of sentence cut-offs.
+        tts_message = message
+        if trailing_silence_ms > 0:
+            tts_message += f' <break time="{trailing_silence_ms}ms"/>'
         # HA transport-level errors (e.g. ClientConnectionResetError) surface in
         # homeassistant.components.tts logs, not here — see HA core for full trace.
         async with asyncio.timeout(TTS_SPEAK_TIMEOUT):
@@ -746,11 +767,18 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
                 service="speak",
                 service_data={
                     "media_player_entity_id": entity_id,
-                    "message": message,
+                    "message": tts_message,
+                    "cache": "true",
                 },
                 target={"entity_id": tts_service},
                 blocking=True,
             )
+
+        # Wait for the media player to transition to PLAYING before returning.
+        # tts.speak with blocking=True resolves on HA acknowledgement, which may
+        # precede actual playback start. Skip entirely when the caller sets 0.
+        # if trailing_silence_ms > 0:
+        #     await asyncio.sleep(trailing_silence_ms / 1000)
 
         _LOGGER.debug(
             "TTS speak completed: job_id=%s engine=%s player=%s notification_id=%s elapsed_ms=%d",

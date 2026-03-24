@@ -31,6 +31,7 @@ from ..const import (
     RCPT_CONFIG_RECIPIENT_CHOICE_KEY,
     RCPT_CONFIG_RETRY_ATTEMPTS_KEY,
     RCPT_CONFIG_TTS_MESSAGE_FORMAT_KEY,
+    RCPT_CONFIG_TTS_TRAILING_SILENCE_KEY,
     RCPT_CONFIG_TTS_VOLUME_DAYTIME_KEY,
     RCPT_CONFIG_TTS_VOLUME_EVENING_KEY,
     RCPT_CONFIG_TTS_VOLUME_MORNING_KEY,
@@ -74,6 +75,7 @@ from ..const import (
     SYS_STORAGE_DEFAULT_FILE_RETENTION_DAYS,
     SYS_STORAGE_MAX_FILE_RETENTION_DAYS,
     TTS_DEFAULT_MESSAGE_FORMAT,
+    TTS_DEFAULT_TRAILING_SILENCE_MS,
     TTS_DEFAULT_VOLUME_DAYTIME,
     TTS_DEFAULT_VOLUME_EVENING,
     TTS_DEFAULT_VOLUME_MORNING,
@@ -722,6 +724,25 @@ def get_recipient_tts_settings_schema(
                     multiple=False,
                     mode=SelectSelectorMode.DROPDOWN,
                 ),
+            ),
+            vol.Optional(
+                RCPT_CONFIG_TTS_TRAILING_SILENCE_KEY,
+                description={
+                    "suggested_value": defaults.get(
+                        RCPT_CONFIG_TTS_TRAILING_SILENCE_KEY,
+                        TTS_DEFAULT_TRAILING_SILENCE_MS,
+                    ),
+                },
+            ): selector(
+                {
+                    "number": {
+                        "min": 0,
+                        "max": 5000,
+                        "step": 100,
+                        "mode": "box",
+                        "unit_of_measurement": "ms",
+                    }
+                }
             ),
         },
         required=True,

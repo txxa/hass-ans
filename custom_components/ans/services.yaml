@@ -27,7 +27,7 @@ send_notification:
       name: Type
       description: The type or category of the notification.
       required: true
-      example: "security"
+      example: "SECURITY"
       selector:
         select:
           options:
@@ -47,7 +47,7 @@ send_notification:
       name: Criticality
       description: The criticality or priority level of the notification.
       required: true
-      example: "high"
+      example: "HIGH"
       selector:
         select:
           options:

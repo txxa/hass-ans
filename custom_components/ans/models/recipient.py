@@ -26,6 +26,7 @@ from ..const import (
     RCPT_CONFIG_RETRY_ATTEMPTS_KEY,
     RCPT_CONFIG_TTS_MESSAGE_FORMAT_KEY,
     RCPT_CONFIG_TTS_SETTINGS_KEY,
+    RCPT_CONFIG_TTS_TRAILING_SILENCE_KEY,
     RCPT_CONFIG_TTS_VOLUME_DAYTIME_KEY,
     RCPT_CONFIG_TTS_VOLUME_EVENING_KEY,
     RCPT_CONFIG_TTS_VOLUME_MORNING_KEY,
@@ -43,6 +44,7 @@ from ..const import (
     RCPT_DEFAULT_RATE_LIMIT,
     RCPT_DEFAULT_RETRY_ATTEMPTS,
     TTS_DEFAULT_MESSAGE_FORMAT,
+    TTS_DEFAULT_TRAILING_SILENCE_MS,
     TTS_DEFAULT_VOLUME_DAYTIME,
     TTS_DEFAULT_VOLUME_EVENING,
     TTS_DEFAULT_VOLUME_MORNING,
@@ -81,6 +83,7 @@ class TTSSettings:
     volume_override_criticalities: list[str]  # List of criticality values
     volume_override_level: int  # 0-100
     message_format: str  # "title_and_message", "message_only", "title_only"
+    trailing_silence_ms: int  # 0-5000 ms of trailing silence to pad Snapcast buffer
 
     def __post_init__(self):
         """Validate TTS settings."""
@@ -101,6 +104,10 @@ class TTSSettings:
         if self.message_format not in valid_formats:
             raise ValueError(f"message_format must be one of {valid_formats}")
 
+        # Validate trailing silence
+        if not 0 <= self.trailing_silence_ms <= 5000:
+            raise ValueError("trailing_silence_ms must be between 0 and 5000")
+
     @classmethod
     def default(cls) -> TTSSettings:
         """Return default TTS settings."""
@@ -112,6 +119,7 @@ class TTSSettings:
             volume_override_criticalities=[],
             volume_override_level=TTS_DEFAULT_VOLUME_OVERRIDE_LEVEL,
             message_format=TTS_DEFAULT_MESSAGE_FORMAT,
+            trailing_silence_ms=TTS_DEFAULT_TRAILING_SILENCE_MS,
         )
 
     def to_dict(self) -> dict:
@@ -124,6 +132,7 @@ class TTSSettings:
             RCPT_CONFIG_TTS_VOLUME_OVERRIDE_CRITICALITIES_KEY: self.volume_override_criticalities,
             RCPT_CONFIG_TTS_VOLUME_OVERRIDE_LEVEL_KEY: self.volume_override_level,
             RCPT_CONFIG_TTS_MESSAGE_FORMAT_KEY: self.message_format,
+            RCPT_CONFIG_TTS_TRAILING_SILENCE_KEY: self.trailing_silence_ms,
         }
 
     @staticmethod
@@ -139,6 +148,9 @@ class TTSSettings:
             ],
             volume_override_level=data[RCPT_CONFIG_TTS_VOLUME_OVERRIDE_LEVEL_KEY],
             message_format=data[RCPT_CONFIG_TTS_MESSAGE_FORMAT_KEY],
+            trailing_silence_ms=data.get(
+                RCPT_CONFIG_TTS_TRAILING_SILENCE_KEY, TTS_DEFAULT_TRAILING_SILENCE_MS
+            ),
         )
 
 

@@ -97,11 +97,12 @@ class NotificationDeliveryProcessor:
 
         """
         _LOGGER.debug(
-            "Processing task notification_id=%s job_id=%s recipient=%s channel=%s",
+            "Processing task notification_id=%s job_id=%s recipient=%s channel=%s%s",
             task.payload.notification_id,
             task.job_id,
             task.recipient_id,
             task.channel_info.id,
+            " (retry)" if task.is_retry else "",
         )
 
         # NOTE: Notification already registered in orchestrator before fan-out
@@ -367,7 +368,7 @@ class NotificationDeliveryProcessor:
         attempt.remote_id = result.remote_id
 
         duration_ms = int(
-            (attempt.ended_at - attempt.created_at).total_seconds() * 1000
+            (attempt.ended_at - attempt.started_at).total_seconds() * 1000
         )
 
         # Log attempt with final status (only logged once)

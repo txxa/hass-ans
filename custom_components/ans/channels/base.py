@@ -278,6 +278,7 @@ class DeliveryAdapter(ABC):
         payload: NotificationPayload,
         contact_info: RecipientContactInfo,
         idempotency_key: str,
+        job_id: str,
         options: DeliveryOptions | None = None,
     ) -> DeliveryResult:
         """Perform exactly one delivery attempt.

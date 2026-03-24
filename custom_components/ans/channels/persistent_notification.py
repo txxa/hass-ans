@@ -120,6 +120,7 @@ class PersistentNotificationAdapter(DeliveryAdapter):
         payload: NotificationPayload,
         contact_info: RecipientContactInfo,
         idempotency_key: str,
+        job_id: str,
         options: DeliveryOptions | None = None,
     ) -> DeliveryResult:
         """Deliver notification via persistent notification service.
@@ -132,6 +133,8 @@ class PersistentNotificationAdapter(DeliveryAdapter):
             Recipient contact information (not used for persistent notifications).
         idempotency_key : str
             Unique key for idempotent retries.
+        job_id : str
+            Job identifier for cross-layer log correlation.
         options : DeliveryOptions | None
             Per-delivery options (not used by this adapter).
 
@@ -168,7 +171,8 @@ class PersistentNotificationAdapter(DeliveryAdapter):
             )
 
             _LOGGER.debug(
-                "Persistent notification created: id='%s' notification_id=%s",
+                "Persistent notification created: job_id=%s id='%s' notification_id=%s",
+                job_id,
                 idempotency_key,
                 payload.notification_id,
             )
@@ -177,7 +181,8 @@ class PersistentNotificationAdapter(DeliveryAdapter):
         except ServiceNotFound as exc:
             _LOGGER.warning(
                 "persistent_notification service not found (permanent): "
-                "notification_id=%s key=%s: %s",
+                "job_id=%s notification_id=%s key=%s: %s",
+                job_id,
                 payload.notification_id,
                 idempotency_key,
                 exc,
@@ -188,7 +193,8 @@ class PersistentNotificationAdapter(DeliveryAdapter):
         except ServiceValidationError as exc:
             _LOGGER.warning(
                 "persistent_notification service validation error (permanent): "
-                "notification_id=%s key=%s: %s",
+                "job_id=%s notification_id=%s key=%s: %s",
+                job_id,
                 payload.notification_id,
                 idempotency_key,
                 exc,
@@ -198,7 +204,8 @@ class PersistentNotificationAdapter(DeliveryAdapter):
             )
         except HomeAssistantError as exc:
             _LOGGER.warning(
-                "persistent_notification service error: notification_id=%s key=%s: %s",
+                "persistent_notification service error: job_id=%s notification_id=%s key=%s: %s",
+                job_id,
                 payload.notification_id,
                 idempotency_key,
                 exc,
@@ -209,7 +216,8 @@ class PersistentNotificationAdapter(DeliveryAdapter):
         except Exception as exc:
             _LOGGER.exception(
                 "Unexpected persistent_notification adapter failure: "
-                "notification_id=%s key=%s",
+                "job_id=%s notification_id=%s key=%s",
+                job_id,
                 payload.notification_id,
                 idempotency_key,
             )

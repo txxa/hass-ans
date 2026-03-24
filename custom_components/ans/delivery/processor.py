@@ -275,6 +275,7 @@ class NotificationDeliveryProcessor:
                 payload=task.payload,
                 contact_info=task.contact_info,
                 idempotency_key=attempt.idempotency_key,
+                job_id=str(task.job_id),
                 options=TTSDeliveryOptions(tts_settings=task.tts_settings)
                 if task.tts_settings
                 else None,

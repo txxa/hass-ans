@@ -179,6 +179,7 @@ class MobileAppDeliveryAdapter(DeliveryAdapter):
         payload: NotificationPayload,
         contact_info: RecipientContactInfo,
         idempotency_key: str,
+        job_id: str,
         options: DeliveryOptions | None = None,
     ) -> DeliveryResult:
         """Deliver notification via mobile_app notify service.
@@ -191,6 +192,8 @@ class MobileAppDeliveryAdapter(DeliveryAdapter):
             Recipient contact information including mobile_device_id.
         idempotency_key : str
             Unique key for idempotent retries.
+        job_id : str
+            Job identifier for cross-layer log correlation.
         options : DeliveryOptions | None
             Per-delivery options (not used by the mobile app adapter).
 
@@ -227,7 +230,8 @@ class MobileAppDeliveryAdapter(DeliveryAdapter):
             )
 
             _LOGGER.debug(
-                "Mobile app notification sent: device=%s notification_id=%s key=%s",
+                "Mobile app notification sent: job_id=%s device=%s notification_id=%s key=%s",
+                job_id,
                 self.device_id,
                 payload.notification_id,
                 idempotency_key,
@@ -237,8 +241,9 @@ class MobileAppDeliveryAdapter(DeliveryAdapter):
         except ServiceNotFound as exc:
             _LOGGER.warning(
                 "Mobile app service 'notify.%s' not found (permanent): "
-                "notification_id=%s key=%s: %s",
+                "job_id=%s notification_id=%s key=%s: %s",
                 self.device_id,
+                job_id,
                 payload.notification_id,
                 idempotency_key,
                 exc,
@@ -249,8 +254,9 @@ class MobileAppDeliveryAdapter(DeliveryAdapter):
         except ServiceValidationError as exc:
             _LOGGER.warning(
                 "Mobile app service 'notify.%s' validation error (permanent): "
-                "notification_id=%s key=%s: %s",
+                "job_id=%s notification_id=%s key=%s: %s",
                 self.device_id,
+                job_id,
                 payload.notification_id,
                 idempotency_key,
                 exc,
@@ -260,8 +266,9 @@ class MobileAppDeliveryAdapter(DeliveryAdapter):
             )
         except HomeAssistantError as exc:
             _LOGGER.warning(
-                "Mobile app service error for device '%s': notification_id=%s key=%s: %s",
+                "Mobile app service error for device '%s': job_id=%s notification_id=%s key=%s: %s",
                 self.device_id,
+                job_id,
                 payload.notification_id,
                 idempotency_key,
                 exc,

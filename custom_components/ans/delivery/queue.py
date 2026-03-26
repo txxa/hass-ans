@@ -4,6 +4,7 @@ Manages concurrent delivery processing with configurable concurrency limits.
 """
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -62,13 +63,28 @@ class NotificationDeliveryTaskQueue:
             _LOGGER.info("ANS retry queue poller started")
 
     async def stop(self) -> None:
-        """Stop the worker loop and retry poller, wait for completion."""
+        """Stop the worker loop, retry poller, and all background tasks."""
         self._stopped.set()
+
+        # Cancel delayed-enqueue background tasks that may be sleeping.
+        for task in list(self._background_tasks):
+            task.cancel()
+        if self._background_tasks:
+            await asyncio.gather(*self._background_tasks, return_exceptions=True)
+        self._background_tasks.clear()
+
+        # Cancel the worker and poller immediately instead of waiting up to
+        # 1 s (_worker_loop timeout) or 10 s (_retry_poller_loop sleep) for
+        # the stop flag to be re-checked at the top of the loop.
         if self._worker_task:
-            await self._worker_task
+            self._worker_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._worker_task
             _LOGGER.info("ANS task queue stopped")
         if self._retry_poller_task:
-            await self._retry_poller_task
+            self._retry_poller_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._retry_poller_task
             _LOGGER.info("ANS retry queue poller stopped")
 
     # --------------------

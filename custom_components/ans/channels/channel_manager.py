@@ -149,7 +149,9 @@ class ChannelManager:
             detected_ids = {info.id for info in detected_infos}
             detected_map = {info.id: info for info in detected_infos}
 
-            added = removed = 0
+            added = 0
+            # Collect destroy coroutines to run concurrently after the diff.
+            destroy_coros: list = []
 
             # Start with STATIC records preserved unchanged.
             new_records: dict[str, ChannelRecord] = {
@@ -165,8 +167,9 @@ class ChannelManager:
                 if channel_id not in enabled_set:
                     # Detected but not enabled → DETECTED, no adapter.
                     if existing and existing.adapter:
-                        await self._destroy_adapter(channel_id, existing)
-                        removed += 1
+                        destroy_coros.append(
+                            self._destroy_adapter(channel_id, existing)
+                        )
                     new_records[channel_id] = ChannelRecord(
                         info=info, adapter=None, status=ChannelStatus.DETECTED
                     )
@@ -176,8 +179,9 @@ class ChannelManager:
                 factory = self._find_factory(channel_id)
                 if factory is None:
                     if existing and existing.adapter:
-                        await self._destroy_adapter(channel_id, existing)
-                        removed += 1
+                        destroy_coros.append(
+                            self._destroy_adapter(channel_id, existing)
+                        )
                     new_records[channel_id] = ChannelRecord(
                         info=info, adapter=None, status=ChannelStatus.INACTIVE
                     )
@@ -223,14 +227,18 @@ class ChannelManager:
                 if channel_id in new_records:
                     continue
                 if record.adapter:
-                    await self._destroy_adapter(channel_id, record)
-                    removed += 1
+                    destroy_coros.append(self._destroy_adapter(channel_id, record))
                 new_records[channel_id] = ChannelRecord(
                     info=record.info, adapter=None, status=ChannelStatus.STALE
                 )
                 _LOGGER.info(
                     "Channel '%s' → STALE (no longer detected in HA)", channel_id
                 )
+
+            # Destroy all outgoing adapters concurrently.
+            removed = len(destroy_coros)
+            if destroy_coros:
+                await asyncio.gather(*destroy_coros, return_exceptions=True)
 
             self._records = new_records
 
@@ -515,8 +523,13 @@ class ChannelManager:
 
     async def cleanup_all(self) -> None:
         """Destroy all adapters and clear records. Called during integration unload."""
-        for channel_id, record in list(self._records.items()):
-            await self._destroy_adapter(channel_id, record)
+        await asyncio.gather(
+            *(
+                self._destroy_adapter(ch_id, rec)
+                for ch_id, rec in list(self._records.items())
+            ),
+            return_exceptions=True,
+        )
         self._records.clear()
         _LOGGER.info("All channel adapters cleaned up")
 

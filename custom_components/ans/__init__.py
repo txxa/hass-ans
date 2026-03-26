@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -159,16 +160,15 @@ async def _setup_tasks(
 
     """
     _LOGGER.info("[ANS setup] Phase 4/5 — starting background tasks")
-    await system.task_queue.start()
-    _LOGGER.debug("[ANS setup] Task queue started")
-
-    await system.housekeeping_scheduler.start()
-    _LOGGER.debug("[ANS setup] Housekeeping scheduler started")
-
-    await system.deduplication_service.start()
-    _LOGGER.debug("[ANS setup] Deduplication service started")
+    await asyncio.gather(
+        system.task_queue.start(),
+        system.housekeeping_scheduler.start(),
+        system.deduplication_service.start(),
+    )
+    _LOGGER.debug("[ANS setup] Background workers started")
 
     now = datetime.now(UTC)
+    pending_coros = []
     for task, scheduled_time in pending_tasks:
         delay_seconds = max((scheduled_time - now).total_seconds(), 0)
         if delay_seconds == 0:
@@ -176,17 +176,24 @@ async def _setup_tasks(
                 "[ANS setup] Retry for job %s is overdue, executing immediately",
                 task.job_id,
             )
-        await system.task_queue.add_task(task, delay=timedelta(seconds=delay_seconds))
+        pending_coros.append(
+            system.task_queue.add_task(task, delay=timedelta(seconds=delay_seconds))
+        )
+    if pending_coros:
+        await asyncio.gather(*pending_coros, return_exceptions=True)
 
+    remove_coros = []
     for job_id_str in orphaned_retries:
         _LOGGER.warning(
             "[ANS setup] Removing orphaned retry schedule for job %s (no task data)",
             job_id_str,
         )
         try:
-            await system.retry_queue.remove_retry(UUID(job_id_str))
+            remove_coros.append(system.retry_queue.remove_retry(UUID(job_id_str)))
         except ValueError:
             _LOGGER.error("[ANS setup] Invalid UUID for orphaned retry: %s", job_id_str)
+    if remove_coros:
+        await asyncio.gather(*remove_coros, return_exceptions=True)
 
 
 async def _setup_services(hass: HomeAssistant, system: ANSSystem) -> None:
@@ -328,9 +335,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         entry_data: dict = {}
         entry.runtime_data = entry_data
 
-        # Phase 1 — configuration
-        config_repo = await _setup_config(hass, entry)
+        # Phase 1 — configuration + volume restoration (concurrent: independent I/O)
+        volume_registry = VolumeRestorationRegistry(hass)
+        config_repo, _ = await asyncio.gather(
+            _setup_config(hass, entry),
+            volume_registry.async_load(),
+        )
         entry_data["config_repository"] = config_repo
+        entry_data["volume_registry"] = volume_registry
+        _LOGGER.debug("[ANS setup] Configuration and volume registry loaded")
 
         snapshot = config_repo.snapshot()
         if not snapshot.getRecipients():
@@ -341,11 +354,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
 
         # Phase 2 — system (ChannelManager injected into config_repo inside create_system)
-        volume_registry = VolumeRestorationRegistry(hass)
-        await volume_registry.async_load()
-        entry_data["volume_registry"] = volume_registry
-        _LOGGER.debug("[ANS setup] Volume restoration registry initialized")
-
         system = await _setup_system(hass, config_repo, volume_registry)
         entry_data["system"] = system
 
@@ -387,22 +395,22 @@ async def _teardown_entry_components(entry_data: dict) -> None:
     system: ANSSystem | None = entry_data.get("system")
     volume_registry = entry_data.get("volume_registry")
 
+    teardown_coros = []
     if system:
-        await system.task_queue.stop()
-        _LOGGER.debug("ANS task queue stopped")
-
-        await system.housekeeping_scheduler.stop()
-        _LOGGER.debug("ANS housekeeping scheduler stopped")
-
-        await system.deduplication_service.stop()
-        _LOGGER.debug("ANS deduplication service stopped")
-
-        await system.channel_manager.cleanup_all()
-        _LOGGER.debug("ANS channel manager cleaned up")
-
+        teardown_coros.extend(
+            [
+                system.task_queue.stop(),
+                system.housekeeping_scheduler.stop(),
+                system.deduplication_service.stop(),
+                system.channel_manager.cleanup_all(),
+            ]
+        )
     if volume_registry:
-        await volume_registry.async_unload()
-        _LOGGER.debug("Volume restoration registry unloaded")
+        teardown_coros.append(volume_registry.async_unload())
+
+    if teardown_coros:
+        await asyncio.gather(*teardown_coros, return_exceptions=True)
+    _LOGGER.debug("ANS components torn down")
 
 
 async def cleanup_entry_data(hass: HomeAssistant, entry_id: str) -> None:

@@ -38,19 +38,23 @@ This integration provides a centralized notification system that intelligently r
   - Crash recovery with persistent state
 - **Multi-Channel Support**:
   - System channels (persistent notification)
-  - Recipient channels (mobile app, and other Home Assistant notification services)
+  - Recipient channels (mobile app, Signal Messenger, and other Home Assistant notification services)
   - Text-to-Speech (TTS) delivery via media players
   - Extensible adapter architecture for additional channels
 - **Text-to-Speech Delivery**:
   - Time-based volume control with four configurable time frames (morning, daytime, evening, night)
   - Criticality-based volume overrides for urgent notifications
-  - Automatic volume restoration after playback
+  - Automatic volume restoration after playback, backed by persistent storage so restores survive restarts
+  - Configurable trailing silence padding to compensate for audio pipeline buffering (e.g., Snapcast)
+  - Per-device delivery lock prevents overlapping TTS playback on the same media player
   - Deduplication to prevent the same message from playing multiple times
 - **Comprehensive Tracking**:
   - Notification registry for all messages
   - Delivery attempt logs for audit trails
   - Persistent retry queue across restarts
-  - Configurable retention periods for historical data
+  - Configurable retention periods for historical data (default: 7 days, max: 365 days)
+  - Hourly housekeeping to automatically purge expired records
+- **Diagnostics**: Built-in Home Assistant diagnostics panel shows channel health, adapter status, and recipient summary
 - **Flexible Configuration**:
   - UI-based configuration flow
   - Per-recipient customization
@@ -104,9 +108,12 @@ When a notification enters the system, the following process occurs:
 - **Filter Engine**: Evaluates policies to determine if a notification should be delivered
 - **Rate Limiter**: Enforces token bucket-based rate limiting at recipient and system levels
 - **Delivery Processor**: Executes delivery tasks and manages the delivery lifecycle
-- **Delivery Adapters**: Channel-specific implementations that interface with notification services
+- **Delivery Adapters**: Channel-specific implementations that interface with notification services (persistent notification, mobile app, Signal Messenger, TTS media player)
+- **Channel Manager**: Unified source of truth for channel metadata and live adapter instances; auto-detects newly registered notify services and media players
+- **Deduplication Service**: LRU-based cache with TTL expiration (60 s window) and automatic cleanup prevents the same notification from being delivered twice to the same channel
 - **Retry Scheduler**: Manages exponential backoff and retry timing
-- **Persistence Layer**: Ensures durability through file-based storage
+- **Persistence Layer**: Ensures durability through file-based storage with hourly housekeeping
+- **Volume Restoration Registry**: Persist the pre-TTS volume of each media player and restore it after playback even across Home Assistant restarts
 
 The system is designed with fault tolerance in mind. All processing is idempotent, meaning operations can be safely retried without duplication. The persistent storage ensures that even after a Home Assistant restart, pending notifications and retry queues are preserved and processing continues seamlessly.
 
@@ -163,10 +170,10 @@ To add a new recipient:
 **Step 1: Select/Create Recipient**
 
 Choose the recipient type:
-- **System: Home Assistant**: A special built-in recipient for system-level notifications via persistent notification. Recipient data (Steps 2) is skipped — name and settings are applied automatically and cannot be changed.
-- **Existing Home Assistant user**: Links the recipient to an HA user account
-- **New virtual recipient**: Creates a custom recipient identified by email address or phone number
-- **TTS Speaker (Audio Notifications)**: Creates a recipient that delivers spoken notifications to media player entities
+- **System: Home Assistant**: A special built-in recipient for system-level notifications via persistent notification. Recipient data (Step 2) is skipped — name and settings are applied automatically and cannot be changed.
+- **Home Assistant users** (listed individually): Links the recipient to an existing HA user account. Only users not yet configured as recipients appear in this list.
+- **TTS: Text-to-Speech recipient**: Creates a recipient that delivers spoken notifications to media player entities (requires a TTS service to be configured in the initial setup)
+- **Virtual: Custom recipient**: Creates a custom recipient identified by display name, email address, or phone number
 
 **Step 2: Recipient Data** *(skipped for System: Home Assistant)*
 - **Display Name**: Friendly name for the recipient
@@ -194,9 +201,10 @@ Choose the recipient type:
 - **Override Volume Level**: Volume used when the criticality override is triggered (default 80%)
 - **Override for Criticalities**: Select which criticality levels trigger the override volume (e.g., HIGH, CRITICAL)
 - **Message Format**: How notification content is spoken:
-  - `title_and_message`: speaks "{title}. {message}"
+  - `title_and_message`: speaks "{title}. {message}" *(default)*
   - `message_only`: speaks only the message
   - `title_only`: speaks only the title
+- **Trailing Silence Padding** (ms): Extra silence appended after the spoken message (default 1000 ms). Compensates for audio pipeline buffering, such as Snapcast's default buffer size. Increase this value if the end of the message is cut off. Maximum: 5000 ms.
 
 **Step 5: Channel Mapping**
 - Map each criticality level (LOW, MEDIUM, HIGH, CRITICAL) to specific delivery channels
@@ -216,9 +224,13 @@ Choose the recipient type:
 
 All recipient settings can be updated at any time using the Reconfigure flow for the specific recipient entry.
 
-### Sending Notifications
+### Services
 
-Use the `ans.send_notification` service to send notifications:
+ANS registers two services.
+
+#### `ans.send_notification`
+
+Send a notification through the delivery pipeline:
 
 ```yaml
 service: ans.send_notification
@@ -233,13 +245,25 @@ data:
     entity_id: "binary_sensor.front_door_motion"
 ```
 
-**Service Parameters**:
-- `source` (required): Identifier of the notification source
-- `title` (required): Notification title
-- `message` (required): Notification message body
-- `type` (required): Notification type (INFO, WARNING, ALERT, REMINDER, EVENT, SECURITY)
-- `criticality` (required): Criticality level (LOW, MEDIUM, HIGH, CRITICAL)
-- `metadata` (optional): Additional key-value data to include with the notification
+**Parameters**:
+| Field | Required | Values | Description |
+|---|---|---|---|
+| `source` | ✅ | any string | Identifier of the notification source |
+| `title` | ✅ | any string | Notification title |
+| `message` | ✅ | any string | Notification message body |
+| `type` | ✅ | `INFO` `WARNING` `ALERT` `REMINDER` `EVENT` `SECURITY` | Notification category |
+| `criticality` | ✅ | `LOW` `MEDIUM` `HIGH` `CRITICAL` | Priority level used for channel mapping, rate limiting, and DND bypass |
+| `metadata` | ❌ | key-value dict | Optional additional data attached to the notification |
+
+#### `ans.refresh_channels`
+
+Reload all notification channels and re-synchronize delivery adapters. Use this service after adding a new notify integration or media player entity, or when channels are not appearing in ANS:
+
+```yaml
+service: ans.refresh_channels
+```
+
+This service takes no parameters. It triggers a full re-detection of available `notify.*` services and `media_player.*` entities and rebuilds the active adapter set accordingly.
 
 ## Development and maintenance
 

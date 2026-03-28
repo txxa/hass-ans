@@ -62,6 +62,7 @@ async def test_title_auto_styled_bold():
         payload=payload,
         contact_info=_make_contact(),
         idempotency_key="k1",
+        job_id="job-1",
     )
 
     assert result.status == DeliveryStatus.SUCCESS
@@ -86,6 +87,7 @@ async def test_title_explicit_styled_bold():
         payload=payload,
         contact_info=_make_contact(),
         idempotency_key="k2",
+        job_id="job-1",
     )
 
     assert result.status == DeliveryStatus.SUCCESS
@@ -108,6 +110,7 @@ async def test_title_explicit_normal_no_bold():
         payload=payload,
         contact_info=_make_contact(),
         idempotency_key="k3",
+        job_id="job-1",
     )
 
     assert result.status == DeliveryStatus.SUCCESS
@@ -126,6 +129,7 @@ async def test_no_title_no_metadata_normal_mode():
         payload=payload,
         contact_info=_make_contact(),
         idempotency_key="k4",
+        job_id="job-1",
     )
 
     assert result.status == DeliveryStatus.SUCCESS
@@ -148,6 +152,7 @@ async def test_no_title_with_metadata_normal_mode():
         payload=payload,
         contact_info=_make_contact(),
         idempotency_key="k5",
+        job_id="job-1",
     )
 
     assert result.status == DeliveryStatus.SUCCESS
@@ -175,6 +180,7 @@ async def test_invalid_text_mode_falls_back_to_normal(caplog):
         payload=payload,
         contact_info=_make_contact(),
         idempotency_key="k6",
+        job_id="job-1",
     )
 
     assert result.status == DeliveryStatus.SUCCESS
@@ -198,6 +204,7 @@ async def test_missing_phone_permanent_failure():
         payload=payload,
         contact_info=_make_contact(phone=None),
         idempotency_key="k7",
+        job_id="job-1",
     )
 
     assert result.status == DeliveryStatus.PERMANENT_FAIL
@@ -228,6 +235,7 @@ async def test_attachments_and_urls_passed_through():
         payload=payload,
         contact_info=_make_contact(),
         idempotency_key="k8",
+        job_id="job-1",
     )
 
     assert result.status == DeliveryStatus.SUCCESS

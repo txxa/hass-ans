@@ -1,8 +1,12 @@
 {
     "python.testing.pytestArgs": [
-        "tests",
+        "custom_components/ans/tests",
+        "--ignore=custom_components/ans/tests/test_integration.py"
     ],
     "python.testing.unittestEnabled": false,
     "python.testing.pytestEnabled": true,
-    "python.envFile": "${workspaceFolder}/.venv/.env"
+    "python.envFile": "${workspaceFolder}/.venv/.env",
+    "terminal.integrated.env.linux": {
+        "PYTHONPATH": "${workspaceFolder}/custom_components"
+    }
 }

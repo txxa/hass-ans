@@ -98,7 +98,6 @@ def _make_processor(
         )
     )
 
-
     return NotificationDeliveryProcessor(
         filter_engine=filter_engine or _filter_allowed(),
         rate_limiter=rate_limiter or _rate_limiter_allow(),

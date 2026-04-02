@@ -223,3 +223,58 @@ def test_validate_boolean_false():
 def test_validate_boolean_invalid():
     with pytest.raises(TypeError, match="boolean"):
         ConfigValidator._validate_boolean("yes")
+
+
+# ---------------------------------------------------------------------------
+# validate_recipient_tts_settings_schema — ssml_enabled preload regression
+# ---------------------------------------------------------------------------
+
+
+def _valid_tts_data(**overrides) -> dict:
+    """Return a minimal valid TTS settings dict."""
+    base = {
+        "volume_morning": 40,
+        "volume_daytime": 50,
+        "volume_evening": 35,
+        "volume_night": 20,
+        "volume_override_criticalities": [],
+        "volume_override_level": 80,
+        "message_format": "message_only",
+        "ssml_enabled": False,
+    }
+    base.update(overrides)
+    return base
+
+
+def test_tts_settings_schema_accepts_ssml_enabled_true():
+    """Schema must accept and pass through ssml_enabled=True."""
+    result = ConfigValidator.validate_recipient_tts_settings_schema(
+        _valid_tts_data(ssml_enabled=True)
+    )
+    assert result["ssml_enabled"] is True
+
+
+def test_tts_settings_schema_accepts_ssml_enabled_false():
+    """Schema must accept and pass through ssml_enabled=False."""
+    result = ConfigValidator.validate_recipient_tts_settings_schema(
+        _valid_tts_data(ssml_enabled=False)
+    )
+    assert result["ssml_enabled"] is False
+
+
+def test_tts_settings_schema_ssml_defaults_to_false_when_absent():
+    """When ssml_enabled is omitted the schema default (False) is applied."""
+    data = _valid_tts_data()
+    data.pop("ssml_enabled")
+    result = ConfigValidator.validate_recipient_tts_settings_schema(data)
+    assert result["ssml_enabled"] is False
+
+
+def test_tts_settings_schema_rejects_non_boolean_ssml():
+    """ssml_enabled must be a bool; non-bool values should be rejected."""
+    import voluptuous as vol
+
+    with pytest.raises(vol.Invalid):
+        ConfigValidator.validate_recipient_tts_settings_schema(
+            _valid_tts_data(ssml_enabled="yes")
+        )

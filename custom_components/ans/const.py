@@ -161,17 +161,23 @@ RCPT_CONFIG_TTS_VOLUME_NIGHT_KEY = "volume_night"
 RCPT_CONFIG_TTS_VOLUME_OVERRIDE_CRITICALITIES_KEY = "volume_override_criticalities"
 RCPT_CONFIG_TTS_VOLUME_OVERRIDE_LEVEL_KEY = "volume_override_level"
 RCPT_CONFIG_TTS_MESSAGE_FORMAT_KEY = "message_format"
-RCPT_CONFIG_TTS_TRAILING_SILENCE_KEY = "trailing_silence_ms"
+RCPT_CONFIG_TTS_SSML_ENABLED_KEY = "ssml_enabled"
+RCPT_CONFIG_TTS_VOLUME_MANAGEMENT_ENABLED_KEY = "volume_management_enabled"
 
 # TTS Defaults
-TTS_DEFAULT_VOLUME_MORNING = 50
-TTS_DEFAULT_VOLUME_DAYTIME = 70
-TTS_DEFAULT_VOLUME_EVENING = 50
-TTS_DEFAULT_VOLUME_NIGHT = 30
+TTS_DEFAULT_VOLUME_MORNING = 65
+TTS_DEFAULT_VOLUME_DAYTIME = 75
+TTS_DEFAULT_VOLUME_EVENING = 60
+TTS_DEFAULT_VOLUME_NIGHT = 50
 TTS_DEFAULT_VOLUME_OVERRIDE_LEVEL = 80
 TTS_DEFAULT_MESSAGE_FORMAT = "title_and_message"
-TTS_DEFAULT_TRAILING_SILENCE_MS = 0  # -> Disabled
-TTS_MAX_TRAILING_SILENCE_MS = 5000
+TTS_DEFAULT_SSML_ENABLED = (
+    False  # -> SSML mode disabled by default (plain-text engines)
+)
+TTS_DEFAULT_VOLUME_MANAGEMENT_ENABLED = True
+# Maximum seconds to wait for a media_player.volume_set service call to complete.
+# Guards against hung media player integrations stalling the event loop.
+VOLUME_SET_TIMEOUT = 10
 
 # Channel detection
 REQUIRED_MP_FEATURES = (

@@ -44,8 +44,10 @@ def _make_contact() -> RecipientContactInfo:
     return RecipientContactInfo(email_address=None, phone_number=None)
 
 
-def _make_adapter() -> tuple[TTSMediaPlayerAdapter, MagicMock, MagicMock, MagicMock]:
-    """Return (adapter, hass, config_repo, volume_controller)."""
+def _make_adapter(
+    delivery_lock: asyncio.Lock | None = None,
+) -> tuple[TTSMediaPlayerAdapter, MagicMock, MagicMock, MagicMock]:
+    """Return (adapter, hass, config_repo, volume_registry)."""
     hass = MagicMock()
     hass.services = MagicMock()
     hass.services.async_call = AsyncMock()
@@ -56,21 +58,22 @@ def _make_adapter() -> tuple[TTSMediaPlayerAdapter, MagicMock, MagicMock, MagicM
     snapshot.system_config.tts_service = "tts.piper"
     config_repo.snapshot.return_value = snapshot
 
-    volume_ctrl = MagicMock()
-    volume_ctrl.get_delivery_lock = MagicMock(return_value=asyncio.Lock())
-    volume_ctrl.calculate_target_volume = MagicMock(return_value=0.5)
-    volume_ctrl.apply_volume = AsyncMock()
-    volume_ctrl.safe_restore_volume = AsyncMock()
-    volume_ctrl.cancel_fallback_task = MagicMock()
-    volume_ctrl.set_fallback_task = MagicMock()
+    volume_registry = MagicMock()
+    volume_registry.apply_volume = AsyncMock()
+    volume_registry.restore_volume = AsyncMock()
+    volume_registry.cancel_fallback_task = MagicMock()
+    volume_registry.set_fallback_task = MagicMock()
+    volume_registry.mark_delivery_active = MagicMock()
+    volume_registry.mark_delivery_inactive = MagicMock()
 
     adapter = TTSMediaPlayerAdapter(
         hass=hass,
         entity_name="living_room",
         config_repo=config_repo,
-        volume_controller=volume_ctrl,
+        volume_registry=volume_registry,
+        delivery_lock=delivery_lock if delivery_lock is not None else asyncio.Lock(),
     )
-    return adapter, hass, config_repo, volume_ctrl
+    return adapter, hass, config_repo, volume_registry
 
 
 # ---------------------------------------------------------------------------
@@ -185,7 +188,7 @@ def test_format_message_none_settings_uses_default():
 
 
 async def test_no_tts_service_returns_permanent_failure():
-    adapter, hass, config_repo, volume_ctrl = _make_adapter()
+    adapter, hass, config_repo, volume_registry = _make_adapter()
     snapshot = MagicMock()
     snapshot.system_config.tts_service = None
     config_repo.snapshot.return_value = snapshot
@@ -210,7 +213,7 @@ async def test_no_tts_service_returns_permanent_failure():
 
 
 async def test_media_player_not_found_returns_permanent_failure():
-    adapter, hass, config_repo, volume_ctrl = _make_adapter()
+    adapter, hass, config_repo, volume_registry = _make_adapter()
     hass.states.get.return_value = None
 
     result = await adapter.deliver(
@@ -220,11 +223,11 @@ async def test_media_player_not_found_returns_permanent_failure():
         job_id="job-2",
     )
     assert result.status == DeliveryStatus.PERMANENT_FAIL
-    volume_ctrl.apply_volume.assert_not_called()
+    volume_registry.apply_volume.assert_not_called()
 
 
 async def test_media_player_off_returns_transient_failure():
-    adapter, hass, _, volume_ctrl = _make_adapter()
+    adapter, hass, _, volume_registry = _make_adapter()
     state = MagicMock()
     state.state = STATE_OFF
     hass.states.get.return_value = state
@@ -239,7 +242,7 @@ async def test_media_player_off_returns_transient_failure():
 
 
 async def test_media_player_unavailable_returns_transient_failure():
-    adapter, hass, _, volume_ctrl = _make_adapter()
+    adapter, hass, _, volume_registry = _make_adapter()
     state = MagicMock()
     state.state = STATE_UNAVAILABLE
     hass.states.get.return_value = state
@@ -259,7 +262,7 @@ async def test_media_player_unavailable_returns_transient_failure():
 
 
 async def test_service_not_found_returns_permanent_failure():
-    adapter, hass, _, volume_ctrl = _make_adapter()
+    adapter, hass, _, volume_registry = _make_adapter()
     state = MagicMock()
     state.state = "idle"
     hass.states.get.return_value = state
@@ -272,11 +275,11 @@ async def test_service_not_found_returns_permanent_failure():
         job_id="job-5",
     )
     assert result.status == DeliveryStatus.PERMANENT_FAIL
-    volume_ctrl.safe_restore_volume.assert_called_once()
+    volume_registry.restore_volume.assert_called_once()
 
 
 async def test_service_validation_error_returns_permanent_failure():
-    adapter, hass, _, volume_ctrl = _make_adapter()
+    adapter, hass, _, volume_registry = _make_adapter()
     state = MagicMock()
     state.state = "idle"
     hass.states.get.return_value = state
@@ -289,11 +292,11 @@ async def test_service_validation_error_returns_permanent_failure():
         job_id="job-6",
     )
     assert result.status == DeliveryStatus.PERMANENT_FAIL
-    volume_ctrl.safe_restore_volume.assert_called_once()
+    volume_registry.restore_volume.assert_called_once()
 
 
 async def test_ha_error_returns_transient_failure():
-    adapter, hass, _, volume_ctrl = _make_adapter()
+    adapter, hass, _, volume_registry = _make_adapter()
     state = MagicMock()
     state.state = "idle"
     hass.states.get.return_value = state
@@ -306,7 +309,7 @@ async def test_ha_error_returns_transient_failure():
         job_id="job-7",
     )
     assert result.status == DeliveryStatus.TRANSIENT_FAIL
-    volume_ctrl.safe_restore_volume.assert_called_once()
+    volume_registry.restore_volume.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -315,7 +318,7 @@ async def test_ha_error_returns_transient_failure():
 
 
 async def test_successful_delivery():
-    adapter, hass, _, volume_ctrl = _make_adapter()
+    adapter, hass, _, volume_registry = _make_adapter()
     state = MagicMock()
     state.state = "idle"
     hass.states.get.return_value = state
@@ -328,12 +331,12 @@ async def test_successful_delivery():
         job_id="job-8",
     )
     assert result.status == DeliveryStatus.SUCCESS
-    volume_ctrl.apply_volume.assert_called_once()
-    volume_ctrl.set_fallback_task.assert_called_once()
+    volume_registry.apply_volume.assert_called_once()
+    volume_registry.set_fallback_task.assert_called_once()
 
 
 async def test_successful_delivery_calls_tts_service():
-    adapter, hass, _, volume_ctrl = _make_adapter()
+    adapter, hass, _, volume_registry = _make_adapter()
     state = MagicMock()
     state.state = "idle"
     hass.states.get.return_value = state
@@ -357,12 +360,14 @@ async def test_successful_delivery_calls_tts_service():
 
 
 async def test_lock_timeout_returns_transient_failure():
-    adapter, hass, _, volume_ctrl = _make_adapter()
-
     # Provide a pre-acquired lock and set a tiny timeout so the test runs fast
     blocked_lock = asyncio.Lock()
     await blocked_lock.acquire()  # Lock is held; adapter can't acquire it
-    volume_ctrl.get_delivery_lock.return_value = blocked_lock
+    adapter, hass, _, _ = _make_adapter(delivery_lock=blocked_lock)
+
+    state = MagicMock()
+    state.state = "idle"
+    hass.states.get.return_value = state
 
     with patch(
         "custom_components.ans.channels.tts_mediaplayer.DELIVERY_LOCK_TIMEOUT",
@@ -376,3 +381,71 @@ async def test_lock_timeout_returns_transient_failure():
         )
     assert result.status == DeliveryStatus.TRANSIENT_FAIL
     assert "lock" in result.error.lower() or "timeout" in result.error.lower()
+
+
+# ---------------------------------------------------------------------------
+# _speak_message: SSML mode
+# ---------------------------------------------------------------------------
+
+
+async def test_speak_message_ssml_mode_wraps_and_escapes():
+    """SSML enabled: message is XML-escaped and wrapped in <speak>.</speak>."""
+    adapter, hass, *_ = _make_adapter()
+
+    await adapter._speak_message(
+        "media_player.living_room",
+        'Hello <world> & "you"',
+        "tts.piper",
+        ssml_enabled=True,
+    )
+
+    hass.services.async_call.assert_called_once()
+    sent_message = hass.services.async_call.call_args.kwargs["service_data"]["message"]
+    assert sent_message == '<speak>Hello &lt;world&gt; &amp; "you"</speak>'
+
+
+async def test_speak_message_ssml_disabled_sends_plain_text():
+    """SSML disabled: raw sanitized message is sent with no SSML wrapper."""
+    adapter, hass, *_ = _make_adapter()
+
+    await adapter._speak_message(
+        "media_player.living_room",
+        "Hello world",
+        "tts.piper",
+        ssml_enabled=False,
+    )
+
+    hass.services.async_call.assert_called_once()
+    sent_message = hass.services.async_call.call_args.kwargs["service_data"]["message"]
+    assert sent_message == "Hello world"
+
+
+async def test_successful_delivery_with_ssml_enabled():
+    """Full deliver() path with ssml_enabled=True produces SUCCESS and correct SSML body."""
+    from dataclasses import replace
+
+    adapter, hass, config_repo, volume_registry = _make_adapter()
+    state = MagicMock()
+    state.state = "idle"
+    hass.states.get.return_value = state
+
+    from ..channels.base import TTSDeliveryOptions  # noqa: PLC0415
+
+    settings = replace(
+        TTSSettings.default(),
+        ssml_enabled=True,
+        message_format="message_only",
+    )
+
+    result = await adapter.deliver(
+        payload=_make_payload(title="T", message="Test <msg> & more"),
+        contact_info=_make_contact(),
+        idempotency_key="key-ssml",
+        job_id="job-ssml",
+        options=TTSDeliveryOptions(tts_settings=settings),
+    )
+
+    assert result.status == DeliveryStatus.SUCCESS
+    hass.services.async_call.assert_called_once()
+    sent_message = hass.services.async_call.call_args.kwargs["service_data"]["message"]
+    assert sent_message == "<speak>Test &lt;msg&gt; &amp; more</speak>"

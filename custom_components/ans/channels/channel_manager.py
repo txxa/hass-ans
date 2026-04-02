@@ -68,6 +68,10 @@ class ChannelManager:
         self._last_enabled: list[str] = []
         self._setup_in_progress: bool = True
         self._pending_resync: bool = False
+        # Per-entity delivery locks — one per media player, shared across all
+        # adapter generations so that a resync() replacement adapter inherits
+        # the same lock and concurrent deliveries remain serialised.
+        self._delivery_locks: dict[str, asyncio.Lock] = {}
 
     # ------------------------------------------------------------------
     # Registration
@@ -422,6 +426,28 @@ class ChannelManager:
         """Return the live adapter for *channel_id*, or None."""
         record = self._records.get(channel_id)
         return record.adapter if record else None
+
+    def get_delivery_lock(self, entity_id: str) -> asyncio.Lock:
+        """Return (or create) the shared delivery lock for *entity_id*.
+
+        The lock is created once and reused across all adapter generations for
+        the same entity so that concurrent deliveries remain serialised even
+        when :meth:`resync` replaces the adapter instance.
+
+        Parameters
+        ----------
+        entity_id : str
+            Full media player entity ID (e.g. ``"media_player.living_room"``).
+
+        Returns
+        -------
+        asyncio.Lock
+            Shared delivery lock for this entity.
+
+        """
+        if entity_id not in self._delivery_locks:
+            self._delivery_locks[entity_id] = asyncio.Lock()
+        return self._delivery_locks[entity_id]
 
     def get_info(self, channel_id: str) -> ChannelInfo | None:
         """Return ChannelInfo for *channel_id*, or None."""

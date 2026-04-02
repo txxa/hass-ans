@@ -26,9 +26,10 @@ from ..const import (
     RCPT_CONFIG_RETRY_ATTEMPTS_KEY,
     RCPT_CONFIG_TTS_MESSAGE_FORMAT_KEY,
     RCPT_CONFIG_TTS_SETTINGS_KEY,
-    RCPT_CONFIG_TTS_TRAILING_SILENCE_KEY,
+    RCPT_CONFIG_TTS_SSML_ENABLED_KEY,
     RCPT_CONFIG_TTS_VOLUME_DAYTIME_KEY,
     RCPT_CONFIG_TTS_VOLUME_EVENING_KEY,
+    RCPT_CONFIG_TTS_VOLUME_MANAGEMENT_ENABLED_KEY,
     RCPT_CONFIG_TTS_VOLUME_MORNING_KEY,
     RCPT_CONFIG_TTS_VOLUME_NIGHT_KEY,
     RCPT_CONFIG_TTS_VOLUME_OVERRIDE_CRITICALITIES_KEY,
@@ -44,9 +45,10 @@ from ..const import (
     RCPT_DEFAULT_RATE_LIMIT,
     RCPT_DEFAULT_RETRY_ATTEMPTS,
     TTS_DEFAULT_MESSAGE_FORMAT,
-    TTS_DEFAULT_TRAILING_SILENCE_MS,
+    TTS_DEFAULT_SSML_ENABLED,
     TTS_DEFAULT_VOLUME_DAYTIME,
     TTS_DEFAULT_VOLUME_EVENING,
+    TTS_DEFAULT_VOLUME_MANAGEMENT_ENABLED,
     TTS_DEFAULT_VOLUME_MORNING,
     TTS_DEFAULT_VOLUME_NIGHT,
     TTS_DEFAULT_VOLUME_OVERRIDE_LEVEL,
@@ -83,7 +85,10 @@ class TTSSettings:
     volume_override_criticalities: list[str]  # List of criticality values
     volume_override_level: int  # 0-100
     message_format: str  # "title_and_message", "message_only", "title_only"
-    trailing_silence_ms: int  # 0-5000 ms of trailing silence to pad Snapcast buffer
+    ssml_enabled: bool = (
+        False  # True = wrap message in SSML <speak> document for SSML-aware engines
+    )
+    volume_management_enabled: bool = True
 
     def __post_init__(self):
         """Validate TTS settings."""
@@ -104,22 +109,27 @@ class TTSSettings:
         if self.message_format not in valid_formats:
             raise ValueError(f"message_format must be one of {valid_formats}")
 
-        # Validate trailing silence
-        if not 0 <= self.trailing_silence_ms <= 5000:
-            raise ValueError("trailing_silence_ms must be between 0 and 5000")
+        # Validate ssml_enabled
+        if not isinstance(self.ssml_enabled, bool):
+            raise TypeError("ssml_enabled must be a boolean")
+
+        # Validate volume_management_enabled
+        if not isinstance(self.volume_management_enabled, bool):
+            raise TypeError("volume_management_enabled must be a boolean")
 
     @classmethod
     def default(cls) -> TTSSettings:
         """Return default TTS settings."""
         return cls(
+            message_format=TTS_DEFAULT_MESSAGE_FORMAT,
+            ssml_enabled=TTS_DEFAULT_SSML_ENABLED,
+            volume_management_enabled=TTS_DEFAULT_VOLUME_MANAGEMENT_ENABLED,
             volume_morning=TTS_DEFAULT_VOLUME_MORNING,
             volume_daytime=TTS_DEFAULT_VOLUME_DAYTIME,
             volume_evening=TTS_DEFAULT_VOLUME_EVENING,
             volume_night=TTS_DEFAULT_VOLUME_NIGHT,
             volume_override_criticalities=[],
             volume_override_level=TTS_DEFAULT_VOLUME_OVERRIDE_LEVEL,
-            message_format=TTS_DEFAULT_MESSAGE_FORMAT,
-            trailing_silence_ms=TTS_DEFAULT_TRAILING_SILENCE_MS,
         )
 
     def to_dict(self) -> dict:
@@ -132,7 +142,8 @@ class TTSSettings:
             RCPT_CONFIG_TTS_VOLUME_OVERRIDE_CRITICALITIES_KEY: self.volume_override_criticalities,
             RCPT_CONFIG_TTS_VOLUME_OVERRIDE_LEVEL_KEY: self.volume_override_level,
             RCPT_CONFIG_TTS_MESSAGE_FORMAT_KEY: self.message_format,
-            RCPT_CONFIG_TTS_TRAILING_SILENCE_KEY: self.trailing_silence_ms,
+            RCPT_CONFIG_TTS_SSML_ENABLED_KEY: self.ssml_enabled,
+            RCPT_CONFIG_TTS_VOLUME_MANAGEMENT_ENABLED_KEY: self.volume_management_enabled,
         }
 
     @staticmethod
@@ -148,8 +159,12 @@ class TTSSettings:
             ],
             volume_override_level=data[RCPT_CONFIG_TTS_VOLUME_OVERRIDE_LEVEL_KEY],
             message_format=data[RCPT_CONFIG_TTS_MESSAGE_FORMAT_KEY],
-            trailing_silence_ms=data.get(
-                RCPT_CONFIG_TTS_TRAILING_SILENCE_KEY, TTS_DEFAULT_TRAILING_SILENCE_MS
+            ssml_enabled=data.get(
+                RCPT_CONFIG_TTS_SSML_ENABLED_KEY, TTS_DEFAULT_SSML_ENABLED
+            ),
+            volume_management_enabled=data.get(
+                RCPT_CONFIG_TTS_VOLUME_MANAGEMENT_ENABLED_KEY,
+                TTS_DEFAULT_VOLUME_MANAGEMENT_ENABLED,
             ),
         )
 

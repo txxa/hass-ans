@@ -33,9 +33,10 @@ from ..const import (
     RCPT_CONFIG_RATE_LIMIT_KEY,
     RCPT_CONFIG_RETRY_ATTEMPTS_KEY,
     RCPT_CONFIG_TTS_MESSAGE_FORMAT_KEY,
-    RCPT_CONFIG_TTS_TRAILING_SILENCE_KEY,
+    RCPT_CONFIG_TTS_SSML_ENABLED_KEY,
     RCPT_CONFIG_TTS_VOLUME_DAYTIME_KEY,
     RCPT_CONFIG_TTS_VOLUME_EVENING_KEY,
+    RCPT_CONFIG_TTS_VOLUME_MANAGEMENT_ENABLED_KEY,
     RCPT_CONFIG_TTS_VOLUME_MORNING_KEY,
     RCPT_CONFIG_TTS_VOLUME_NIGHT_KEY,
     RCPT_CONFIG_TTS_VOLUME_OVERRIDE_CRITICALITIES_KEY,
@@ -47,7 +48,8 @@ from ..const import (
     SYS_CONFIG_GLOBAL_RATE_LIMIT_KEY,
     # SYS_CONFIG_TTS_INTEGRATION_KEY,
     SYS_MAX_GLOBAL_RATE_LIMIT,
-    TTS_DEFAULT_TRAILING_SILENCE_MS,
+    TTS_DEFAULT_SSML_ENABLED,
+    TTS_DEFAULT_VOLUME_MANAGEMENT_ENABLED,
 )
 from ..models import (
     NotificationCriticality,
@@ -708,6 +710,15 @@ class ConfigValidator:
 
         schema = vol.Schema(
             {
+                vol.Required(RCPT_CONFIG_TTS_MESSAGE_FORMAT_KEY): vol.In(valid_formats),
+                vol.Optional(
+                    RCPT_CONFIG_TTS_SSML_ENABLED_KEY,
+                    default=TTS_DEFAULT_SSML_ENABLED,
+                ): bool,
+                vol.Optional(
+                    RCPT_CONFIG_TTS_VOLUME_MANAGEMENT_ENABLED_KEY,
+                    default=TTS_DEFAULT_VOLUME_MANAGEMENT_ENABLED,
+                ): bool,
                 vol.Required(RCPT_CONFIG_TTS_VOLUME_MORNING_KEY): vol.All(
                     vol.Coerce(int), vol.Range(min=0, max=100)
                 ),
@@ -729,11 +740,6 @@ class ConfigValidator:
                 vol.Required(RCPT_CONFIG_TTS_VOLUME_OVERRIDE_LEVEL_KEY): vol.All(
                     vol.Coerce(int), vol.Range(min=0, max=100)
                 ),
-                vol.Required(RCPT_CONFIG_TTS_MESSAGE_FORMAT_KEY): vol.In(valid_formats),
-                vol.Optional(
-                    RCPT_CONFIG_TTS_TRAILING_SILENCE_KEY,
-                    default=TTS_DEFAULT_TRAILING_SILENCE_MS,
-                ): vol.All(vol.Coerce(int), vol.Range(min=0, max=5000)),
             },
             extra=vol.PREVENT_EXTRA,
         )

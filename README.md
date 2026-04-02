@@ -45,7 +45,6 @@ This integration provides a centralized notification system that intelligently r
   - Time-based volume control with four configurable time frames (morning, daytime, evening, night)
   - Criticality-based volume overrides for urgent notifications
   - Automatic volume restoration after playback, backed by persistent storage so restores survive restarts
-  - Configurable trailing silence padding to compensate for audio pipeline buffering (e.g., Snapcast)
   - Per-device delivery lock prevents overlapping TTS playback on the same media player
   - Deduplication to prevent the same message from playing multiple times
 - **Comprehensive Tracking**:
@@ -193,18 +192,19 @@ Choose the recipient type:
 - **Blocked Sources**: Regular expression patterns to block notifications from specific sources
 
 **Step 4: TTS Settings** *(TTS recipients only)*
-- **Volume Levels**: Configure the playback volume for each time frame:
-  - Morning (06:00–09:00): default 40%
-  - Daytime (09:00–18:00): default 50%
-  - Evening (18:00–22:00): default 40%
-  - Night (22:00–06:00): default 20%
-- **Override Volume Level**: Volume used when the criticality override is triggered (default 80%)
-- **Override for Criticalities**: Select which criticality levels trigger the override volume (e.g., HIGH, CRITICAL)
 - **Message Format**: How notification content is spoken:
   - `title_and_message`: speaks "{title}. {message}" *(default)*
   - `message_only`: speaks only the message
   - `title_only`: speaks only the title
-- **Trailing Silence Padding** (ms): Extra silence appended after the spoken message (default 1000 ms). Compensates for audio pipeline buffering, such as Snapcast's default buffer size. Increase this value if the end of the message is cut off. Maximum: 5000 ms.
+- **Enable SSML**: When enabled, ANS wraps the spoken content in an SSML `<speak>...</speak>` document so SSML-capable TTS engines can process it correctly. Keep this disabled for plain-text-only engines.
+- **Enable Volume Management**: When enabled, ANS automatically adjusts the media player volume to the configured level before speaking and restores it afterwards. Disable this if you manage volume externally.
+- **Volume Levels**: Configure the playback volume for each time frame:
+  - Morning (06:00–09:00): default 65%
+  - Daytime (09:00–19:00): default 75%
+  - Evening (19:00–22:00): default 60%
+  - Night (22:00–06:00): default 50%
+- **Override for Criticalities**: Select which criticality levels trigger the override volume (e.g., HIGH, CRITICAL)
+- **Override Volume Level**: Volume used when the criticality override is triggered (default 80%)
 
 **Step 5: Channel Mapping**
 - Map each criticality level (LOW, MEDIUM, HIGH, CRITICAL) to specific delivery channels
@@ -257,7 +257,9 @@ data:
 
 #### `ans.refresh_channels`
 
-Reload all notification channels and re-synchronize delivery adapters. Use this service after adding a new notify integration or media player entity, or when channels are not appearing in ANS:
+ANS automatically detects channel changes at runtime: a new `notify.*` service registration, a compatible `media_player.*` entity being added, or a media player being removed each trigger an automatic re-sync. In most cases you do not need to call this service manually.
+
+Use `ans.refresh_channels` as a manual fallback when auto-detection has not picked up a change or for debugging channel-adapter mismatches:
 
 ```yaml
 service: ans.refresh_channels

@@ -119,7 +119,18 @@ def _create_channel_manager(
     manager = ChannelManager(hass, deps)
 
     for adapter_cls in _ALL_ADAPTER_CLASSES:
-        manager.register_factory(adapter_cls.create_factory(deps=deps))
+        if adapter_cls is TTSMediaPlayerAdapter:
+            # Pass the channel manager's delivery-lock factory so all adapter
+            # generations for the same entity share a single lock that survives
+            # resync().  Other adapters don't need per-entity delivery locks.
+            manager.register_factory(
+                TTSMediaPlayerAdapter.create_factory(
+                    deps=deps,
+                    get_delivery_lock=manager.get_delivery_lock,
+                )
+            )
+        else:
+            manager.register_factory(adapter_cls.create_factory(deps=deps))
 
     _LOGGER.info(
         "ChannelManager configured with %d factories", len(_ALL_ADAPTER_CLASSES)

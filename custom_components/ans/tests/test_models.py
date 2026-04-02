@@ -264,7 +264,6 @@ class TestTTSSettings:
                 volume_override_criticalities=[],
                 volume_override_level=80,
                 message_format="message_only",
-                trailing_silence_ms=1000,
             )
 
     def test_invalid_format_raises(self):
@@ -277,20 +276,6 @@ class TestTTSSettings:
                 volume_override_criticalities=[],
                 volume_override_level=80,
                 message_format="bad_format",
-                trailing_silence_ms=1000,
-            )
-
-    def test_trailing_silence_out_of_range(self):
-        with pytest.raises(ValueError):
-            TTSSettings(
-                volume_morning=40,
-                volume_daytime=50,
-                volume_evening=40,
-                volume_night=20,
-                volume_override_criticalities=[],
-                volume_override_level=80,
-                message_format="message_only",
-                trailing_silence_ms=9999,
             )
 
     def test_to_dict_from_dict_round_trip(self):
@@ -299,7 +284,36 @@ class TestTTSSettings:
         restored = TTSSettings.from_dict(d)
         assert restored.volume_morning == s.volume_morning
         assert restored.message_format == s.message_format
-        assert restored.trailing_silence_ms == s.trailing_silence_ms
+
+    def test_ssml_enabled_true_preserved_in_round_trip(self):
+        """ssml_enabled=True must survive to_dict → from_dict unchanged."""
+        s = TTSSettings(
+            volume_morning=40,
+            volume_daytime=50,
+            volume_evening=40,
+            volume_night=20,
+            volume_override_criticalities=[],
+            volume_override_level=80,
+            message_format="message_only",
+            ssml_enabled=True,
+        )
+        restored = TTSSettings.from_dict(s.to_dict())
+        assert restored.ssml_enabled is True
+
+    def test_ssml_enabled_false_preserved_in_round_trip(self):
+        """ssml_enabled=False must survive to_dict → from_dict unchanged."""
+        s = TTSSettings(
+            volume_morning=40,
+            volume_daytime=50,
+            volume_evening=40,
+            volume_night=20,
+            volume_override_criticalities=[],
+            volume_override_level=80,
+            message_format="message_only",
+            ssml_enabled=False,
+        )
+        restored = TTSSettings.from_dict(s.to_dict())
+        assert restored.ssml_enabled is False
 
 
 # ---------------------------------------------------------------------------

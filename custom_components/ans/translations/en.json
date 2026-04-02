@@ -191,7 +191,8 @@
                         "volume_override_level": "Override Volume Level",
                         "volume_override_criticalities": "Override for Criticalities",
                         "message_format": "Message Format",
-                        "trailing_silence_ms": "Trailing Silence Padding"
+                        "ssml_enabled": "Enable SSML Mode",
+                        "volume_management_enabled": "Enable Volume Management"
                     },
                     "data_description": {
                         "volume_morning": "Volume level (0-100) for notifications delivered between 6:00 AM and 9:00 AM.",
@@ -201,7 +202,8 @@
                         "volume_override_level": "Volume level (0-100) to use when a notification matches the override criticalities below.",
                         "volume_override_criticalities": "Select criticality levels that should use the override volume instead of time-based volumes (e.g., always play CRITICAL notifications at maximum volume).",
                         "message_format": "Choose how notification content is formatted for TTS: 'Title and Message' speaks both, 'Message Only' speaks just the message, 'Title Only' speaks just the title.",
-                        "trailing_silence_ms": "Extra silence (in milliseconds) to append after the message as an SSML <break> tag if the value is greater than 0. This helps prevent the end of the message from being cut off (e.g., to compensate for buffer clearing in Snapcast). If set to 0, no extra silence is added."
+                        "ssml_enabled": "When enabled, the message is wrapped in an SSML '<speak>' document and user content is XML-escaped before delivery. Only enable this if your TTS engine supports SSML (e.g. Google Cloud TTS, Amazon Polly, Azure TTS, edge-tts, Piper in SSML mode). Do not enable for plain-text-only engines.",
+                        "volume_management_enabled": "When enabled, ANS automatically adjusts the media player volume to the configured level before speaking and restores it afterwards. Disable this if you manage the volume externally or want TTS to play at whatever level the device is currently set to."
                     }
                 },
                 "recipient_channel_mapping": {

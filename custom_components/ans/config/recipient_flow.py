@@ -395,8 +395,14 @@ class RecipientConfigFlow(ConfigSubentryFlow):
         """Configure TTS-specific settings (volume levels, message format)."""
         errors: dict[str, str] = {}
 
-        # Get defaults for the form
-        defaults = dict(self._recipient_settings or {})
+        # Get defaults for the form.
+        # During reconfigure, TTS settings are stored nested under
+        # RCPT_CONFIG_TTS_SETTINGS_KEY; extract the inner dict so the form
+        # can populate suggested_value for each flat field (e.g. ssml_enabled)
+        # rather than always falling back to the schema-level defaults.
+        raw_settings = dict(self._recipient_settings or {})
+        nested = raw_settings.get(RCPT_CONFIG_TTS_SETTINGS_KEY)
+        defaults = dict(nested) if isinstance(nested, dict) else raw_settings
 
         if user_input is not None:
             try:

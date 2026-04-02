@@ -31,9 +31,10 @@ from ..const import (
     RCPT_CONFIG_RECIPIENT_CHOICE_KEY,
     RCPT_CONFIG_RETRY_ATTEMPTS_KEY,
     RCPT_CONFIG_TTS_MESSAGE_FORMAT_KEY,
-    RCPT_CONFIG_TTS_TRAILING_SILENCE_KEY,
+    RCPT_CONFIG_TTS_SSML_ENABLED_KEY,
     RCPT_CONFIG_TTS_VOLUME_DAYTIME_KEY,
     RCPT_CONFIG_TTS_VOLUME_EVENING_KEY,
+    RCPT_CONFIG_TTS_VOLUME_MANAGEMENT_ENABLED_KEY,
     RCPT_CONFIG_TTS_VOLUME_MORNING_KEY,
     RCPT_CONFIG_TTS_VOLUME_NIGHT_KEY,
     RCPT_CONFIG_TTS_VOLUME_OVERRIDE_CRITICALITIES_KEY,
@@ -75,9 +76,10 @@ from ..const import (
     SYS_STORAGE_DEFAULT_FILE_RETENTION_DAYS,
     SYS_STORAGE_MAX_FILE_RETENTION_DAYS,
     TTS_DEFAULT_MESSAGE_FORMAT,
-    TTS_DEFAULT_TRAILING_SILENCE_MS,
+    TTS_DEFAULT_SSML_ENABLED,
     TTS_DEFAULT_VOLUME_DAYTIME,
     TTS_DEFAULT_VOLUME_EVENING,
+    TTS_DEFAULT_VOLUME_MANAGEMENT_ENABLED,
     TTS_DEFAULT_VOLUME_MORNING,
     TTS_DEFAULT_VOLUME_NIGHT,
     TTS_DEFAULT_VOLUME_OVERRIDE_LEVEL,
@@ -639,7 +641,7 @@ def get_recipient_tts_settings_schema(
             "number": {
                 "min": 0,
                 "max": 100,
-                "step": 5,
+                "step": 1,
                 "mode": "slider",
                 "unit_of_measurement": "%",
             }
@@ -648,6 +650,40 @@ def get_recipient_tts_settings_schema(
 
     return vol.Schema(
         {
+            vol.Required(
+                RCPT_CONFIG_TTS_MESSAGE_FORMAT_KEY,
+                description={
+                    "suggested_value": defaults.get(
+                        RCPT_CONFIG_TTS_MESSAGE_FORMAT_KEY,
+                        TTS_DEFAULT_MESSAGE_FORMAT,
+                    ),
+                },
+            ): SelectSelector(
+                SelectSelectorConfig(
+                    options=message_format_options,
+                    translation_key=RCPT_CONFIG_TTS_MESSAGE_FORMAT_KEY,
+                    multiple=False,
+                    mode=SelectSelectorMode.DROPDOWN,
+                ),
+            ),
+            vol.Optional(
+                RCPT_CONFIG_TTS_SSML_ENABLED_KEY,
+                description={
+                    "suggested_value": defaults.get(
+                        RCPT_CONFIG_TTS_SSML_ENABLED_KEY,
+                        TTS_DEFAULT_SSML_ENABLED,
+                    ),
+                },
+            ): selector({"boolean": {}}),
+            vol.Optional(
+                RCPT_CONFIG_TTS_VOLUME_MANAGEMENT_ENABLED_KEY,
+                description={
+                    "suggested_value": defaults.get(
+                        RCPT_CONFIG_TTS_VOLUME_MANAGEMENT_ENABLED_KEY,
+                        TTS_DEFAULT_VOLUME_MANAGEMENT_ENABLED,
+                    ),
+                },
+            ): selector({"boolean": {}}),
             vol.Required(
                 RCPT_CONFIG_TTS_VOLUME_MORNING_KEY,
                 description={
@@ -709,41 +745,6 @@ def get_recipient_tts_settings_schema(
                     ),
                 },
             ): volume_selector,
-            vol.Required(
-                RCPT_CONFIG_TTS_MESSAGE_FORMAT_KEY,
-                description={
-                    "suggested_value": defaults.get(
-                        RCPT_CONFIG_TTS_MESSAGE_FORMAT_KEY,
-                        TTS_DEFAULT_MESSAGE_FORMAT,
-                    ),
-                },
-            ): SelectSelector(
-                SelectSelectorConfig(
-                    options=message_format_options,
-                    translation_key=RCPT_CONFIG_TTS_MESSAGE_FORMAT_KEY,
-                    multiple=False,
-                    mode=SelectSelectorMode.DROPDOWN,
-                ),
-            ),
-            vol.Optional(
-                RCPT_CONFIG_TTS_TRAILING_SILENCE_KEY,
-                description={
-                    "suggested_value": defaults.get(
-                        RCPT_CONFIG_TTS_TRAILING_SILENCE_KEY,
-                        TTS_DEFAULT_TRAILING_SILENCE_MS,
-                    ),
-                },
-            ): selector(
-                {
-                    "number": {
-                        "min": 0,
-                        "max": 5000,
-                        "step": 100,
-                        "mode": "box",
-                        "unit_of_measurement": "ms",
-                    }
-                }
-            ),
         },
         required=True,
         extra=vol.PREVENT_EXTRA,

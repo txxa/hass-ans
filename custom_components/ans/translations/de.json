@@ -1,0 +1,326 @@
+{
+    "title": "Advanced Notification System",
+    "selector": {
+        "recipient_type": {
+            "options": {
+                "tts": "TTS-Lautsprecher (Audio-Benachrichtigungen)"
+            }
+        },
+        "message_format": {
+            "options": {
+                "title_and_message": "Titel und Nachricht",
+                "message_only": "Nur Nachricht",
+                "title_only": "Nur Titel"
+            }
+        },
+        "recipient_choice": {
+            "options": {
+                "system_home_assistant": "System: Home Assistant",
+                "tts_new": "TTS: Text-to-Speech-Empfänger",
+                "virtual_new": "Virtuell: Benutzerdefinierter Empfänger"
+            }
+        }
+    },
+    "config": {
+        "step": {
+            "system_settings": {
+                "title": "Systemeinstellungen",
+                "description": "Globale Einstellungen für das Advanced Notification System konfigurieren (Ratenbegrenzungen, Wiederholungsversuche und aktive Kanäle).",
+                "data": {
+                    "retry_attempts_max": "Maximale Wiederholungsversuche",
+                    "rate_limit_max": "Globale Ratenbegrenzung (max. Benachrichtigungen/Min.)",
+                    "enabled_channels": "Aktive Benachrichtigungskanäle",
+                    "tts_service": "Text-to-Speech-Dienst (optional)",
+                    "persistent_notifications_enabled": "Persistente Benachrichtigungen aktivieren (konfiguriert systemweiten Kanal automatisch)",
+                    "enable_audit_logging": "Audit-Protokollierung aktivieren (protokolliert Benachrichtigungen und Zustellversuche)"
+                },
+                "data_description": {
+                    "enabled_channels": "Legt fest, welche Benachrichtigungskanäle systemweit aktiv sind. Nur aktive Kanäle können Empfängern zugewiesen werden. Media-Player-Entitäten erscheinen hier, wenn ein TTS-Dienst konfiguriert ist.",
+                    "tts_service": "Wählen Sie eine TTS-Integration aus, um Media-Player-Zustellkanäle für TTS-Empfänger zu aktivieren.",
+                    "enable_audit_logging": "Wenn aktiviert, werden alle Benachrichtigungen und Zustellversuche aufgezeichnet. Deaktivieren Sie diese Option, um den Speicherverbrauch zu reduzieren. Der Aufbewahrungszeitraum ist im Optionsmenü konfigurierbar."
+                }
+            }
+        },
+        "error": {
+            "invalid_system_settings": "Ungültige Systemeinstellungen.",
+            "invalid_identity_settings": "Ungültige Identitätseinstellungen.",
+            "ha_user_detection_failed": "Home-Assistant-Benutzer konnten nicht erkannt werden.",
+            "invalid_ha_user_selection": "Ungültige Home-Assistant-Benutzerauswahl.",
+            "create_entry_failed": "Integrationseintrag konnte nicht erstellt werden. Details finden Sie in den Protokollen.",
+            "reconfigure_entry_not_found": "Neukonfigurationseintrag wurde nicht gefunden.",
+            "tts_service": "Ungültige TTS-Dienstauswahl oder Dienst nicht verfügbar.",
+            "base": "Unbekannter Fehler — Details finden Sie in den Protokollen.",
+            "retry_attempts_max": "Maximale Wiederholungsversuche müssen eine ganze Zahl ≥ 0 sein.",
+            "rate_limit_max": "Maximale Ratenbegrenzung muss eine ganze Zahl ≥ 0 sein.",
+            "enabled_channels": "Mindestens ein Kanal muss aktiviert sein oder persistente Benachrichtigungen müssen aktiviert sein.",
+            "tts_service_unavailable": "Der ausgewählte TTS-Dienst ist nicht verfügbar oder wurde entfernt.",
+            "invalid_tts_service": "Ungültiges TTS-Dienstformat. Muss ein gültiger Dienstname sein (z. B. 'tts.google_translate_say').",
+            "media_player_offline": "Media Player ist offline oder nicht verfügbar.",
+            "media_player_not_found": "Die angegebene Media-Player-Entität wurde nicht gefunden.",
+            "volume_control_failed": "Lautstärkeregelung des Media Players fehlgeschlagen.",
+            "invalid_tts_configuration": "Ungültige TTS-Konfiguration. Bitte überprüfen Sie Ihre Einstellungen.",
+            "define_identity_default_settings": "Ungültige Auswahl.",
+            "rate_limit": "Ratenbegrenzung muss eine ganze Zahl zwischen {min} und {max} sein.",
+            "retry_attempts": "Wiederholungsversuche müssen eine ganze Zahl zwischen {min} und {max} sein.",
+            "notification_types": "Wählen Sie mindestens einen Benachrichtigungstyp aus."
+        },
+        "abort": {
+            "already_configured": "Integration ist bereits konfiguriert.",
+            "already_in_progress": "Konfiguration ist bereits im Gange.",
+            "reconfigure_successful": "Integration wurde erfolgreich neu konfiguriert.",
+            "reconfigure_entry_not_found": "Der zu konfigurierende Eintrag wurde nicht gefunden."
+        }
+    },
+    "options": {
+        "step": {
+            "init": {
+                "title": "Systemkonfiguration",
+                "description": "Systemweite Einstellungen für Ratenbegrenzung, Wiederholungsverhalten, Warteschlangen-Parallelität und Aufbewahrungsdauer des Audit-Protokolls konfigurieren.",
+                "data": {
+                    "global_rate_limit": "Globale Ratenbegrenzung (max. Benachrichtigungen/Min.)",
+                    "retry_base_delay": "Basis-Verzögerung für Wiederholung (Sekunden)",
+                    "retry_backoff_factor": "Wiederholungs-Backoff-Multiplikator",
+                    "retry_max_delay": "Maximale Wiederholungsverzögerung (Sekunden)",
+                    "queue_max_concurrency": "Maximale Parallelität der Warteschlange (parallele Zustellungen)",
+                    "storage_retention_days": "Aufbewahrungsdauer des Audit-Protokolls (Tage, nur sichtbar wenn Audit-Protokollierung aktiviert)"
+                },
+                "data_description": {
+                    "global_rate_limit": "Maximale Anzahl an Benachrichtigungen pro Minute im gesamten System. 0 eingeben, um die globale Ratenbegrenzung zu deaktivieren.",
+                    "retry_base_delay": "Anfangsverzögerung in Sekunden vor dem ersten Wiederholungsversuch nach einem vorübergehenden Fehler.",
+                    "retry_backoff_factor": "Multiplikator, der nach jedem weiteren Wiederholungsversuch auf die Verzögerung angewendet wird (z. B. verdoppelt 2.0 die Wartezeit jedes Mal).",
+                    "retry_max_delay": "Obergrenze in Sekunden für die Verzögerung zwischen Wiederholungsversuchen, unabhängig vom Backoff-Faktor.",
+                    "queue_max_concurrency": "Anzahl der Zustellaufgaben, die parallel ausgeführt werden können. Höhere Werte steigern den Durchsatz, verbrauchen jedoch mehr Ressourcen.",
+                    "storage_retention_days": "Anzahl der Tage, für die Benachrichtigungs- und Zustelldatensätze aufbewahrt werden. 0 eingeben, um die automatische Bereinigung zu deaktivieren. Nur sichtbar, wenn die Audit-Protokollierung aktiviert ist."
+                }
+            },
+            "default_identity_basic_settings": {
+                "title": "Systemkanäle — Grundeinstellungen",
+                "description": "Grundeinstellungen für systemweite Benachrichtigungskanäle (z. B. persistente Benachrichtigungen) konfigurieren.",
+                "data": {
+                    "rate_limit": "Ratenbegrenzung (Benachrichtigungen/Min.)",
+                    "retry_attempts": "Wiederholungsversuche (pro Zustellung)",
+                    "notification_types": "Zu empfangende Benachrichtigungstypen",
+                    "blocked_sources_regex": "Gesperrte Quellen (regulärer Ausdruck)"
+                }
+            },
+            "default_identity_channel_mapping": {
+                "title": "Systemkanäle — Kanalzuordnung",
+                "description": "Systemweite Kanäle den Benachrichtigungs-Dringlichkeitsstufen zuordnen.",
+                "data": {
+                    "channels_low": "Kanäle für geringe Dringlichkeit",
+                    "channels_medium": "Kanäle für mittlere Dringlichkeit",
+                    "channels_high": "Kanäle für hohe Dringlichkeit",
+                    "channels_critical": "Kanäle für kritische Dringlichkeit"
+                }
+            },
+            "default_identity_dnd_settings": {
+                "title": "Systemkanäle — Nicht stören",
+                "description": "Nicht-stören-Einstellungen für systemweite Kanäle konfigurieren.",
+                "data": {
+                    "dnd_enabled": "Nicht stören aktivieren",
+                    "dnd_start": "Nicht-stören-Startzeit (24-Stunden-Format)",
+                    "dnd_end": "Nicht-stören-Endzeit (24-Stunden-Format)",
+                    "dnd_allowed_sources_regex": "Erlaubte Quellen während Nicht stören (regulärer Ausdruck)",
+                    "dnd_allowed_criticalities": "Dringlichkeitsstufen, die Nicht stören umgehen (mehrere auswählbar)",
+                    "dnd_allowed_types": "Benachrichtigungstypen, die Nicht stören umgehen (mehrere auswählbar)"
+                }
+            }
+        },
+        "error": {
+            "base": "Unbekannter Fehler — Details finden Sie in den Protokollen.",
+            "unknown": "Ein unerwarteter Fehler ist aufgetreten. Bitte überprüfen Sie die Protokolle.",
+            "invalid_system_settings": "Ungültige Systemeinstellungen. Bitte überprüfen und korrigieren Sie die Werte.",
+            "rate_limit": "Ratenbegrenzung muss eine ganze Zahl zwischen {min} und {max} sein.",
+            "retry_attempts": "Wiederholungsversuche müssen eine ganze Zahl zwischen {min} und {max} sein.",
+            "retry_base_delay": "Basis-Verzögerung für Wiederholung muss eine ganze Zahl zwischen 1 und 3600 Sekunden sein.",
+            "retry_backoff_factor": "Wiederholungs-Backoff-Faktor muss eine Zahl zwischen 1.0 und 5.0 sein.",
+            "retry_max_delay": "Maximale Wiederholungsverzögerung muss eine ganze Zahl zwischen 60 und 86400 Sekunden sein.",
+            "queue_max_concurrency": "Warteschlangen-Parallelität muss eine ganze Zahl zwischen 1 und 20 sein.",
+            "storage_retention_days": "Aufbewahrungsdauer des Audit-Protokolls muss eine ganze Zahl zwischen 0 und 365 Tagen sein.",
+            "notification_types": "Wählen Sie mindestens einen Benachrichtigungstyp aus.",
+            "blocked_sources_regex": "Ungültiger regulärer Ausdruck für gesperrte Quellen.",
+            "channels_low": "Ein oder mehrere Kanäle sind ungültig oder nicht verfügbar.",
+            "channels_medium": "Ein oder mehrere Kanäle sind ungültig oder nicht verfügbar.",
+            "channels_high": "Ein oder mehrere Kanäle sind ungültig oder nicht verfügbar.",
+            "channels_critical": "Ein oder mehrere Kanäle sind ungültig oder nicht verfügbar.",
+            "dnd_enabled": "Der Nicht-stören-Schalter muss wahr oder falsch sein.",
+            "dnd_start": "Ungültige Startzeit. Verwenden Sie das 24-Stunden-Format (HH:MM:SS).",
+            "dnd_start_missing": "Die Startzeit muss definiert sein, wenn Nicht stören aktiviert ist.",
+            "dnd_end": "Ungültige Endzeit. Verwenden Sie das 24-Stunden-Format (HH:MM:SS).",
+            "dnd_end_missing": "Die Endzeit muss definiert sein, wenn Nicht stören aktiviert ist.",
+            "dnd_start_end_equals": "Start- und Endzeit dürfen nicht identisch sein.",
+            "dnd_allowed_sources_regex": "Ungültiger regulärer Ausdruck für erlaubte Nicht-stören-Quellen.",
+            "dnd_allowed_criticalities": "Ungültige Auswahl der Dringlichkeitsstufe.",
+            "dnd_allowed_types": "Ungültige Benachrichtigungstyp-Auswahl."
+        }
+    },
+    "config_subentries": {
+        "recipient": {
+            "entry_type": "Empfänger",
+            "initiate_flow": {
+                "user": "Empfänger hinzufügen",
+                "reconfigure": "Empfänger neu konfigurieren"
+            },
+            "step": {
+                "recipient_selection": {
+                    "title": "Empfänger — Auswahl",
+                    "description": "Wählen Sie den Typ des zu erstellenden Empfängers. Systemempfänger verwalten systemweite Kanäle, HA-Benutzerempfänger sind mit Home-Assistant-Benutzern verknüpft, und virtuelle Empfänger sind benutzerdefinierte Einträge.",
+                    "data": {
+                        "recipient_choice": "Zu erstellenden Empfänger auswählen"
+                    },
+                    "data_description": {
+                        "recipient_choice": "Wählen Sie aus verfügbaren Systemkanälen, noch nicht konfigurierten Home-Assistant-Benutzern oder erstellen Sie einen benutzerdefinierten virtuellen Empfänger."
+                    }
+                },
+                "recipient_definition": {
+                    "title": "Empfänger — Definition",
+                    "description": "Namen, E-Mail-Adresse, Telefonnummer und mobile Geräte-ID für den Empfänger festlegen.",
+                    "data": {
+                        "name": "Anzeigename",
+                        "email": "E-Mail-Adresse (optional)",
+                        "phone": "Telefonnummer (optional)"
+                    },
+                    "data_description": {
+                        "name": "Anzeigename zur Identifizierung dieses Empfängers im gesamten System. Muss eindeutig sein.",
+                        "email": "Hinweis: Nur erforderlich, wenn ein E-Mail-basierter Benachrichtigungskanal konfiguriert ist.",
+                        "phone": "Hinweis: Nur erforderlich, wenn ein telefonbasierter Benachrichtigungskanal konfiguriert ist (z. B. Signal Messenger). Verwenden Sie das E.164-Format (z. B. +49123456789)."
+                    }
+                },
+                "recipient_basic_settings": {
+                    "title": "Empfänger — Grundeinstellungen",
+                    "description": "Wiederholungsversuche, Ratenbegrenzungen und Benachrichtigungstypen für den Empfänger konfigurieren.",
+                    "data": {
+                        "rate_limit": "Ratenbegrenzung (Benachrichtigungen/Min.)",
+                        "retry_attempts": "Wiederholungsversuche (pro Zustellung)",
+                        "notification_types": "Zu empfangende Benachrichtigungstypen",
+                        "blocked_sources_regex": "Gesperrte Quellen (regulärer Ausdruck)"
+                    },
+                    "data_description": {
+                        "rate_limit": "Maximale Anzahl an Benachrichtigungen pro Minute für diesen Empfänger. 0 eingeben, um die empfängerspezifische Ratenbegrenzung zu deaktivieren.",
+                        "retry_attempts": "Wie oft eine fehlgeschlagene Zustellung mit exponentiellem Backoff wiederholt werden soll. 0 eingeben, um Wiederholungen zu deaktivieren.",
+                        "notification_types": "Nur die hier ausgewählten Benachrichtigungstypen werden an diesen Empfänger zugestellt. Alle anderen werden ohne Benachrichtigung gefiltert.",
+                        "blocked_sources_regex": "Optionaler regulärer Ausdruck. Benachrichtigungen, deren Quelle diesem Muster entspricht, werden für diesen Empfänger gesperrt (z. B. \"automation\\..*\" zum Sperren aller Automatisierungsquellen)."
+                    }
+                },
+                "recipient_tts_settings": {
+                    "title": "TTS-Einstellungen",
+                    "description": "Lautstärke und Nachrichtenformat für die Text-zu-Sprache-Zustellung konfigurieren. Die Lautstärke wird basierend auf der aktuellen Tageszeit angewendet.",
+                    "data": {
+                        "volume_morning": "Morgendliche Lautstärke (6:00–9:00)",
+                        "volume_daytime": "Tageslautstärke (9:00–18:00)",
+                        "volume_evening": "Abendlautstärke (18:00–22:00)",
+                        "volume_night": "Nachtlautstärke (22:00–6:00)",
+                        "volume_override_level": "Überschreibende Lautstärke",
+                        "volume_override_criticalities": "Überschreiben für Dringlichkeitsstufen",
+                        "message_format": "Nachrichtenformat",
+                        "ssml_enabled": "SSML-Modus aktivieren",
+                        "volume_management_enabled": "Lautstärkeverwaltung aktivieren"
+                    },
+                    "data_description": {
+                        "volume_morning": "Lautstärke (0–100) für Benachrichtigungen, die zwischen 6:00 und 9:00 Uhr zugestellt werden.",
+                        "volume_daytime": "Lautstärke (0–100) für Benachrichtigungen, die zwischen 9:00 und 18:00 Uhr zugestellt werden.",
+                        "volume_evening": "Lautstärke (0–100) für Benachrichtigungen, die zwischen 18:00 und 22:00 Uhr zugestellt werden.",
+                        "volume_night": "Lautstärke (0–100) für Benachrichtigungen, die zwischen 22:00 und 6:00 Uhr zugestellt werden.",
+                        "volume_override_level": "Lautstärke (0–100), die verwendet wird, wenn eine Benachrichtigung den unten festgelegten Überschreibungs-Dringlichkeitsstufen entspricht.",
+                        "volume_override_criticalities": "Wählen Sie Dringlichkeitsstufen aus, die die überschreibende Lautstärke anstelle der zeitbasierten Lautstärke verwenden sollen (z. B. KRITISCHE Benachrichtigungen immer mit maximaler Lautstärke abspielen).",
+                        "message_format": "Legt fest, wie der Benachrichtigungsinhalt für TTS formatiert wird: 'Titel und Nachricht' spricht beides, 'Nur Nachricht' spricht nur die Nachricht, 'Nur Titel' spricht nur den Titel.",
+                        "ssml_enabled": "Wenn aktiviert, wird die Nachricht in ein SSML-'<speak>'-Dokument eingebettet und Benutzerinhalte werden vor der Zustellung XML-maskiert. Nur aktivieren, wenn Ihre TTS-Engine SSML unterstützt (z. B. Google Cloud TTS, Amazon Polly, Azure TTS, edge-tts, Piper im SSML-Modus). Nicht für reine Klartextmaschinen aktivieren.",
+                        "volume_management_enabled": "Wenn aktiviert, passt ANS die Lautstärke des Media Players vor dem Sprechen automatisch auf den konfigurierten Wert an und stellt sie danach wieder her. Deaktivieren Sie diese Option, wenn Sie die Lautstärke extern verwalten oder TTS auf der aktuellen Gerätelautstärke abspielen möchten."
+                    }
+                },
+                "recipient_channel_mapping": {
+                    "title": "Empfänger — Kanalzuordnung",
+                    "description": "Benachrichtigungs-Dringlichkeitsstufen den Zustellkanälen zuordnen.",
+                    "data": {
+                        "channels_low": "Kanäle für geringe Dringlichkeit",
+                        "channels_medium": "Kanäle für mittlere Dringlichkeit",
+                        "channels_high": "Kanäle für hohe Dringlichkeit",
+                        "channels_critical": "Kanäle für kritische Dringlichkeit"
+                    },
+                    "data_description": {
+                        "channels_low": "Kanäle für Benachrichtigungen mit GERINGER Dringlichkeit. Leer lassen, um Benachrichtigungen mit geringer Dringlichkeit für diesen Empfänger zu unterdrücken.",
+                        "channels_medium": "Kanäle für Benachrichtigungen mit MITTLERER Dringlichkeit. Leer lassen, um Benachrichtigungen mit mittlerer Dringlichkeit für diesen Empfänger zu unterdrücken.",
+                        "channels_high": "Kanäle für Benachrichtigungen mit HOHER Dringlichkeit.",
+                        "channels_critical": "Kanäle für Benachrichtigungen mit KRITISCHER Dringlichkeit. Es wird dringend empfohlen, hier immer mindestens einen Kanal zu konfigurieren."
+                    }
+                },
+                "recipient_dnd_settings": {
+                    "title": "Empfänger — Nicht stören (DND)",
+                    "description": "Ruhestunden und Nicht-stören-Verhalten für den Empfänger konfigurieren.",
+                    "data": {
+                        "dnd_enabled": "Nicht stören aktivieren",
+                        "dnd_start": "Nicht-stören-Startzeit (24-Stunden-Format)",
+                        "dnd_end": "Nicht-stören-Endzeit (24-Stunden-Format)",
+                        "dnd_allowed_sources_regex": "Erlaubte Quellen während Nicht stören (regulärer Ausdruck)",
+                        "dnd_allowed_criticalities": "Dringlichkeitsstufen, die Nicht stören umgehen (mehrere auswählbar)",
+                        "dnd_allowed_types": "Benachrichtigungstypen, die Nicht stören umgehen (mehrere auswählbar)"
+                    },
+                    "data_description": {
+                        "dnd_enabled": "Wenn aktiviert, werden Benachrichtigungen während des konfigurierten Zeitfensters unterdrückt, sofern sie nicht einer erlaubten Quelle, Dringlichkeit oder einem erlaubten Typ entsprechen.",
+                        "dnd_start": "Uhrzeit, zu der die Ruhezeit beginnt (24-Stunden-Format, z. B. 22:00). Erforderlich, wenn Nicht stören aktiviert ist.",
+                        "dnd_end": "Uhrzeit, zu der die Ruhezeit endet (24-Stunden-Format, z. B. 07:00). Kann Mitternacht überschreiten. Erforderlich, wenn Nicht stören aktiviert ist.",
+                        "dnd_allowed_sources_regex": "Optionaler regulärer Ausdruck. Benachrichtigungen von passenden Quellen werden auch während Nicht stören immer zugestellt (z. B. \"security\\..*\" zum Erlauben aller Sicherheitsquellen).",
+                        "dnd_allowed_criticalities": "Benachrichtigungen mit diesen Dringlichkeitsstufen umgehen Nicht stören und werden immer zugestellt.",
+                        "dnd_allowed_types": "Benachrichtigungen dieser Typen umgehen Nicht stören und werden immer zugestellt."
+                    }
+                }
+            },
+            "error": {
+                "base": "Unbekannter Fehler — Details finden Sie in den Protokollen.",
+                "unknown": "Ein unbekannter Fehler ist aufgetreten. Bitte überprüfen Sie die Protokolle.",
+                "no_main_entry": "Kein ANS-Hauptkonfigurationseintrag gefunden. Bitte richten Sie die Integration zuerst ein.",
+                "missing_identity_id": "Empfänger-ID fehlt. Empfänger kann nicht erstellt werden.",
+                "system_recipient_already_exists": "Ein Systemempfänger für diesen Kanal existiert bereits. Bitte wählen Sie einen anderen Kanal.",
+                "invalid_selection": "Ungültige Empfängerauswahl. Bitte versuchen Sie es erneut.",
+                "invalid_definition": "Ungültige Empfängerdefinition. Bitte überprüfen Sie Ihre Eingabe.",
+                "invalid_settings": "Ungültige Grundeinstellungen. Bitte überprüfen Sie Ihre Eingabe.",
+                "invalid_mapping": "Ungültige Kanalzuordnung. Bitte überprüfen Sie Ihre Eingabe.",
+                "invalid_dnd_settings": "Ungültige Nicht-stören-Einstellungen. Bitte überprüfen Sie Ihre Eingabe.",
+                "name_already_exists": "Ein Empfänger mit diesem Namen existiert bereits. Bitte wählen Sie einen anderen Namen.",
+                "name": "Ungültiger oder doppelter Name.",
+                "email": "Ungültige E-Mail-Adresse.",
+                "phone": "Ungültige Telefonnummer.",
+                "email_or_phone_required": "Entweder eine E-Mail-Adresse oder eine Telefonnummer wird benötigt.",
+                "rate_limit": "Ratenbegrenzung muss eine ganze Zahl zwischen {min} und {max} sein.",
+                "retry_attempts": "Wiederholungsversuche müssen eine ganze Zahl zwischen {min} und {max} sein.",
+                "notification_types": "Wählen Sie mindestens einen Benachrichtigungstyp aus.",
+                "blocked_sources_regex": "Ungültiger regulärer Ausdruck für gesperrte Quellen.",
+                "invalid_channel_mapping": "Für einen Empfänger muss mindestens ein Kanal konfiguriert sein.",
+                "volume_morning": "Morgendliche Lautstärke muss eine ganze Zahl zwischen 0 und 100 sein.",
+                "volume_daytime": "Tageslautstärke muss eine ganze Zahl zwischen 0 und 100 sein.",
+                "volume_evening": "Abendlautstärke muss eine ganze Zahl zwischen 0 und 100 sein.",
+                "volume_night": "Nachtlautstärke muss eine ganze Zahl zwischen 0 und 100 sein.",
+                "volume_override_level": "Überschreibende Lautstärke muss eine ganze Zahl zwischen 0 und 100 sein.",
+                "volume_override_criticalities": "Ungültige Dringlichkeitsauswahl für die Lautstärkeüberschreibung.",
+                "message_format": "Ungültiges Nachrichtenformat. Muss 'title_and_message', 'message_only' oder 'title_only' sein.",
+                "tts_settings_required": "TTS-Einstellungen sind für TTS-Empfänger erforderlich.",
+                "tts_service_unavailable": "Der konfigurierte TTS-Dienst ist nicht verfügbar. Bitte konfigurieren Sie die Integration neu.",
+                "media_player_offline": "Ein oder mehrere ausgewählte Media Player sind offline oder nicht verfügbar.",
+                "media_player_not_found": "Ein oder mehrere ausgewählte Media Player wurden nicht gefunden.",
+                "volume_control_failed": "Lautstärkeregelung eines oder mehrerer Media Player fehlgeschlagen.",
+                "invalid_tts_configuration": "Ungültige TTS-Konfiguration für diesen Empfänger.",
+                "channels_low": "Ein oder mehrere Kanäle sind ungültig oder nicht verfügbar.",
+                "channels_medium": "Ein oder mehrere Kanäle sind ungültig oder nicht verfügbar.",
+                "channels_high": "Ein oder mehrere Kanäle sind ungültig oder nicht verfügbar.",
+                "channels_critical": "Ein oder mehrere Kanäle sind ungültig oder nicht verfügbar.",
+                "dnd_enabled": "Der Nicht-stören-Schalter muss wahr oder falsch sein.",
+                "dnd_start": "Ungültige Startzeit. Verwenden Sie das 24-Stunden-Format (HH:MM:SS).",
+                "dnd_start_missing": "Die Startzeit muss definiert sein, wenn Nicht stören aktiviert ist.",
+                "dnd_end": "Ungültige Endzeit. Verwenden Sie das 24-Stunden-Format (HH:MM:SS).",
+                "dnd_end_missing": "Die Endzeit muss definiert sein, wenn Nicht stören aktiviert ist.",
+                "dnd_start_end_equals": "Start- und Endzeit dürfen nicht identisch sein.",
+                "dnd_allowed_sources_regex": "Ungültiger regulärer Ausdruck für erlaubte Nicht-stören-Quellen.",
+                "dnd_allowed_criticalities": "Ungültige Auswahl der Dringlichkeitsstufe.",
+                "dnd_allowed_types": "Ungültige Benachrichtigungstyp-Auswahl."
+            },
+            "abort": {
+                "no_main_entry": "Keine ANS-Hauptkonfiguration gefunden. Bitte richten Sie die Integration zuerst ein.",
+                "no_subentry": "Keine Empfängerkonfiguration für die Neukonfiguration gefunden.",
+                "missing_identity_id": "Empfänger-ID fehlt. Empfänger kann nicht erstellt werden.",
+                "update_entry_failed": "Die aktualisierte Empfängerkonfiguration konnte nicht gespeichert werden. Bitte versuchen Sie es erneut.",
+                "reconfigure_complete": "Empfänger wurde erfolgreich neu konfiguriert.",
+                "create_entry_failed": "Der Empfängereintrag konnte nicht erstellt werden. Details finden Sie in den Protokollen."
+            }
+        }
+    }
+}

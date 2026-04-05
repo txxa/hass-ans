@@ -65,9 +65,10 @@
             "notification_types": "Select at least one notification type."
         },
         "abort": {
+            "already_configured": "Integration is already configured.",
+            "already_in_progress": "Configuration is already in progress.",
             "reconfigure_successful": "Integration reconfigured successfully.",
-            "reconfigure_entry_not_found": "The configuration entry to reconfigure was not found.",
-            "reconfigure_changes_applied": "Configuration updated successfully."
+            "reconfigure_entry_not_found": "The configuration entry to reconfigure was not found."
         }
     },
     "options": {

@@ -236,7 +236,7 @@ def get_system_config_schema(
                     SYS_DEFAULT_ENABLE_AUDIT_LOGGING,
                 ),
             )
-        ] = bool
+        ] = selector({"boolean": {}})
 
     # if defaults.get(CONFIG_FLOW_DEFINE_DEFAULT_IDENTITY_SETTINGS_KEY, True):
     #     schema_dict[
@@ -777,7 +777,7 @@ def get_recipient_dnd_settings_schema(
                         RCPT_CONFIG_DND_ENABLED_KEY, RCPT_DEFAULT_DND_ENABLED_STATE
                     ),
                 },
-            ): bool,
+            ): selector({"boolean": {}}),
             vol.Optional(
                 RCPT_CONFIG_DND_START_KEY,
                 description={

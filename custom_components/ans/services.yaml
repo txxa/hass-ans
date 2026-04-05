@@ -71,6 +71,8 @@ send_notification:
 refresh_channels:
   name: Refresh Channels
   description: >
-    Reload notification channels and re-sync delivery adapters.
-    Use this after adding new notify integrations or if channels aren't appearing.
+    Manually trigger a full re-detection of notify.* services and media_player.* entities
+    and rebuild the active adapter set. ANS auto-detects channel changes at runtime
+    (new notify service, media player added/removed), so this service is only needed
+    as a manual fallback when auto-detection has not picked up a change or for debugging.
   fields: {}

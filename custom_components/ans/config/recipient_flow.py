@@ -42,8 +42,10 @@ from ..const import (
     RECIPIENT_CHOICE_TTS,
     RECIPIENT_CHOICE_VIRTUAL,
     SUBENTRY_FLOW_ERROR_INVALID_CHANNEL_MAPPING_KEY,
+    SUBENTRY_FLOW_ERROR_INVALID_DND_SETTINGS_KEY,
     SUBENTRY_FLOW_ERROR_INVALID_RECIPIENT_DEFINITION_KEY,
     SUBENTRY_FLOW_ERROR_INVALID_RECIPIENT_SELECTION_KEY,
+    SUBENTRY_FLOW_ERROR_INVALID_RECIPIENT_SETTINGS_KEY,
     SUBENTRY_FLOW_SELECTED_HA_USER_KEY,
     SUBENTRY_FLOW_STEP_RECIPIENT_BASIC_SETTINGS_KEY,
     SUBENTRY_FLOW_STEP_RECIPIENT_CHANNEL_MAPPING_KEY,
@@ -367,7 +369,7 @@ class RecipientConfigFlow(ConfigSubentryFlow):
                 _LOGGER.exception(
                     "Unexpected error during recipient basic settings definition"
                 )
-                errors["base"] = SUBENTRY_FLOW_STEP_RECIPIENT_BASIC_SETTINGS_KEY
+                errors["base"] = SUBENTRY_FLOW_ERROR_INVALID_RECIPIENT_SETTINGS_KEY
 
         # Build notification types options
         notification_types = [
@@ -425,7 +427,7 @@ class RecipientConfigFlow(ConfigSubentryFlow):
                 _LOGGER.exception(
                     "Unexpected error during recipient TTS settings configuration"
                 )
-                errors["base"] = "tts_settings_error"
+                errors["base"] = SUBENTRY_FLOW_ERROR_INVALID_RECIPIENT_SETTINGS_KEY
 
         # Show TTS settings form
         return self.async_show_form(
@@ -496,7 +498,7 @@ class RecipientConfigFlow(ConfigSubentryFlow):
                 errors["base"] = SUBENTRY_FLOW_ERROR_INVALID_CHANNEL_MAPPING_KEY
             except Exception:
                 _LOGGER.exception("Unexpected error during recipient channel mapping")
-                errors["base"] = SUBENTRY_FLOW_STEP_RECIPIENT_CHANNEL_MAPPING_KEY
+                errors["base"] = SUBENTRY_FLOW_ERROR_INVALID_CHANNEL_MAPPING_KEY
 
         # Get available channels filtered by recipient type
         available_channels = await self._get_available_channels()
@@ -590,7 +592,7 @@ class RecipientConfigFlow(ConfigSubentryFlow):
                 _LOGGER.exception(
                     "Unexpected error during recipient DND settings definition"
                 )
-                errors["base"] = SUBENTRY_FLOW_STEP_RECIPIENT_DND_SETTINGS_KEY
+                errors["base"] = SUBENTRY_FLOW_ERROR_INVALID_DND_SETTINGS_KEY
 
         # Show DND settings form
         return self.async_show_form(

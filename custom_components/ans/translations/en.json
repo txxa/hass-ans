@@ -35,7 +35,9 @@
                     "enable_audit_logging": "Enable audit logging (tracks notifications and delivery attempts)"
                 },
                 "data_description": {
-                    "tts_service": "Select a TTS integration to enable media player delivery channels for TTS recipients."
+                    "enabled_channels": "Select which notification channels are active system-wide. Only enabled channels can be assigned to recipients. Media player entities appear here when a TTS service is configured.",
+                    "tts_service": "Select a TTS integration to enable media player delivery channels for TTS recipients.",
+                    "enable_audit_logging": "When enabled, all notifications and delivery attempts are recorded. Disable to reduce storage usage. Retention period is configurable in the Options menu."
                 }
             }
         },
@@ -63,6 +65,8 @@
             "notification_types": "Select at least one notification type."
         },
         "abort": {
+            "reconfigure_successful": "Integration reconfigured successfully.",
+            "reconfigure_entry_not_found": "The configuration entry to reconfigure was not found.",
             "reconfigure_changes_applied": "Configuration updated successfully."
         }
     },
@@ -78,6 +82,14 @@
                     "retry_max_delay": "Retry maximum delay (seconds)",
                     "queue_max_concurrency": "Queue max concurrency (parallel deliveries)",
                     "storage_retention_days": "Audit log retention (days, only shown if audit logging enabled)"
+                },
+                "data_description": {
+                    "global_rate_limit": "Maximum number of notifications per minute across the entire system. Use 0 to disable global rate limiting.",
+                    "retry_base_delay": "Initial delay in seconds before the first retry attempt after a transient failure.",
+                    "retry_backoff_factor": "Multiplier applied to the delay after each successive retry attempt (e.g. 2.0 doubles the wait time each time).",
+                    "retry_max_delay": "Upper cap in seconds on the delay between retry attempts regardless of backoff factor.",
+                    "queue_max_concurrency": "Number of delivery tasks that can run in parallel. Higher values increase throughput but consume more resources.",
+                    "storage_retention_days": "Number of days to keep notification and delivery records. Set to 0 to disable automatic cleanup. Only visible when audit logging is enabled."
                 }
             },
             "default_identity_basic_settings": {
@@ -115,6 +127,8 @@
         },
         "error": {
             "base": "Unknown error — see logs for details.",
+            "unknown": "An unexpected error occurred. Please check the logs for details.",
+            "invalid_system_settings": "Invalid system settings. Please review and correct the values.",
             "rate_limit": "Rate limit must be an integer between {min} and {max}.",
             "retry_attempts": "Retry attempts must be an integer between {min} and {max}.",
             "retry_base_delay": "Retry base delay must be an integer between 1 and 3600 seconds.",
@@ -166,8 +180,9 @@
                         "phone": "Phone number (optional)"
                     },
                     "data_description": {
+                        "name": "Friendly name used to identify this recipient throughout the system. Must be unique.",
                         "email": "Note: Only needed if an email based notification channel is configured.",
-                        "phone": "Note: Only needed if a phone based notification channel is configured."
+                        "phone": "Note: Only needed if a phone based notification channel is configured (e.g. Signal Messenger). Use E.164 format (e.g. +1234567890)."
                     }
                 },
                 "recipient_basic_settings": {
@@ -178,6 +193,12 @@
                         "retry_attempts": "Retry attempts (per delivery)",
                         "notification_types": "Notification types to receive",
                         "blocked_sources_regex": "Blocked sources (regular expression)"
+                    },
+                    "data_description": {
+                        "rate_limit": "Maximum number of notifications per minute for this recipient. Use 0 to disable per-recipient rate limiting.",
+                        "retry_attempts": "How many times a failed delivery should be retried with exponential backoff. Use 0 to disable retries.",
+                        "notification_types": "Only notification types selected here will be delivered to this recipient. All others are silently filtered.",
+                        "blocked_sources_regex": "Optional regular expression. Notifications whose source matches this pattern will be blocked for this recipient (e.g. \"automation\\..*\" to block all automation sources)."
                     }
                 },
                 "recipient_tts_settings": {
@@ -214,6 +235,12 @@
                         "channels_medium": "Channels for medium criticality",
                         "channels_high": "Channels for high criticality",
                         "channels_critical": "Channels for critical criticality"
+                    },
+                    "data_description": {
+                        "channels_low": "Channels used when a notification has LOW criticality. Leave empty to suppress low-criticality notifications for this recipient.",
+                        "channels_medium": "Channels used when a notification has MEDIUM criticality. Leave empty to suppress medium-criticality notifications for this recipient.",
+                        "channels_high": "Channels used when a notification has HIGH criticality.",
+                        "channels_critical": "Channels used when a notification has CRITICAL criticality. It is strongly recommended to always configure at least one channel here."
                     }
                 },
                 "recipient_dnd_settings": {
@@ -226,6 +253,14 @@
                         "dnd_allowed_sources_regex": "Allowed sources during DND (regular expression)",
                         "dnd_allowed_criticalities": "Criticality levels that bypass DND (select multiple to enable)",
                         "dnd_allowed_types": "Notification types that bypass DND (select multiple to enable)"
+                    },
+                    "data_description": {
+                        "dnd_enabled": "When enabled, notifications are suppressed during the configured time window unless they match an allowed source, criticality, or type.",
+                        "dnd_start": "Time when the quiet period begins (24-hour format, e.g. 22:00). Required when DND is enabled.",
+                        "dnd_end": "Time when the quiet period ends (24-hour format, e.g. 07:00). Can cross midnight. Required when DND is enabled.",
+                        "dnd_allowed_sources_regex": "Optional regular expression. Notifications from matching sources are always delivered even during DND (e.g. \"security\\..*\" to allow all security sources).",
+                        "dnd_allowed_criticalities": "Notifications with these criticality levels bypass DND and are always delivered.",
+                        "dnd_allowed_types": "Notifications of these types bypass DND and are always delivered."
                     }
                 }
             },
@@ -280,7 +315,10 @@
             "abort": {
                 "no_main_entry": "No main ANS configuration found. Please set up the integration first.",
                 "no_subentry": "No recipient configuration found for reconfiguration.",
-                "missing_identity_id": "Missing recipient ID. Cannot create recipient."
+                "missing_identity_id": "Missing recipient ID. Cannot create recipient.",
+                "update_entry_failed": "Failed to save the updated recipient configuration. Please try again.",
+                "reconfigure_complete": "Recipient reconfigured successfully.",
+                "create_entry_failed": "Failed to create the recipient entry. Please check the logs for details."
             }
         }
     }

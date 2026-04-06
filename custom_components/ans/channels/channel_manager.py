@@ -283,6 +283,25 @@ class ChannelManager:
         )
         await self.sync(self._last_enabled)
 
+    async def request_resync(self) -> None:
+        """Request a channel resync, deferring it if setup is still in progress.
+
+        Callers (e.g. event listeners in the integration bootstrap) should use
+        this method instead of accessing ``_setup_in_progress`` directly.
+
+        - If setup is in progress the request is registered as a pending resync;
+          it will be flushed automatically by :meth:`finalize_setup`.
+        - Otherwise :meth:`resync` is called immediately.
+
+        """
+        if self._setup_in_progress:
+            _LOGGER.debug(
+                "ChannelManager: deferring resync request (setup in progress)"
+            )
+            self._pending_resync = True
+            return
+        await self.resync()
+
     async def finalize_setup(self) -> None:
         """Mark setup complete and flush any deferred resync."""
         self._setup_in_progress = False

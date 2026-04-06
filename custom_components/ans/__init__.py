@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from homeassistant.config_entries import ConfigEntry
@@ -20,15 +20,17 @@ from homeassistant.helpers.event import async_track_state_added_domain
 
 from .channels.channel_manager import ChannelManager
 from .config.repository import ConfigRepository
-from .const import (
-    REQUIRED_MP_FEATURES,
-    SYS_DEFAULT_QUEUE_CONCURRENCY,
-)
+from .const import REQUIRED_MP_FEATURES
 from .delivery.factory import ANSSystem, create_system
 from .helper import get_main_entry
+from .models import NotificationDeliveryTask
 from .persistence.recovery import async_initialize_persistence
 from .persistence.volume_restoration import VolumeRestorationRegistry
 from .service import async_setup_services
+
+if TYPE_CHECKING:
+    from .delivery.queue import NotificationDeliveryTaskQueue
+    from .delivery.rate_limiter import RateLimiter
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -93,7 +95,6 @@ async def _setup_system(
         hass=hass,
         config_repo=config_repo,
         volume_registry=volume_registry,
-        max_concurrent_deliveries=SYS_DEFAULT_QUEUE_CONCURRENCY,
     )
 
     # Sync dynamic adapters (ChannelManager.sync is async; create_system is sync)
@@ -111,7 +112,7 @@ async def _setup_system(
 
 async def _setup_persistence(
     hass: HomeAssistant, system: ANSSystem
-) -> tuple[list, list]:
+) -> tuple[list[tuple[NotificationDeliveryTask, datetime]], list[str]]:
     """Load persistence stores and recover pending retries.
 
     Parameters
@@ -123,8 +124,10 @@ async def _setup_persistence(
 
     Returns
     -------
-    tuple[list, list]
-        ``(pending_tasks, orphaned_retries)``
+    tuple[list[tuple[NotificationDeliveryTask, datetime]], list[str]]
+        ``(pending_tasks, orphaned_retries)`` where *pending_tasks* is a list
+        of ``(task, scheduled_time)`` pairs and *orphaned_retries* is a list
+        of job-ID strings whose task snapshots could not be recovered.
 
     """
     _LOGGER.info("[ANS setup] Phase 3/5 — initializing persistence")
@@ -144,8 +147,8 @@ async def _setup_persistence(
 
 async def _setup_tasks(
     system: ANSSystem,
-    pending_tasks: list,
-    orphaned_retries: list,
+    pending_tasks: list[tuple[NotificationDeliveryTask, datetime]],
+    orphaned_retries: list[str],
 ) -> None:
     """Start background workers and schedule recovered retries.
 
@@ -153,10 +156,10 @@ async def _setup_tasks(
     ----------
     system : ANSSystem
         Active ANS system whose queue and schedulers are started.
-    pending_tasks : list
+    pending_tasks : list[tuple[NotificationDeliveryTask, datetime]]
         ``(task, scheduled_time)`` pairs from persistence recovery.
-    orphaned_retries : list
-        Job IDs whose task data could not be recovered.
+    orphaned_retries : list[str]
+        Job-ID strings whose task snapshots could not be recovered.
 
     """
     _LOGGER.info("[ANS setup] Phase 4/5 — starting background tasks")
@@ -180,7 +183,13 @@ async def _setup_tasks(
             system.task_queue.add_task(task, delay=timedelta(seconds=delay_seconds))
         )
     if pending_coros:
-        await asyncio.gather(*pending_coros, return_exceptions=True)
+        enqueue_results = await asyncio.gather(*pending_coros, return_exceptions=True)
+        for result in enqueue_results:
+            if isinstance(result, BaseException):
+                _LOGGER.error(
+                    "[ANS setup] Failed to re-enqueue a recovered retry task: %s",
+                    result,
+                )
 
     remove_coros = []
     for job_id_str in orphaned_retries:
@@ -193,7 +202,13 @@ async def _setup_tasks(
         except ValueError:
             _LOGGER.error("[ANS setup] Invalid UUID for orphaned retry: %s", job_id_str)
     if remove_coros:
-        await asyncio.gather(*remove_coros, return_exceptions=True)
+        remove_results = await asyncio.gather(*remove_coros, return_exceptions=True)
+        for result in remove_results:
+            if isinstance(result, BaseException):
+                _LOGGER.error(
+                    "[ANS setup] Failed to remove orphaned retry from queue: %s",
+                    result,
+                )
 
 
 async def _setup_services(hass: HomeAssistant, system: ANSSystem) -> None:
@@ -210,11 +225,20 @@ def _setup_listeners(
 ) -> None:
     """Register all event listeners for the lifetime of this config entry.
 
-    Fixes applied here
-    ------------------
-    L1  update_listener → simple reload
-    L3  _on_media_player_added gates on required feature flags
-    L4  _on_entity_registry_updated handles media_player removals
+    Attaches four listeners to the config entry's unload callback so they
+    are automatically removed when the entry is unloaded:
+
+    - Options update → triggers a clean config-entry reload.
+    - ``EVENT_SERVICE_REGISTERED`` → resyncs channels when a new
+      ``notify.*`` service is registered.
+    - State-added for ``media_player`` domain → resyncs channels when a
+      capable media player appears.
+    - ``EVENT_ENTITY_REGISTRY_UPDATED`` → resyncs channels when a
+      ``media_player`` entity is removed from the registry.
+
+    Resync requests during setup are deferred via
+    :meth:`ChannelManager.request_resync` and flushed once
+    :meth:`ChannelManager.finalize_setup` is called.
 
     Parameters
     ----------
@@ -244,11 +268,8 @@ def _setup_listeners(
             "New notify service 'notify.%s' registered — refreshing ANS channels",
             service,
         )
-        if channel_manager._setup_in_progress:
-            channel_manager._pending_resync = True
-            return
         try:
-            await channel_manager.resync()
+            await channel_manager.request_resync()
         except Exception:
             _LOGGER.exception(
                 "Failed to refresh channels after notify service 'notify.%s' was registered",
@@ -259,7 +280,7 @@ def _setup_listeners(
         hass.bus.async_listen(EVENT_SERVICE_REGISTERED, _on_notify_service_registered)
     )
 
-    # L3 — New media_player added → resync only if it has required features
+    # New media_player added → resync only if it has required features
     async def _on_media_player_added(event: Event[EventStateChangedData]) -> None:
         entity_id = event.data["entity_id"]
         new_state = event.data.get("new_state")
@@ -276,11 +297,8 @@ def _setup_listeners(
         _LOGGER.debug(
             "Capable media_player '%s' added — refreshing ANS channels", entity_id
         )
-        if channel_manager._setup_in_progress:
-            channel_manager._pending_resync = True
-            return
         try:
-            await channel_manager.resync()
+            await channel_manager.request_resync()
         except Exception:
             _LOGGER.exception(
                 "Failed to refresh channels after media_player '%s' was added",
@@ -291,7 +309,7 @@ def _setup_listeners(
         async_track_state_added_domain(hass, "media_player", _on_media_player_added)
     )
 
-    # L4 — media_player entity removed → resync to mark channel STALE
+    # media_player entity removed → resync to mark channel STALE
     async def _on_entity_registry_updated(
         event: Event[EventEntityRegistryUpdatedData],
     ) -> None:
@@ -304,11 +322,8 @@ def _setup_listeners(
             "media_player entity '%s' removed — refreshing ANS channels",
             entity_id,
         )
-        if channel_manager._setup_in_progress:
-            channel_manager._pending_resync = True
-            return
         try:
-            await channel_manager.resync()
+            await channel_manager.request_resync()
         except Exception:
             _LOGGER.exception(
                 "Failed to refresh channels after media_player '%s' was removed",
@@ -332,7 +347,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _LOGGER.info("Setting up ANS config entry: %s", entry.entry_id)
 
     try:
-        entry_data: dict = {}
+        entry_data: dict[str, Any] = {}
         entry.runtime_data = entry_data
 
         # Phase 1 — configuration + volume restoration (concurrent: independent I/O)
@@ -345,8 +360,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         entry_data["volume_registry"] = volume_registry
         _LOGGER.debug("[ANS setup] Configuration and volume registry loaded")
 
-        snapshot = config_repo.snapshot()
-        if not snapshot.getRecipients():
+        if not config_repo.recipients:
             _LOGGER.warning(
                 "ANS config entry %s has no recipients configured. "
                 "Notifications will be dropped.",
@@ -381,8 +395,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.info("Successfully set up ANS config entry: %s", entry.entry_id)
 
     except Exception as e:
-        _LOGGER.error("Failed to set up ANS config entry %s: %s", entry.entry_id, e)
-        await cleanup_entry_data(hass, entry.entry_id)
+        _LOGGER.exception("Failed to set up ANS config entry %s", entry.entry_id)
+        await _cleanup_entry_data(entry)
         if isinstance(e, ConfigEntryNotReady):
             raise
         raise ConfigEntryNotReady(f"Setup failed: {e}") from e
@@ -409,15 +423,25 @@ async def _teardown_entry_components(entry_data: dict) -> None:
         teardown_coros.append(volume_registry.async_unload())
 
     if teardown_coros:
-        await asyncio.gather(*teardown_coros, return_exceptions=True)
+        teardown_results = await asyncio.gather(*teardown_coros, return_exceptions=True)
+        for result in teardown_results:
+            if isinstance(result, BaseException):
+                _LOGGER.warning("ANS component teardown error: %s", result)
     _LOGGER.debug("ANS components torn down")
 
 
-async def cleanup_entry_data(hass: HomeAssistant, entry_id: str) -> None:
-    """Clean up any partially initialized data for a config entry."""
-    entry = hass.config_entries.async_get_entry(entry_id)
-    if entry is None:
-        return
+async def _cleanup_entry_data(entry: ConfigEntry) -> None:
+    """Clean up any partially initialized runtime data for a config entry.
+
+    Safe to call during both normal unload and failed-setup error paths.
+    No-ops gracefully if *entry* has no ``runtime_data``.
+
+    Parameters
+    ----------
+    entry : ConfigEntry
+        The config entry whose runtime data should be torn down.
+
+    """
     entry_data = getattr(entry, "runtime_data", None)
     if entry_data:
         await _teardown_entry_components(entry_data)
@@ -427,10 +451,7 @@ async def cleanup_entry_data(hass: HomeAssistant, entry_id: str) -> None:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload integration resources for a config entry."""
     _LOGGER.debug("Unloading Advanced Notification System entry: %s", entry.entry_id)
-    entry_data = getattr(entry, "runtime_data", None)
-    if entry_data:
-        await _teardown_entry_components(entry_data)
-        entry.runtime_data = {}
+    await _cleanup_entry_data(entry)
     return True
 
 
@@ -447,8 +468,11 @@ def _get_entry_data(hass: HomeAssistant) -> dict | None:
     return getattr(entry, "runtime_data", None)
 
 
-def get_rate_limiter(hass: HomeAssistant):
-    """Retrieve the rate limiter from the main entry data."""
+def get_rate_limiter(hass: HomeAssistant) -> RateLimiter | None:
+    """Retrieve the rate limiter from the main entry data.
+
+    Returns ``None`` if the integration has not finished setting up.
+    """
     entry_data = _get_entry_data(hass)
     if entry_data is None:
         return None
@@ -456,8 +480,11 @@ def get_rate_limiter(hass: HomeAssistant):
     return system.rate_limiter if system else None
 
 
-def get_task_queue(hass: HomeAssistant):
-    """Retrieve the task queue from the main entry data."""
+def get_task_queue(hass: HomeAssistant) -> NotificationDeliveryTaskQueue | None:
+    """Retrieve the task queue from the main entry data.
+
+    Returns ``None`` if the integration has not finished setting up.
+    """
     entry_data = _get_entry_data(hass)
     if entry_data is None:
         return None
@@ -465,8 +492,11 @@ def get_task_queue(hass: HomeAssistant):
     return system.task_queue if system else None
 
 
-def get_channel_manager(hass: HomeAssistant):
-    """Retrieve the ChannelManager from the main entry data."""
+def get_channel_manager(hass: HomeAssistant) -> ChannelManager | None:
+    """Retrieve the ChannelManager from the main entry data.
+
+    Returns ``None`` if the integration has not finished setting up.
+    """
     entry_data = _get_entry_data(hass)
     if entry_data is None:
         return None

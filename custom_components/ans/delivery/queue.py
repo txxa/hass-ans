@@ -10,17 +10,35 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 from ..models import NotificationDeliveryTask
+from ..persistence.file import RetryQueue
 from .processor import NotificationDeliveryProcessor
 
 _LOGGER = logging.getLogger(__name__)
 
+#: Maximum notification age for retry eligibility.  Retries for notifications
+#: older than this threshold are silently dropped to avoid waking a user hours
+#: after the original event, or delivering a message after a DND window has
+#: long since closed.
 _MAX_RETRY_AGE = timedelta(hours=2)
 
 
 class NotificationDeliveryTaskQueue:
     """Task queue for asynchronous notification delivery processing.
 
-    Manages a worker pool that processes delivery tasks with configurable concurrency.
+    Manages a worker pool that processes delivery tasks with configurable
+    concurrency.  Each :meth:`add_task` call enqueues a
+    :class:`~..models.NotificationDeliveryTask`; a single background worker
+    dequeues tasks and dispatches them to concurrently-running processor
+    coroutines capped by *max_concurrency*.
+
+    Lifecycle
+    ---------
+    1. ``await queue.start()`` — starts the worker loop and (optionally) the
+       retry-poller loop.
+    2. ``await queue.stop()``  — cancels all background tasks and drains
+       in-flight work.
+    3. ``await queue.start()`` may be called again after ``stop()`` to resume
+       processing (e.g. after a config reload).
     """
 
     def __init__(
@@ -28,16 +46,26 @@ class NotificationDeliveryTaskQueue:
         *,
         max_concurrency: int,
         processor_factory: Callable[[], NotificationDeliveryProcessor],
-        retry_queue=None,
-    ):
-        """Initialize the task queue.
+        retry_queue: RetryQueue | None = None,
+    ) -> None:
+        """Initialise the task queue.
 
         Args:
-            max_concurrency: Maximum number of concurrent deliveries.
-            processor_factory: Callable that returns a NotificationDeliveryProcessor.
-            retry_queue: Optional RetryQueue instance for polling pending retries.
+            max_concurrency: Maximum number of concurrent delivery coroutines.
+                Must be a positive integer.
+            processor_factory: Zero-argument callable that returns a fresh
+                :class:`NotificationDeliveryProcessor` for each worker task.
+            retry_queue: Optional :class:`~..persistence.file.RetryQueue` used
+                by the retry-poller loop to re-enqueue overdue retries.
+
+        Raises:
+            ValueError: If *max_concurrency* is not a positive integer.
 
         """
+        if max_concurrency < 1:
+            raise ValueError(
+                f"max_concurrency must be a positive integer, got {max_concurrency}"
+            )
         self._queue: asyncio.Queue[NotificationDeliveryTask] = asyncio.Queue()
         self._max_concurrency = max_concurrency
         self._semaphore = asyncio.Semaphore(max_concurrency)
@@ -53,7 +81,19 @@ class NotificationDeliveryTaskQueue:
     # --------------------
 
     async def start(self) -> None:
-        """Start the worker loop and retry poller."""
+        """Start the worker loop and, if a retry queue was provided, the retry poller.
+
+        Safe to call after :meth:`stop`; the internal stop flag and task
+        references are reset automatically so processing resumes cleanly.
+        """
+        # Reset stop flag and stale task references so start() is idempotent
+        # across stop()/start() cycles (e.g. config reload).
+        self._stopped.clear()
+        if self._worker_task is not None and self._worker_task.done():
+            self._worker_task = None
+        if self._retry_poller_task is not None and self._retry_poller_task.done():
+            self._retry_poller_task = None
+
         if self._worker_task is None:
             self._worker_task = asyncio.create_task(self._worker_loop())
             _LOGGER.info("ANS task queue started")
@@ -63,7 +103,13 @@ class NotificationDeliveryTaskQueue:
             _LOGGER.info("ANS retry queue poller started")
 
     async def stop(self) -> None:
-        """Stop the worker loop, retry poller, and all background tasks."""
+        """Stop the worker loop, retry poller, and all in-flight background tasks.
+
+        After this call the queue is quiescent.  All running delivery coroutines
+        are allowed to complete naturally (via semaphore drain); only the worker
+        and poller *control* tasks are cancelled.  :meth:`start` can be called
+        again afterwards.
+        """
         self._stopped.set()
 
         # Cancel delayed-enqueue background tasks that may be sleeping.
@@ -80,22 +126,57 @@ class NotificationDeliveryTaskQueue:
             self._worker_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._worker_task
+            self._worker_task = None
             _LOGGER.info("ANS task queue stopped")
         if self._retry_poller_task:
             self._retry_poller_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._retry_poller_task
+            self._retry_poller_task = None
             _LOGGER.info("ANS retry queue poller stopped")
+
+    # --------------------
+    # Diagnostics
+    # --------------------
+
+    @property
+    def pending_count(self) -> int:
+        """Number of tasks currently waiting in the queue (not yet dispatched)."""
+        return self._queue.qsize()
+
+    @property
+    def active_task_count(self) -> int:
+        """Number of delivery coroutines currently executing."""
+        return self._max_concurrency - self._semaphore._value  # type: ignore[attr-defined]
+
+    @property
+    def is_running(self) -> bool:
+        """``True`` if the worker loop is active and not stopped."""
+        return (
+            not self._stopped.is_set()
+            and self._worker_task is not None
+            and not self._worker_task.done()
+        )
+
+    def __repr__(self) -> str:
+        """Diagnostic string representation of the queue state."""
+        return (
+            f"<{type(self).__name__} "
+            f"running={self.is_running} "
+            f"pending={self.pending_count} "
+            f"active={self.active_task_count} "
+            f"max_concurrency={self._max_concurrency}>"
+        )
 
     # --------------------
     # Public API
     # --------------------
 
     async def enqueue(self, task: NotificationDeliveryTask) -> None:
-        """Enqueue a delivery task for processing.
+        """Enqueue a delivery task for immediate processing.
 
         Args:
-            task: Delivery task to process.
+            task: Delivery task to enqueue.
 
         """
         await self._queue.put(task)
@@ -103,20 +184,20 @@ class NotificationDeliveryTaskQueue:
     async def add_task(
         self, task: NotificationDeliveryTask, delay: timedelta | None = None
     ) -> None:
-        """Add a task to the queue, optionally with a delay.
+        """Add a delivery task to the queue, optionally after a delay.
 
         Args:
             task: Delivery task to process.
-            delay: Optional delay before processing.
+            delay: If provided *and* positive, the task is scheduled for
+                enqueuing after this duration.  Pass ``None`` or a
+                non-positive timedelta for immediate enqueuing.
 
         """
         if delay and delay.total_seconds() > 0:
-            # Schedule delayed execution and track task
             task_ref = asyncio.create_task(self._delayed_enqueue(task, delay))
             self._background_tasks.add(task_ref)
             task_ref.add_done_callback(self._background_tasks.discard)
         else:
-            # Immediate execution
             await self.enqueue(task)
 
     # --------------------
@@ -126,11 +207,11 @@ class NotificationDeliveryTaskQueue:
     async def _delayed_enqueue(
         self, task: NotificationDeliveryTask, delay: timedelta
     ) -> None:
-        """Enqueue a task after a delay.
+        """Sleep for *delay* then enqueue *task* unless already stopped.
 
         Args:
             task: Task to enqueue.
-            delay: Delay before enqueuing.
+            delay: Duration to wait before enqueuing.
 
         """
         await asyncio.sleep(delay.total_seconds())
@@ -143,100 +224,111 @@ class NotificationDeliveryTaskQueue:
             )
 
     async def _retry_poller_loop(self) -> None:
-        """Poll retry queue and enqueue ready tasks."""
+        """Poll the retry queue every 10 seconds and re-enqueue overdue tasks."""
         while not self._stopped.is_set():
-            _pending_count = 0
-            _last_job_id = None
+            pending_count = 0
+            last_job_id = None
             try:
-                # Check every 10 seconds for pending retries
                 await asyncio.sleep(10)
 
                 if not self._retry_queue:
                     continue
 
                 pending_retries = await self._retry_queue.get_pending_retries()
-                _pending_count = len(pending_retries)
-                # Only log when there's work to report — silent at idle to avoid noise
-                if _pending_count > 0:
+                pending_count = len(pending_retries)
+                if pending_count > 0:
                     _LOGGER.debug(
                         "Retry poller ran: %d pending entries checked",
-                        _pending_count,
+                        pending_count,
                     )
                 now = datetime.now(UTC)
 
                 for job_id, scheduled_at, task_snapshot in pending_retries:
-                    _last_job_id = job_id
-                    # Check if retry is due
-                    if scheduled_at <= now:
-                        # Max-age guard: drop retries for notifications older than
-                        # _MAX_RETRY_AGE to avoid stale deliveries (e.g. waking a
-                        # user hours after the original event, or bypassing a DND
-                        # window that has since closed).
-                        try:
-                            notification_ts = datetime.fromisoformat(
-                                task_snapshot["payload"]["timestamp"]
-                            )
-                            if now - notification_ts > _MAX_RETRY_AGE:
-                                _LOGGER.warning(
-                                    "Dropping stale retry for job_id=%s: notification "
-                                    "age exceeds %s (notification_id=%s)",
-                                    job_id,
-                                    _MAX_RETRY_AGE,
-                                    task_snapshot.get("payload", {}).get(
-                                        "notification_id", "unknown"
-                                    ),
-                                )
-                                await self._retry_queue.remove_retry(job_id)
-                                continue
-                        except (KeyError, ValueError):
-                            pass  # Malformed/old snapshot; proceed to from_snapshot()
+                    last_job_id = job_id
+                    if scheduled_at > now:
+                        continue
 
-                        _LOGGER.info(
-                            "Executing pending retry for job_id=%s (scheduled at %s)",
-                            job_id,
-                            scheduled_at.isoformat(),
+                    # Max-age guard: drop retries for notifications older than
+                    # _MAX_RETRY_AGE to avoid stale deliveries (e.g. waking a
+                    # user hours after the original event, or bypassing a DND
+                    # window that has since closed).
+                    try:
+                        notification_ts = datetime.fromisoformat(
+                            task_snapshot["payload"]["timestamp"]
                         )
-
-                        # Reconstruct task from snapshot
-                        try:
-                            task = NotificationDeliveryTask.from_snapshot(
-                                job_id, task_snapshot
-                            )
-                            # Remove from retry queue
-                            await self._retry_queue.remove_retry(job_id)
-                            # Enqueue for immediate execution
-                            await self.enqueue(task)
-                        except (ValueError, KeyError, AttributeError) as e:
-                            _LOGGER.error(
-                                "Failed to reconstruct/enqueue retry task %s: %s",
+                        if now - notification_ts > _MAX_RETRY_AGE:
+                            _LOGGER.warning(
+                                "Dropping stale retry for job_id=%s: notification "
+                                "age exceeds %s (notification_id=%s)",
                                 job_id,
-                                e,
+                                _MAX_RETRY_AGE,
+                                task_snapshot.get("payload", {}).get(
+                                    "notification_id", "unknown"
+                                ),
                             )
-                            # Remove failed retry from queue
                             await self._retry_queue.remove_retry(job_id)
+                            continue
+                    except (KeyError, ValueError):
+                        pass  # Malformed/old snapshot; proceed to from_snapshot()
+
+                    _LOGGER.info(
+                        "Executing pending retry for job_id=%s (scheduled at %s)",
+                        job_id,
+                        scheduled_at.isoformat(),
+                    )
+
+                    try:
+                        task = NotificationDeliveryTask.from_snapshot(
+                            job_id, task_snapshot
+                        )
+                        await self._retry_queue.remove_retry(job_id)
+                        await self.enqueue(task)
+                    except (ValueError, KeyError, AttributeError) as exc:
+                        _LOGGER.error(
+                            "Failed to reconstruct/enqueue retry task %s: %s",
+                            job_id,
+                            exc,
+                        )
+                        await self._retry_queue.remove_retry(job_id)
 
             except Exception:  # noqa: BLE001
                 _LOGGER.exception(
                     "Error in retry poller loop (pending_count=%d, last_job_id=%s)",
-                    _pending_count,
-                    _last_job_id,
+                    pending_count,
+                    last_job_id,
                 )
 
     async def _worker_loop(self) -> None:
-        """Process tasks from the queue in a loop."""
-        while not self._stopped.is_set():
-            try:
-                # Wait for next task with a timeout to check stop flag periodically
-                task = await asyncio.wait_for(self._queue.get(), timeout=1.0)
+        """Dequeue tasks and dispatch them as concurrent background coroutines.
+
+        Uses an event-driven shutdown: waits on either a new queue item *or*
+        the ``_stopped`` event, whichever arrives first, so the loop exits
+        promptly on :meth:`stop` without a polling delay.
+        """
+        stop_waiter: asyncio.Future = asyncio.ensure_future(self._stopped.wait())
+        try:
+            while not self._stopped.is_set():
+                get_waiter: asyncio.Task = asyncio.create_task(self._queue.get())
+                done, _ = await asyncio.wait(
+                    {get_waiter, stop_waiter},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if stop_waiter in done:
+                    get_waiter.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await get_waiter
+                    break
+                task = get_waiter.result()
                 background_task = asyncio.create_task(self._run_task(task))
                 self._background_tasks.add(background_task)
                 background_task.add_done_callback(self._background_tasks.discard)
-            except TimeoutError:
-                # Check stopped flag and continue
-                continue
+        finally:
+            stop_waiter.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stop_waiter
 
     async def _run_task(self, task: NotificationDeliveryTask) -> None:
-        """Process a single delivery task with concurrency limit.
+        """Acquire the concurrency semaphore and process a single delivery task.
 
         Args:
             task: Task to process.
@@ -246,12 +338,11 @@ class NotificationDeliveryTaskQueue:
             try:
                 processor = self._processor_factory()
                 await processor.process(task)
-
             except Exception:  # noqa: BLE001
-                # Last-resort handler: processor.process() has its own error handling
-                # and logs; this only fires for truly unexpected exceptions (e.g.
-                # programming errors) that escape the processor entirely. It is NOT
-                # double-logging in normal failure scenarios.
+                # Last-resort handler: processor.process() has its own error
+                # handling and logs; this only fires for truly unexpected
+                # exceptions (e.g. programming errors) that escape the
+                # processor entirely.
                 _LOGGER.exception(
                     "Unhandled exception while processing task job_id=%s "
                     "notification_id=%s",

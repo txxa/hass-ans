@@ -55,9 +55,9 @@ from ..const import (
     SYS_DEFAULT_SYSTEM_RECIPIENT_NAME,
 )
 from ..helper import (
-    async_check_recipient_name_availability,
     channel_info_to_select_options,
-    dict_to_select_options_list,
+    check_recipient_name_availability,
+    dict_to_select_options,
     get_main_entry,
 )
 from ..models import (
@@ -264,11 +264,8 @@ class RecipientConfigFlow(ConfigSubentryFlow):
                 )
 
                 # Only check availability if the name has changed (or for new recipients)
-                if (
-                    name != current_name
-                    and not await async_check_recipient_name_availability(
-                        self.hass, name
-                    )
+                if name != current_name and not check_recipient_name_availability(
+                    self.hass, name
                 ):
                     # errors[ID_CONFIG_NAME_KEY] = "name_already_exists"
                     raise vol.Invalid(
@@ -538,11 +535,13 @@ class RecipientConfigFlow(ConfigSubentryFlow):
         ]
 
         # Build form values
-        criticality_levels = {c.name: c.value for c in NotificationCriticality}
+        criticality_levels: dict[str, str | None] = {
+            c.name: c.value for c in NotificationCriticality
+        }
         channel_options = channel_info_to_select_options(available_channel_info)
 
         values = {
-            RCPT_CONFIG_CRITICALITY_LEVELS_KEY: dict_to_select_options_list(
+            RCPT_CONFIG_CRITICALITY_LEVELS_KEY: dict_to_select_options(
                 criticality_levels
             ),
             RCPT_CONFIG_CONFIGURED_CHANNELS_KEY: channel_options,

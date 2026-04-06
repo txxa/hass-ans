@@ -148,7 +148,26 @@ def _create_processor_factory(
     attempt_log: DeliveryAttemptLog,
     retry_queue: RetryQueue,
 ) -> Callable[[], NotificationDeliveryProcessor]:
-    """Create a processor factory for queue workers."""
+    """Return a zero-argument factory that creates :class:`NotificationDeliveryProcessor` instances.
+
+    The task queue calls this factory once per worker task so that each
+    processor gets freshly-initialised internal state while sharing the
+    stateless/singleton dependencies (filter engine, rate limiter, …).
+
+    Args:
+        filter_engine: Shared filter evaluation engine.
+        rate_limiter: Shared in-memory rate limiter.
+        channel_manager: Shared channel manager.
+        hass: Home Assistant instance.
+        retry_policy: Shared retry backoff policy.
+        notification_registry: Persistent notification registry.
+        attempt_log: Persistent delivery attempt log.
+        retry_queue: Persistent retry queue.
+
+    Returns:
+        A callable ``() -> NotificationDeliveryProcessor``.
+
+    """
 
     def _create_processor() -> NotificationDeliveryProcessor:
         return NotificationDeliveryProcessor(
@@ -169,23 +188,33 @@ def create_system(
     hass: HomeAssistant,
     config_repo: ConfigRepository,
     volume_registry: VolumeRestorationRegistry,
-    max_concurrent_deliveries: int = 5,
 ) -> ANSSystem:
     """Create a complete ANS notification system with all components.
 
+    This is the single entry-point for system construction.  All concurrency
+    and policy parameters are sourced from :attr:`SystemConfig` stored in the
+    config entry, so callers do not need to pass them explicitly.
+
     Args:
         hass: Home Assistant instance.
-        config_repo: Configuration repository.
-        volume_registry: Pre-initialized VolumeRestorationRegistry. Must be
-            initialized and loaded before this call.
-        max_concurrent_deliveries: Max concurrent delivery tasks (default: 5).
+        config_repo: Configuration repository (already loaded).
+        volume_registry: Pre-initialized :class:`VolumeRestorationRegistry`.
+            Must be fully loaded before this call so that TTS adapters can
+            restore volumes correctly.
 
     Returns:
-        ANSSystem dataclass containing all system components.
+        :class:`ANSSystem` dataclass containing all runtime components.
+
+    Raises:
+        ValueError: If ``config_repo`` has no system config loaded.
 
     """
-    # Load system configuration first to get audit logging setting
     config_snapshot = config_repo.snapshot()
+    if config_snapshot is None or config_snapshot.system_config is None:
+        raise ValueError(
+            "create_system() requires a loaded ConfigRepository. "
+            "Call config_repo.load() before create_system()."
+        )
     system_config = config_snapshot.system_config
 
     # Create persistence stores (file-based event storage)

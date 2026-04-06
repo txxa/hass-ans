@@ -1,0 +1,326 @@
+{
+    "title": "Advanced Notification System",
+    "selector": {
+        "recipient_type": {
+            "options": {
+                "tts": "Haut-parleur TTS (notifications audio)"
+            }
+        },
+        "message_format": {
+            "options": {
+                "title_and_message": "Titre et message",
+                "message_only": "Message uniquement",
+                "title_only": "Titre uniquement"
+            }
+        },
+        "recipient_choice": {
+            "options": {
+                "system_home_assistant": "Système : Home Assistant",
+                "tts_new": "TTS : Destinataire synthèse vocale",
+                "virtual_new": "Virtuel : Destinataire personnalisé"
+            }
+        }
+    },
+    "config": {
+        "step": {
+            "system_settings": {
+                "title": "Paramètres système",
+                "description": "Configurer les paramètres globaux du système de notification avancé (limites de débit, tentatives et canaux activés).",
+                "data": {
+                    "retry_attempts_max": "Nombre maximal de tentatives",
+                    "rate_limit_max": "Limite de débit globale (max notifications/min)",
+                    "enabled_channels": "Canaux de notification activés",
+                    "tts_service": "Service de synthèse vocale (optionnel)",
+                    "persistent_notifications_enabled": "Activer les notifications persistantes (configure automatiquement le canal système)",
+                    "enable_audit_logging": "Activer la journalisation d'audit (trace les notifications et les tentatives de livraison)"
+                },
+                "data_description": {
+                    "enabled_channels": "Sélectionnez les canaux de notification actifs à l'échelle du système. Seuls les canaux activés peuvent être assignés aux destinataires. Les entités lecteur multimédia apparaissent ici lorsqu'un service TTS est configuré.",
+                    "tts_service": "Sélectionnez une intégration TTS pour activer les canaux de livraison via lecteur multimédia pour les destinataires TTS.",
+                    "enable_audit_logging": "Lorsqu'activée, toutes les notifications et tentatives de livraison sont enregistrées. Désactivez cette option pour réduire l'utilisation du stockage. La durée de rétention est configurable dans le menu Options."
+                }
+            }
+        },
+        "error": {
+            "invalid_system_settings": "Paramètres système invalides.",
+            "invalid_identity_settings": "Paramètres d'identité invalides.",
+            "ha_user_detection_failed": "Impossible de détecter les utilisateurs Home Assistant.",
+            "invalid_ha_user_selection": "Sélection d'utilisateur Home Assistant invalide.",
+            "create_entry_failed": "Impossible de créer l'entrée d'intégration. Consultez les journaux pour plus de détails.",
+            "reconfigure_entry_not_found": "L'entrée de reconfiguration est introuvable.",
+            "tts_service": "Sélection du service TTS invalide ou service indisponible.",
+            "base": "Erreur inconnue — consultez les journaux pour plus de détails.",
+            "retry_attempts_max": "Le nombre maximal de tentatives doit être un entier ≥ 0.",
+            "rate_limit_max": "La limite de débit maximale doit être un entier ≥ 0.",
+            "enabled_channels": "Au moins un canal doit être activé ou les notifications persistantes doivent être activées.",
+            "tts_service_unavailable": "Le service TTS sélectionné n'est pas disponible ou a été supprimé.",
+            "invalid_tts_service": "Format de service TTS invalide. Doit être un nom de service valide (ex. : 'tts.google_translate_say').",
+            "media_player_offline": "Le lecteur multimédia est hors ligne ou indisponible.",
+            "media_player_not_found": "L'entité lecteur multimédia spécifiée est introuvable.",
+            "volume_control_failed": "Échec du contrôle du volume du lecteur multimédia.",
+            "invalid_tts_configuration": "Configuration TTS invalide. Veuillez vérifier vos paramètres.",
+            "define_identity_default_settings": "Sélection invalide.",
+            "rate_limit": "La limite de débit doit être un entier compris entre {min} et {max}.",
+            "retry_attempts": "Le nombre de tentatives doit être un entier compris entre {min} et {max}.",
+            "notification_types": "Sélectionnez au moins un type de notification."
+        },
+        "abort": {
+            "already_configured": "L'intégration est déjà configurée.",
+            "already_in_progress": "Une configuration est déjà en cours.",
+            "reconfigure_successful": "Intégration reconfigurée avec succès.",
+            "reconfigure_entry_not_found": "L'entrée de configuration à reconfigurer est introuvable."
+        }
+    },
+    "options": {
+        "step": {
+            "init": {
+                "title": "Configuration système",
+                "description": "Configurer les paramètres système pour la limitation de débit, le comportement des tentatives, la concurrence de la file d'attente et la rétention des journaux d'audit.",
+                "data": {
+                    "global_rate_limit": "Limite de débit globale (max notifications/min)",
+                    "retry_base_delay": "Délai de base des tentatives (secondes)",
+                    "retry_backoff_factor": "Multiplicateur de backoff des tentatives",
+                    "retry_max_delay": "Délai maximal des tentatives (secondes)",
+                    "queue_max_concurrency": "Concurrence maximale de la file (livraisons parallèles)",
+                    "storage_retention_days": "Rétention des journaux d'audit (jours, visible uniquement si la journalisation est activée)"
+                },
+                "data_description": {
+                    "global_rate_limit": "Nombre maximal de notifications par minute pour l'ensemble du système. Utilisez 0 pour désactiver la limitation de débit globale.",
+                    "retry_base_delay": "Délai initial en secondes avant la première tentative après un échec transitoire.",
+                    "retry_backoff_factor": "Multiplicateur appliqué au délai après chaque tentative successive (ex. : 2.0 double le temps d'attente à chaque fois).",
+                    "retry_max_delay": "Plafond en secondes du délai entre les tentatives, quel que soit le facteur de backoff.",
+                    "queue_max_concurrency": "Nombre de tâches de livraison pouvant s'exécuter en parallèle. Des valeurs plus élevées augmentent le débit mais consomment plus de ressources.",
+                    "storage_retention_days": "Nombre de jours de conservation des enregistrements de notifications et de livraisons. Définissez 0 pour désactiver le nettoyage automatique. Visible uniquement lorsque la journalisation d'audit est activée."
+                }
+            },
+            "default_identity_basic_settings": {
+                "title": "Canaux système — Paramètres de base",
+                "description": "Configurer les paramètres de base pour les canaux de notification système (comme les notifications persistantes).",
+                "data": {
+                    "rate_limit": "Limite de débit (notifications/min)",
+                    "retry_attempts": "Tentatives (par livraison)",
+                    "notification_types": "Types de notifications à recevoir",
+                    "blocked_sources_regex": "Sources bloquées (expression régulière)"
+                }
+            },
+            "default_identity_channel_mapping": {
+                "title": "Canaux système — Mappage des canaux",
+                "description": "Associer les canaux système aux niveaux de criticité des notifications.",
+                "data": {
+                    "channels_low": "Canaux pour criticité faible",
+                    "channels_medium": "Canaux pour criticité moyenne",
+                    "channels_high": "Canaux pour criticité élevée",
+                    "channels_critical": "Canaux pour criticité critique"
+                }
+            },
+            "default_identity_dnd_settings": {
+                "title": "Canaux système — Ne pas déranger",
+                "description": "Configurer les paramètres Ne pas déranger pour les canaux système.",
+                "data": {
+                    "dnd_enabled": "Activer Ne pas déranger",
+                    "dnd_start": "Heure de début (format 24h)",
+                    "dnd_end": "Heure de fin (format 24h)",
+                    "dnd_allowed_sources_regex": "Sources autorisées pendant NDD (expression régulière)",
+                    "dnd_allowed_criticalities": "Niveaux de criticité contournant NDD (sélection multiple)",
+                    "dnd_allowed_types": "Types de notifications contournant NDD (sélection multiple)"
+                }
+            }
+        },
+        "error": {
+            "base": "Erreur inconnue — consultez les journaux pour plus de détails.",
+            "unknown": "Une erreur inattendue s'est produite. Veuillez consulter les journaux.",
+            "invalid_system_settings": "Paramètres système invalides. Veuillez vérifier et corriger les valeurs.",
+            "rate_limit": "La limite de débit doit être un entier compris entre {min} et {max}.",
+            "retry_attempts": "Le nombre de tentatives doit être un entier compris entre {min} et {max}.",
+            "retry_base_delay": "Le délai de base des tentatives doit être un entier compris entre 1 et 3600 secondes.",
+            "retry_backoff_factor": "Le facteur de backoff doit être un nombre compris entre 1.0 et 5.0.",
+            "retry_max_delay": "Le délai maximal des tentatives doit être un entier compris entre 60 et 86400 secondes.",
+            "queue_max_concurrency": "La concurrence de la file doit être un entier compris entre 1 et 20.",
+            "storage_retention_days": "La rétention des journaux doit être un entier compris entre 0 et 365 jours.",
+            "notification_types": "Sélectionnez au moins un type de notification.",
+            "blocked_sources_regex": "Expression régulière invalide pour les sources bloquées.",
+            "channels_low": "Un ou plusieurs canaux sont invalides ou indisponibles.",
+            "channels_medium": "Un ou plusieurs canaux sont invalides ou indisponibles.",
+            "channels_high": "Un ou plusieurs canaux sont invalides ou indisponibles.",
+            "channels_critical": "Un ou plusieurs canaux sont invalides ou indisponibles.",
+            "dnd_enabled": "L'indicateur NDD doit être vrai ou faux.",
+            "dnd_start": "Heure de début invalide. Utilisez le format 24h (HH:MM:SS).",
+            "dnd_start_missing": "L'heure de début doit être définie lorsque NDD est activé.",
+            "dnd_end": "Heure de fin invalide. Utilisez le format 24h (HH:MM:SS).",
+            "dnd_end_missing": "L'heure de fin doit être définie lorsque NDD est activé.",
+            "dnd_start_end_equals": "Les heures de début et de fin ne peuvent pas être identiques.",
+            "dnd_allowed_sources_regex": "Expression régulière invalide pour les sources autorisées pendant NDD.",
+            "dnd_allowed_criticalities": "Sélection de niveau de criticité invalide.",
+            "dnd_allowed_types": "Sélection de type de notification invalide."
+        }
+    },
+    "config_subentries": {
+        "recipient": {
+            "entry_type": "Destinataire",
+            "initiate_flow": {
+                "user": "Ajouter un destinataire",
+                "reconfigure": "Reconfigurer le destinataire"
+            },
+            "step": {
+                "recipient_selection": {
+                    "title": "Destinataire — Sélection",
+                    "description": "Sélectionnez le type de destinataire à créer. Les destinataires système gèrent les canaux système, les destinataires utilisateur HA sont liés aux utilisateurs Home Assistant, et les destinataires virtuels sont des entrées personnalisées.",
+                    "data": {
+                        "recipient_choice": "Sélectionner le destinataire à créer"
+                    },
+                    "data_description": {
+                        "recipient_choice": "Choisissez parmi les canaux système disponibles, les utilisateurs Home Assistant non encore configurés, ou créez un destinataire virtuel personnalisé."
+                    }
+                },
+                "recipient_definition": {
+                    "title": "Destinataire — Définition",
+                    "description": "Définir le nom, l'adresse e-mail, le numéro de téléphone et l'identifiant d'appareil mobile du destinataire.",
+                    "data": {
+                        "name": "Nom d'affichage",
+                        "email": "Adresse e-mail (optionnelle)",
+                        "phone": "Numéro de téléphone (optionnel)"
+                    },
+                    "data_description": {
+                        "name": "Nom convivial utilisé pour identifier ce destinataire dans tout le système. Doit être unique.",
+                        "email": "Remarque : uniquement nécessaire si un canal de notification basé sur l'e-mail est configuré.",
+                        "phone": "Remarque : uniquement nécessaire si un canal de notification basé sur le téléphone est configuré (ex. : Signal Messenger). Utilisez le format E.164 (ex. : +33612345678)."
+                    }
+                },
+                "recipient_basic_settings": {
+                    "title": "Destinataire — Paramètres de base",
+                    "description": "Configurer les tentatives, les limites de débit et les types de notifications que le destinataire doit recevoir.",
+                    "data": {
+                        "rate_limit": "Limite de débit (notifications/min)",
+                        "retry_attempts": "Tentatives (par livraison)",
+                        "notification_types": "Types de notifications à recevoir",
+                        "blocked_sources_regex": "Sources bloquées (expression régulière)"
+                    },
+                    "data_description": {
+                        "rate_limit": "Nombre maximal de notifications par minute pour ce destinataire. Utilisez 0 pour désactiver la limitation par destinataire.",
+                        "retry_attempts": "Nombre de fois qu'une livraison échouée doit être retentée avec backoff exponentiel. Utilisez 0 pour désactiver les tentatives.",
+                        "notification_types": "Seuls les types de notifications sélectionnés ici seront envoyés à ce destinataire. Les autres sont silencieusement filtrés.",
+                        "blocked_sources_regex": "Expression régulière optionnelle. Les notifications dont la source correspond à ce motif seront bloquées pour ce destinataire (ex. : \"automation\\..*\" pour bloquer toutes les sources d'automatisation)."
+                    }
+                },
+                "recipient_tts_settings": {
+                    "title": "Paramètres TTS",
+                    "description": "Configurer les niveaux de volume et le format du message pour la livraison par synthèse vocale. Les niveaux de volume sont appliqués en fonction de l'heure de la journée.",
+                    "data": {
+                        "volume_morning": "Volume matin (6:00–9:00)",
+                        "volume_daytime": "Volume journée (9:00–18:00)",
+                        "volume_evening": "Volume soirée (18:00–22:00)",
+                        "volume_night": "Volume nuit (22:00–6:00)",
+                        "volume_override_level": "Niveau de volume de remplacement",
+                        "volume_override_criticalities": "Remplacement pour les criticités",
+                        "message_format": "Format du message",
+                        "ssml_enabled": "Activer le mode SSML",
+                        "volume_management_enabled": "Activer la gestion du volume"
+                    },
+                    "data_description": {
+                        "volume_morning": "Niveau de volume (0–100) pour les notifications livrées entre 6h00 et 9h00.",
+                        "volume_daytime": "Niveau de volume (0–100) pour les notifications livrées entre 9h00 et 18h00.",
+                        "volume_evening": "Niveau de volume (0–100) pour les notifications livrées entre 18h00 et 22h00.",
+                        "volume_night": "Niveau de volume (0–100) pour les notifications livrées entre 22h00 et 6h00.",
+                        "volume_override_level": "Niveau de volume (0–100) à utiliser lorsqu'une notification correspond aux criticités de remplacement ci-dessous.",
+                        "volume_override_criticalities": "Sélectionnez les niveaux de criticité qui doivent utiliser le volume de remplacement au lieu des volumes horaires (ex. : toujours jouer les notifications CRITIQUES au volume maximum).",
+                        "message_format": "Choisissez comment le contenu de la notification est formaté pour TTS : 'Titre et message' prononce les deux, 'Message uniquement' prononce seulement le message, 'Titre uniquement' prononce seulement le titre.",
+                        "ssml_enabled": "Lorsqu'activé, le message est encapsulé dans un document SSML '<speak>' et le contenu utilisateur est échappé en XML avant livraison. Activez uniquement si votre moteur TTS supporte SSML (ex. : Google Cloud TTS, Amazon Polly, Azure TTS, edge-tts, Piper en mode SSML). Ne pas activer pour les moteurs texte brut uniquement.",
+                        "volume_management_enabled": "Lorsqu'activée, ANS ajuste automatiquement le volume du lecteur multimédia au niveau configuré avant de parler et le restaure ensuite. Désactivez si vous gérez le volume en externe ou souhaitez que TTS joue au niveau actuellement réglé sur l'appareil."
+                    }
+                },
+                "recipient_channel_mapping": {
+                    "title": "Destinataire — Mappage des canaux",
+                    "description": "Associer les niveaux de criticité des notifications aux canaux de livraison.",
+                    "data": {
+                        "channels_low": "Canaux pour criticité faible",
+                        "channels_medium": "Canaux pour criticité moyenne",
+                        "channels_high": "Canaux pour criticité élevée",
+                        "channels_critical": "Canaux pour criticité critique"
+                    },
+                    "data_description": {
+                        "channels_low": "Canaux utilisés lorsqu'une notification a une criticité FAIBLE. Laissez vide pour supprimer les notifications de faible criticité pour ce destinataire.",
+                        "channels_medium": "Canaux utilisés lorsqu'une notification a une criticité MOYENNE. Laissez vide pour supprimer les notifications de criticité moyenne pour ce destinataire.",
+                        "channels_high": "Canaux utilisés lorsqu'une notification a une criticité ÉLEVÉE.",
+                        "channels_critical": "Canaux utilisés lorsqu'une notification a une criticité CRITIQUE. Il est fortement recommandé de toujours configurer au moins un canal ici."
+                    }
+                },
+                "recipient_dnd_settings": {
+                    "title": "Destinataire — Ne pas déranger (NDD)",
+                    "description": "Configurer les heures silencieuses et le comportement Ne pas déranger pour le destinataire.",
+                    "data": {
+                        "dnd_enabled": "Activer Ne pas déranger",
+                        "dnd_start": "Heure de début NDD (format 24h)",
+                        "dnd_end": "Heure de fin NDD (format 24h)",
+                        "dnd_allowed_sources_regex": "Sources autorisées pendant NDD (expression régulière)",
+                        "dnd_allowed_criticalities": "Niveaux de criticité contournant NDD (sélection multiple)",
+                        "dnd_allowed_types": "Types de notifications contournant NDD (sélection multiple)"
+                    },
+                    "data_description": {
+                        "dnd_enabled": "Lorsqu'activé, les notifications sont supprimées pendant la plage horaire configurée, sauf si elles correspondent à une source, criticité ou type autorisé.",
+                        "dnd_start": "Heure à laquelle la période silencieuse commence (format 24h, ex. : 22:00). Requis lorsque NDD est activé.",
+                        "dnd_end": "Heure à laquelle la période silencieuse se termine (format 24h, ex. : 07:00). Peut passer minuit. Requis lorsque NDD est activé.",
+                        "dnd_allowed_sources_regex": "Expression régulière optionnelle. Les notifications provenant de sources correspondantes sont toujours livrées même pendant NDD (ex. : \"security\\..*\" pour autoriser toutes les sources de sécurité).",
+                        "dnd_allowed_criticalities": "Les notifications avec ces niveaux de criticité contournent NDD et sont toujours livrées.",
+                        "dnd_allowed_types": "Les notifications de ces types contournent NDD et sont toujours livrées."
+                    }
+                }
+            },
+            "error": {
+                "base": "Erreur inconnue — consultez les journaux pour plus de détails.",
+                "unknown": "Une erreur inconnue s'est produite. Veuillez consulter les journaux.",
+                "no_main_entry": "Aucune entrée de configuration ANS principale trouvée. Veuillez d'abord configurer l'intégration.",
+                "missing_identity_id": "Identifiant du destinataire manquant. Impossible de créer le destinataire.",
+                "system_recipient_already_exists": "Un destinataire système pour ce canal existe déjà. Veuillez sélectionner un autre canal.",
+                "invalid_selection": "Sélection de destinataire invalide. Veuillez réessayer.",
+                "invalid_definition": "Définition du destinataire invalide. Veuillez vérifier votre saisie.",
+                "invalid_settings": "Paramètres de base invalides. Veuillez vérifier votre saisie.",
+                "invalid_mapping": "Mappage des canaux invalide. Veuillez vérifier votre saisie.",
+                "invalid_dnd_settings": "Paramètres NDD invalides. Veuillez vérifier votre saisie.",
+                "name_already_exists": "Un destinataire portant ce nom existe déjà. Veuillez choisir un autre nom.",
+                "name": "Nom invalide ou dupliqué.",
+                "email": "Adresse e-mail invalide.",
+                "phone": "Numéro de téléphone invalide.",
+                "email_or_phone_required": "Une adresse e-mail ou un numéro de téléphone est requis.",
+                "rate_limit": "La limite de débit doit être un entier compris entre {min} et {max}.",
+                "retry_attempts": "Le nombre de tentatives doit être un entier compris entre {min} et {max}.",
+                "notification_types": "Sélectionnez au moins un type de notification.",
+                "blocked_sources_regex": "Expression régulière invalide pour les sources bloquées.",
+                "invalid_channel_mapping": "Au moins un canal doit être configuré pour un destinataire.",
+                "volume_morning": "Le volume matin doit être un entier compris entre 0 et 100.",
+                "volume_daytime": "Le volume journée doit être un entier compris entre 0 et 100.",
+                "volume_evening": "Le volume soirée doit être un entier compris entre 0 et 100.",
+                "volume_night": "Le volume nuit doit être un entier compris entre 0 et 100.",
+                "volume_override_level": "Le niveau de volume de remplacement doit être un entier compris entre 0 et 100.",
+                "volume_override_criticalities": "Sélection de criticité invalide pour le remplacement de volume.",
+                "message_format": "Format de message invalide. Doit être 'title_and_message', 'message_only' ou 'title_only'.",
+                "tts_settings_required": "Les paramètres TTS sont requis pour les destinataires TTS.",
+                "tts_service_unavailable": "Le service TTS configuré n'est pas disponible. Veuillez reconfigurer l'intégration.",
+                "media_player_offline": "Un ou plusieurs lecteurs multimédias sélectionnés sont hors ligne ou indisponibles.",
+                "media_player_not_found": "Un ou plusieurs lecteurs multimédias sélectionnés sont introuvables.",
+                "volume_control_failed": "Échec du contrôle du volume sur un ou plusieurs lecteurs multimédias.",
+                "invalid_tts_configuration": "Configuration TTS invalide pour ce destinataire.",
+                "channels_low": "Un ou plusieurs canaux sont invalides ou indisponibles.",
+                "channels_medium": "Un ou plusieurs canaux sont invalides ou indisponibles.",
+                "channels_high": "Un ou plusieurs canaux sont invalides ou indisponibles.",
+                "channels_critical": "Un ou plusieurs canaux sont invalides ou indisponibles.",
+                "dnd_enabled": "L'indicateur NDD doit être vrai ou faux.",
+                "dnd_start": "Heure de début invalide. Utilisez le format 24h (HH:MM:SS).",
+                "dnd_start_missing": "L'heure de début doit être définie lorsque NDD est activé.",
+                "dnd_end": "Heure de fin invalide. Utilisez le format 24h (HH:MM:SS).",
+                "dnd_end_missing": "L'heure de fin doit être définie lorsque NDD est activé.",
+                "dnd_start_end_equals": "Les heures de début et de fin ne peuvent pas être identiques.",
+                "dnd_allowed_sources_regex": "Expression régulière invalide pour les sources autorisées pendant NDD.",
+                "dnd_allowed_criticalities": "Sélection de niveau de criticité invalide.",
+                "dnd_allowed_types": "Sélection de type de notification invalide."
+            },
+            "abort": {
+                "no_main_entry": "Aucune configuration ANS principale trouvée. Veuillez d'abord configurer l'intégration.",
+                "no_subentry": "Aucune configuration de destinataire trouvée pour la reconfiguration.",
+                "missing_identity_id": "Identifiant du destinataire manquant. Impossible de créer le destinataire.",
+                "update_entry_failed": "Impossible de sauvegarder la configuration mise à jour du destinataire. Veuillez réessayer.",
+                "reconfigure_complete": "Destinataire reconfiguré avec succès.",
+                "create_entry_failed": "Impossible de créer l'entrée destinataire. Consultez les journaux pour plus de détails."
+            }
+        }
+    }
+}

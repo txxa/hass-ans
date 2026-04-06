@@ -3,7 +3,7 @@
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 import voluptuous as vol
 from homeassistant.core import HomeAssistant
@@ -553,7 +553,7 @@ class ConfigValidator:
             },
             extra=vol.ALLOW_EXTRA,
         )
-        return schema(config)
+        return cast(dict[str, Any], schema(config))
 
     # @staticmethod
     # def validate_identity_selection_schema(identity: dict) -> dict:
@@ -586,7 +586,7 @@ class ConfigValidator:
             },
             extra=vol.PREVENT_EXTRA,
         )
-        return schema(identity)
+        return cast(dict[str, Any], schema(identity))
 
     @staticmethod
     def validate_recipient_basic_settings_schema(
@@ -631,7 +631,7 @@ class ConfigValidator:
         #     ) from e
 
         # return validate_input
-        return schema(settings)
+        return cast(dict[str, Any], schema(settings))
 
     @staticmethod
     def validate_recipient_channel_mapping_schema(
@@ -658,7 +658,7 @@ class ConfigValidator:
             extra=vol.PREVENT_EXTRA,
         )
 
-        return schema(settings)
+        return cast(dict[str, Any], schema(settings))
 
     # @staticmethod
     # def validate_identity_channel_mapping_schema1(
@@ -744,7 +744,7 @@ class ConfigValidator:
             extra=vol.PREVENT_EXTRA,
         )
 
-        return schema(data)
+        return cast(dict[str, Any], schema(data))
 
     @staticmethod
     def validate_recipient_dnd_settings_schema(data: dict) -> dict:
@@ -771,7 +771,7 @@ class ConfigValidator:
             },
             extra=vol.PREVENT_EXTRA,
         )
-        validated_schema = schema(data)
+        validated_schema = cast(dict[str, Any], schema(data))
 
         if validated_schema.get(RCPT_CONFIG_DND_ENABLED_KEY):
             if not validated_schema.get(RCPT_CONFIG_DND_START_KEY):
@@ -787,9 +787,9 @@ class ConfigValidator:
         dnd_start = validated_schema.get(RCPT_CONFIG_DND_START_KEY)
         dnd_end = validated_schema.get(RCPT_CONFIG_DND_END_KEY)
         if dnd_start is not None and dnd_end is not None:
-            if ConfigValidator.__time_to_sec(dnd_start) == ConfigValidator.__time_to_sec(
-                dnd_end
-            ):
+            if ConfigValidator.__time_to_sec(
+                dnd_start
+            ) == ConfigValidator.__time_to_sec(dnd_end):
                 raise vol.Invalid(
                     message="Start and end times cannot be the same.",
                     path=["base", RCPT_CONFIG_DND_START_END_EQUALS_KEY],

@@ -44,7 +44,7 @@ from ..models import ChannelInfo, ChannelScope, RecipientType, SystemConfig
 # ---------------------------------------------------------------------------
 
 _PATCH_GET_MAIN_ENTRY = "ans.config.recipient_flow.get_main_entry"
-_PATCH_CHECK_NAME = "ans.config.recipient_flow.async_check_recipient_name_availability"
+_PATCH_CHECK_NAME = "ans.config.recipient_flow.check_recipient_name_availability"
 _PATCH_GET_CONFIG_REPO = "ans.get_config_repository"
 
 # ---------------------------------------------------------------------------
@@ -360,7 +360,7 @@ class TestAsyncStepRecipientDefinition:
         flow, main_entry = _make_flow()
         _prime_with_meta(flow, main_entry)
 
-        with patch(_PATCH_CHECK_NAME, new_callable=AsyncMock, return_value=True):
+        with patch(_PATCH_CHECK_NAME, return_value=True):
             result = await flow.async_step_recipient_definition(
                 {RCPT_CONFIG_NAME_KEY: "Alice"}
             )
@@ -374,7 +374,7 @@ class TestAsyncStepRecipientDefinition:
         flow, main_entry = _make_flow()
         _prime_with_meta(flow, main_entry)
 
-        with patch(_PATCH_CHECK_NAME, new_callable=AsyncMock, return_value=False):
+        with patch(_PATCH_CHECK_NAME, return_value=False):
             result = await flow.async_step_recipient_definition(
                 {RCPT_CONFIG_NAME_KEY: "TakenName"}
             )
@@ -387,7 +387,7 @@ class TestAsyncStepRecipientDefinition:
         flow, main_entry = _make_flow()
         _prime_with_meta(flow, main_entry)
 
-        with patch(_PATCH_CHECK_NAME, new_callable=AsyncMock, return_value=True):
+        with patch(_PATCH_CHECK_NAME, return_value=True):
             result = await flow.async_step_recipient_definition(
                 {
                     RCPT_CONFIG_NAME_KEY: "Alice",

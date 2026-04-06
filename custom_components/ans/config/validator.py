@@ -784,15 +784,16 @@ class ConfigValidator:
                     message="End time must be set when DND is enabled.",
                     path=[RCPT_CONFIG_DND_END_MISSING_KEY],
                 )
-        if ConfigValidator.__time_to_sec(
-            validated_schema.get(RCPT_CONFIG_DND_START_KEY)
-        ) == ConfigValidator.__time_to_sec(
-            validated_schema.get(RCPT_CONFIG_DND_END_KEY)
-        ):
-            raise vol.Invalid(
-                message="Start and end times cannot be the same.",
-                path=["base", RCPT_CONFIG_DND_START_END_EQUALS_KEY],
-            )
+        dnd_start = validated_schema.get(RCPT_CONFIG_DND_START_KEY)
+        dnd_end = validated_schema.get(RCPT_CONFIG_DND_END_KEY)
+        if dnd_start is not None and dnd_end is not None:
+            if ConfigValidator.__time_to_sec(dnd_start) == ConfigValidator.__time_to_sec(
+                dnd_end
+            ):
+                raise vol.Invalid(
+                    message="Start and end times cannot be the same.",
+                    path=["base", RCPT_CONFIG_DND_START_END_EQUALS_KEY],
+                )
 
         return validated_schema
 

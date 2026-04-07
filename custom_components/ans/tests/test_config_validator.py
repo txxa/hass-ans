@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 import voluptuous as vol
@@ -15,12 +15,8 @@ from ..const import (
     SYS_MAX_GLOBAL_RATE_LIMIT,
 )
 from ..models import (
-    NotificationCriticality,
     NotificationType,
-    RecipientConfig,
-    RecipientData,
     RecipientType,
-    SystemConfig,
 )
 
 # ---------------------------------------------------------------------------

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from homeassistant.data_entry_flow import FlowResultType
 
 from ..config.recipient_flow import RecipientConfigFlow

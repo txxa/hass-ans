@@ -1,44 +1,90 @@
 """Integration tests for the ANS notification system.
 
-Tests end-to-end notification delivery flow with mock adapters.
-Can be run with standalone asyncio or pytest.
+Tests end-to-end notification delivery flow through the real
+FilterEngine → RateLimiter → Processor → ChannelAdapter pipeline.
+All HA-bound dependencies (hass, registries, persistence) are replaced
+with lightweight fakes so no Home Assistant instance is needed.
 """
 
-import asyncio
-from datetime import UTC, datetime
-from uuid import uuid4
+from __future__ import annotations
 
-from ..delivery.base import DeliveryAdapter, DeliveryResult
-from ..filter_engine import FilterEngine
+import asyncio
+from datetime import time, timedelta
+from unittest.mock import AsyncMock, MagicMock
+
+from ..channels.base import (
+    AdapterMetadata,
+    AdapterType,
+    DeliveryAdapter,
+    DeliveryOptions,
+)
+from ..delivery.filter_engine import FilterEngine
+from ..delivery.processor import NotificationDeliveryProcessor
+from ..delivery.queue import NotificationDeliveryTaskQueue
+from ..delivery.rate_limiter import RateLimiter
+from ..delivery.retry_scheduler import RetryPolicy
 from ..models import (
+    ChannelScope,
+    DeliveryResult,
+    DoNotDisturbConfig,
     NotificationCriticality,
     NotificationDeliveryTask,
     NotificationPayload,
     NotificationType,
     RecipientContactInfo,
-    RecipientNotificationPolicy,
 )
-from ..processor import NotificationDeliveryProcessor
-from ..queue import NotificationDeliveryTaskQueue
-from ..rate_limiter import RateLimiter
+from .conftest import make_channel_info, make_payload, make_policy, make_task
+
+# ---------------------------------------------------------------------------
+# Mock adapter
+# ---------------------------------------------------------------------------
 
 
 class MockDeliveryAdapter(DeliveryAdapter):
-    """Mock adapter for testing that records delivery attempts."""
+    """Minimal adapter that records delivery attempts without touching HA."""
 
-    channel = "email"
+    _CHANNEL_PREFIX = "mock"
 
-    def __init__(self, fail_count: int = 0):
-        """Initialize mock adapter.
+    def __init__(self, *, fail_count: int = 0) -> None:
+        """Initialize adapter.
 
         Args:
-            fail_count: Number of times to fail before succeeding (0 = always succeed)
+            fail_count: Number of times to return TRANSIENT_FAIL before succeeding.
 
         """
         self.delivered_payloads: list[NotificationPayload] = []
-        self.failed_payloads: list[NotificationPayload] = []
         self.attempt_count = 0
         self.fail_count = fail_count
+
+    # -- DeliveryAdapter abstract interface -----------------------------------
+
+    @classmethod
+    def get_metadata(cls) -> AdapterMetadata:
+        """Return adapter metadata."""
+        return AdapterMetadata(
+            adapter_type=AdapterType.STATIC,
+            channel_prefix=cls._CHANNEL_PREFIX,
+        )
+
+    @classmethod
+    def matches_channel(cls, channel_id: str) -> bool:
+        """Return True for any channel id starting with 'mock'."""
+        return channel_id.startswith(cls._CHANNEL_PREFIX)
+
+    @classmethod
+    def extract_variant(cls, channel_id: str) -> str | None:
+        """No variant for mock channels."""
+        return None
+
+    @classmethod
+    def get_requirements(cls) -> dict:
+        """No contact-info requirements."""
+        return {}
+
+    @property
+    def channel(self) -> str:
+        """Return the mock channel identifier."""
+        return "mock.test"
 
     async def deliver(
         self,
@@ -46,279 +92,245 @@ class MockDeliveryAdapter(DeliveryAdapter):
         payload: NotificationPayload,
         contact_info: RecipientContactInfo,
         idempotency_key: str,
+        job_id: str,
+        options: DeliveryOptions | None = None,
     ) -> DeliveryResult:
-        """Simulate delivery."""
+        """Simulate delivery, honouring fail_count before succeeding."""
         self.attempt_count += 1
-
         if self.attempt_count <= self.fail_count:
-            self.failed_payloads.append(payload)
             return self.transient_failure(error="Simulated transient failure")
-
         self.delivered_payloads.append(payload)
         return self.success(remote_id=f"mock-{idempotency_key}")
 
 
-class TestNotificationDeliveryFlow:
-    """Test suite for notification delivery end-to-end flow."""
+class MockEmailAdapter(MockDeliveryAdapter):
+    """Adapter variant that declares an email address requirement."""
+
+    @classmethod
+    def get_requirements(cls) -> dict:
+        """Require an email address in the recipient contact info."""
+        return {"requires_email": True}
+
+
+# ---------------------------------------------------------------------------
+# Test helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_processor(
+    adapter: MockDeliveryAdapter,
+    *,
+    rate_limiter: RateLimiter | None = None,
+    attempt_count: int = 0,
+) -> tuple[NotificationDeliveryProcessor, AsyncMock]:
+    """Build a fully wired processor backed by *adapter*.
+
+    Returns the processor and the retry_queue mock so callers can assert on
+    scheduled retries when needed.
+    """
+    attempt_log = AsyncMock()
+    attempt_log.get_next_attempt_number.return_value = 1
+    attempt_log.log_attempt.return_value = None
+    attempt_log.count_attempts.return_value = attempt_count
+
+    retry_queue = AsyncMock()
+
+    channel_manager = MagicMock()
+    channel_manager.get_adapter.return_value = adapter
+
+    processor = NotificationDeliveryProcessor(
+        filter_engine=FilterEngine(),
+        rate_limiter=rate_limiter or RateLimiter(),
+        channel_manager=channel_manager,
+        hass=MagicMock(),
+        retry_policy=RetryPolicy(max_attempts=3, base_delay=timedelta(seconds=1)),
+        notification_registry=AsyncMock(),
+        attempt_log=attempt_log,
+        retry_queue=retry_queue,
+    )
+    return processor, retry_queue
+
+
+def _system_task(**overrides) -> NotificationDeliveryTask:
+    """Task whose channel has SYSTEM scope (contact-info validation is skipped)."""
+    return make_task(
+        channel_info=make_channel_info(
+            id="mock.test", label="Mock", scope=ChannelScope.SYSTEM
+        ),
+        **overrides,
+    )
+
+
+def _recipient_task(**overrides) -> NotificationDeliveryTask:
+    """Task whose channel has RECIPIENT scope (contact-info validation is active)."""
+    return make_task(
+        channel_info=make_channel_info(
+            id="mock.test", label="Mock", scope=ChannelScope.RECIPIENT
+        ),
+        **overrides,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tests: processor delivery pipeline
+# ---------------------------------------------------------------------------
+
+
+class TestProcessorDeliveryFlow:
+    """End-to-end tests through FilterEngine → RateLimiter → Processor → Adapter."""
 
     async def test_successful_delivery(self):
-        """Test happy path: notification filters, rate limits pass, delivers successfully."""
+        """Happy path: notification passes all checks and is delivered once."""
         adapter = MockDeliveryAdapter()
+        processor, _ = _make_processor(adapter)
+        task = _system_task()
 
-        payload = NotificationPayload(
-            notification_id=str(uuid4()),
-            message="Test notification",
-            title="Test",
-            type=NotificationType.INFO,
-            criticality=NotificationCriticality.LOW,
-            source="test_service",
-            created_at=datetime.now(UTC),
-        )
+        await processor.process(task)
 
-        policy = RecipientNotificationPolicy(
-            retry_attempts=3,
-            rate_limit=10,
-            rate_limit_window=3600,
-            allowed_types=[NotificationType.INFO],
-            blocked_sources_regex=None,
-            dnd=None,
-        )
-
-        contact_info = RecipientContactInfo(
-            email_address="user@example.com",
-            phone_number=None,
-            push_token=None,
-            matrix_id=None,
-        )
-
-        task = NotificationDeliveryTask(
-            idempotency_key=str(uuid4()),
-            payload=payload,
-            policy=policy,
-            contact_info=contact_info,
-        )
-
-        filter_engine = FilterEngine()
-        rate_limiter = RateLimiter()
-        from datetime import timedelta
-
-        from ..retry_scheduler import RetryPolicy
-
-        processor = NotificationDeliveryProcessor(
-            filter_engine=filter_engine,
-            rate_limiter=rate_limiter,
-            adapters={"email": adapter},
-            retry_policy=RetryPolicy(max_attempts=3, base_delay=timedelta(seconds=1)),
-            state_store=None,
-            attempt_store=None,
-        )
-
-        result = await processor.process(task)
-
-        assert result.success
         assert len(adapter.delivered_payloads) == 1
-        assert adapter.delivered_payloads[0].notification_id == payload.notification_id
+        assert (
+            adapter.delivered_payloads[0].notification_id
+            == task.payload.notification_id
+        )
 
-    async def test_filtered_notification(self):
-        """Test notification filtered due to type allowlist."""
+    async def test_filtered_by_type(self):
+        """Notification whose type is not in the policy allowlist is silently dropped."""
         adapter = MockDeliveryAdapter()
-
-        payload = NotificationPayload(
-            id=str(uuid4()),
-            message="Test notification",
-            title="Test",
-            notification_type=NotificationType.WARNING,
-            criticality=NotificationCriticality.MEDIUM,
-            source="test_service",
-            timestamp=datetime.now(UTC),
+        processor, _ = _make_processor(adapter)
+        task = _system_task(
+            payload=make_payload(type=NotificationType.WARNING),
+            policy=make_policy(allowed_types=[NotificationType.INFO]),
         )
 
-        policy = RecipientNotificationPolicy(
-            type_allowlist=[NotificationType.INFO],  # WARNING not in allowlist
-            blocked_sources=[],
-            do_not_disturb_start=None,
-            do_not_disturb_end=None,
-            rate_limit_per_hour=10,
-            retry_enabled=True,
-        )
+        await processor.process(task)
 
-        contact_info = RecipientContactInfo(recipient_id="user1", channel="email")
-
-        task = NotificationDeliveryTask(
-            idempotency_key=str(uuid4()),
-            payload=payload,
-            policy=policy,
-            contact_info=contact_info,
-        )
-
-        filter_engine = FilterEngine()
-        rate_limiter = RateLimiter()
-        processor = NotificationDeliveryProcessor(
-            filter_engine=filter_engine,
-            rate_limiter=rate_limiter,
-            adapters={"email": adapter},
-            retry_scheduler=None,
-            state_store=None,
-            attempt_store=None,
-        )
-
-        result = await processor.process(task)
-
-        assert not result.success
         assert len(adapter.delivered_payloads) == 0
+        assert adapter.attempt_count == 0
 
-    async def test_rate_limiting(self):
-        """Test notification rejected due to rate limit."""
+    async def test_filtered_by_blocked_source(self):
+        """Notification whose source matches the blocked-source regex is dropped."""
         adapter = MockDeliveryAdapter()
-
-        payload = NotificationPayload(
-            id=str(uuid4()),
-            message="Test notification",
-            title="Test",
-            notification_type=NotificationType.INFO,
-            criticality=NotificationCriticality.LOW,
-            source="test_service",
-            timestamp=datetime.now(UTC),
+        processor, _ = _make_processor(adapter)
+        task = _system_task(
+            payload=make_payload(source="restricted_service"),
+            policy=make_policy(blocked_sources_regex=r"restricted_.*"),
         )
 
-        policy = RecipientNotificationPolicy(
-            type_allowlist=[NotificationType.INFO],
-            blocked_sources=[],
-            do_not_disturb_start=None,
-            do_not_disturb_end=None,
-            rate_limit_per_hour=0,  # No messages allowed per hour
-            retry_enabled=True,
-        )
+        await processor.process(task)
 
-        contact_info = RecipientContactInfo(recipient_id="user1", channel="email")
-
-        task = NotificationDeliveryTask(
-            idempotency_key=str(uuid4()),
-            payload=payload,
-            policy=policy,
-            contact_info=contact_info,
-        )
-
-        filter_engine = FilterEngine()
-        rate_limiter = RateLimiter()
-        processor = NotificationDeliveryProcessor(
-            filter_engine=filter_engine,
-            rate_limiter=rate_limiter,
-            adapters={"email": adapter},
-            retry_scheduler=None,
-            state_store=None,
-            attempt_store=None,
-        )
-
-        result = await processor.process(task)
-
-        assert not result.success
         assert len(adapter.delivered_payloads) == 0
+        assert adapter.attempt_count == 0
 
-    async def test_task_queue_processing(self):
-        """Test queue processes multiple tasks concurrently."""
+    async def test_filtered_by_dnd_window(self):
+        """Notification blocked by an all-day DND window is not delivered."""
         adapter = MockDeliveryAdapter()
+        processor, _ = _make_processor(adapter)
+        # 00:00–23:59 is active for every minute of the day
+        dnd = DoNotDisturbConfig(
+            start=time(0, 0),
+            end=time(23, 59),
+            allowed_sources_regex=None,
+        )
+        task = _system_task(policy=make_policy(dnd=dnd))
 
-        filter_engine = FilterEngine()
-        rate_limiter = RateLimiter()
-        processor_instance = NotificationDeliveryProcessor(
-            filter_engine=filter_engine,
-            rate_limiter=rate_limiter,
-            adapters={"email": adapter},
-            retry_scheduler=None,
-            state_store=None,
-            attempt_store=None,
+        await processor.process(task)
+
+        assert len(adapter.delivered_payloads) == 0
+        assert adapter.attempt_count == 0
+
+    async def test_dnd_bypassed_for_allowed_criticality(self):
+        """CRITICAL notifications pass through an active DND window."""
+        adapter = MockDeliveryAdapter()
+        processor, _ = _make_processor(adapter)
+        dnd = DoNotDisturbConfig(
+            start=time(0, 0),
+            end=time(23, 59),
+            allowed_sources_regex=None,
+            allowed_criticalities=[NotificationCriticality.CRITICAL],
+        )
+        task = _system_task(
+            payload=make_payload(criticality=NotificationCriticality.CRITICAL),
+            policy=make_policy(dnd=dnd),
         )
 
-        # Create queue with processor factory
-        def processor_factory():
-            return processor_instance
+        await processor.process(task)
+
+        assert len(adapter.delivered_payloads) == 1
+
+    async def test_rate_limited_on_second_delivery(self):
+        """Second delivery to the same recipient exhausts the per-recipient token bucket."""
+        rate_limiter = RateLimiter()
+        adapter = MockDeliveryAdapter()
+        processor, _ = _make_processor(adapter, rate_limiter=rate_limiter)
+
+        # rate_limit=1 creates a bucket with exactly one token per window
+        policy = make_policy(rate_limit=1, rate_limit_window=3600)
+        task1 = _system_task(recipient_id="user_rl", policy=policy)
+        task2 = _system_task(recipient_id="user_rl", policy=policy)
+
+        await processor.process(task1)  # consumes the token → delivered
+        await processor.process(task2)  # bucket empty → rate-limited
+
+        assert len(adapter.delivered_payloads) == 1
+
+    async def test_missing_contact_info_causes_permanent_fail(self):
+        """RECIPIENT-scope delivery missing required email is permanently failed without calling the adapter."""
+        adapter = MockEmailAdapter()
+        processor, _ = _make_processor(adapter)
+        task = _recipient_task(
+            contact_info=RecipientContactInfo(email_address=None, phone_number=None),
+        )
+
+        await processor.process(task)
+
+        assert len(adapter.delivered_payloads) == 0
+        assert adapter.attempt_count == 0
+
+    async def test_transient_failure_schedules_retry(self):
+        """Adapter transient failure causes a retry to be scheduled; no delivery counted."""
+        adapter = MockDeliveryAdapter(fail_count=1)
+        processor, retry_queue = _make_processor(adapter)
+        task = _system_task()
+
+        await processor.process(task)
+
+        assert len(adapter.delivered_payloads) == 0
+        retry_queue.schedule_retry.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Tests: task queue
+# ---------------------------------------------------------------------------
+
+
+class TestQueueDeliveryFlow:
+    """End-to-end tests for the task queue worker pool."""
+
+    async def test_queue_delivers_multiple_tasks(self):
+        """Queue processes all enqueued tasks and each one reaches the adapter."""
+        adapter = MockDeliveryAdapter()
+        processor, _ = _make_processor(adapter)
 
         queue = NotificationDeliveryTaskQueue(
-            processor_factory=processor_factory,
-            max_concurrent_tasks=2,
+            max_concurrency=2,
+            processor_factory=lambda: processor,
+            retry_queue=None,
         )
 
-        # Create multiple tasks
-        tasks = []
-        for i in range(3):
-            payload = NotificationPayload(
-                id=str(uuid4()),
-                message=f"Notification {i}",
-                title="Test",
-                notification_type=NotificationType.INFO,
-                criticality=NotificationCriticality.LOW,
-                source="test_service",
-                timestamp=datetime.now(UTC),
+        tasks = [
+            _system_task(
+                recipient_id=f"user_{i}",
+                payload=make_payload(message=f"Notification {i}"),
             )
+            for i in range(3)
+        ]
 
-            policy = RecipientNotificationPolicy(
-                type_allowlist=[NotificationType.INFO],
-                blocked_sources=[],
-                do_not_disturb_start=None,
-                do_not_disturb_end=None,
-                rate_limit_per_hour=10,
-                retry_enabled=True,
-            )
-
-            contact_info = RecipientContactInfo(
-                recipient_id=f"user{i}", channel="email"
-            )
-
-            task = NotificationDeliveryTask(
-                idempotency_key=str(uuid4()),
-                payload=payload,
-                policy=policy,
-                contact_info=contact_info,
-            )
-            tasks.append(task)
-
-        # Start queue
-        queue.start()
-
+        await queue.start()
         try:
-            # Add tasks
             for task in tasks:
-                queue.add_task(task)
-
-            # Wait for processing
-            await asyncio.sleep(0.5)
-
-            # Verify all tasks were delivered
+                await queue.add_task(task)
+            # Yield control so the worker loop can drain the queue
+            await asyncio.sleep(0.3)
             assert len(adapter.delivered_payloads) == 3
         finally:
             await queue.stop()
-
-
-async def main():
-    """Run all tests."""
-    test_suite = TestNotificationDeliveryFlow()
-
-    # Run all tests
-    try:
-        print("Running test_successful_delivery...")
-        await test_suite.test_successful_delivery()
-        print("✓ Passed")
-
-        print("Running test_filtered_notification...")
-        await test_suite.test_filtered_notification()
-        print("✓ Passed")
-
-        print("Running test_rate_limiting...")
-        await test_suite.test_rate_limiting()
-        print("✓ Passed")
-
-        print("Running test_task_queue_processing...")
-        await test_suite.test_task_queue_processing()
-        print("✓ Passed")
-
-        print("\nAll tests passed!")
-    except Exception as e:
-        print(f"✗ Test failed: {e}")
-        import traceback
-
-        traceback.print_exc()
-
-
-if __name__ == "__main__":
-    asyncio.run(main())

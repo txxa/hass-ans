@@ -1,10 +1,19 @@
 """Concrete implementations of persistence stores for delivery tasks."""
 
-from datetime import datetime
+from __future__ import annotations
+
+import logging
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from ..models import Attempt, DeliveryStatus
 from .base import AttemptStore, DeliveryState, DeliveryStateStore
+
+if TYPE_CHECKING:
+    from ..models import NotificationDeliveryTask
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class InMemoryDeliveryStateStore(DeliveryStateStore):
@@ -20,6 +29,8 @@ class InMemoryDeliveryStateStore(DeliveryStateStore):
         self._states: dict[UUID, DeliveryState] = {}
         # job_id -> (run_at, reason)
         self._retries: dict[UUID, tuple[datetime, str | None]] = {}
+        # job_id -> creation datetime (for cleanup_completed filtering)
+        self._created_at: dict[UUID, datetime] = {}
 
     async def load(self, job_id: UUID) -> DeliveryState | None:
         """Load delivery state for a job."""
@@ -34,6 +45,7 @@ class InMemoryDeliveryStateStore(DeliveryStateStore):
             last_error=reason,
         )
         self._states[job_id] = state
+        self._created_at.setdefault(job_id, datetime.now(UTC))
         # Remove any pending retry
         self._retries.pop(job_id, None)
 
@@ -46,6 +58,7 @@ class InMemoryDeliveryStateStore(DeliveryStateStore):
             last_error="rate_limited",
         )
         self._states[job_id] = state
+        self._created_at.setdefault(job_id, datetime.now(UTC))
 
     async def persist_success(self, job_id: UUID, attempt: Attempt) -> None:
         """Persist successful delivery state."""
@@ -56,6 +69,7 @@ class InMemoryDeliveryStateStore(DeliveryStateStore):
             last_error=None,
         )
         self._states[job_id] = state
+        self._created_at.setdefault(job_id, datetime.now(UTC))
         # Remove any pending retry
         self._retries.pop(job_id, None)
 
@@ -68,6 +82,7 @@ class InMemoryDeliveryStateStore(DeliveryStateStore):
             last_error=attempt.error,
         )
         self._states[job_id] = state
+        self._created_at.setdefault(job_id, datetime.now(UTC))
 
     async def persist_permanent_failure(
         self,
@@ -84,6 +99,7 @@ class InMemoryDeliveryStateStore(DeliveryStateStore):
             last_error=error or (attempt.error if attempt else None),
         )
         self._states[job_id] = state
+        self._created_at.setdefault(job_id, datetime.now(UTC))
         # Remove any pending retry
         self._retries.pop(job_id, None)
 
@@ -92,15 +108,22 @@ class InMemoryDeliveryStateStore(DeliveryStateStore):
         job_id: UUID,
         run_at: datetime,
         reason: str | None = None,
+        task: NotificationDeliveryTask | None = None,  # noqa: ARG002
     ) -> None:
-        """Schedule a retry for a failed delivery task."""
+        """Schedule a retry for a failed delivery task.
+
+        The ``task`` parameter is accepted for interface compatibility with the
+        file-based store (which persists the snapshot for startup recovery) but
+        is intentionally ignored here since in-memory state is not persisted
+        across restarts.
+        """
         self._retries[job_id] = (run_at, reason)
 
     async def cleanup_completed(self, before: datetime) -> int:
         """Clean up terminal states older than the given date.
 
         Args:
-            before: Delete states with status completed before this time.
+            before: Delete states whose creation time is before this datetime.
 
         Returns:
             Number of states deleted.
@@ -110,11 +133,12 @@ class InMemoryDeliveryStateStore(DeliveryStateStore):
             job_id
             for job_id, state in self._states.items()
             if state.is_terminal
-            # Could track creation_time in DeliveryState if needed
+            and self._created_at.get(job_id, datetime.min.replace(tzinfo=UTC)) < before
         ]
         for job_id in to_delete:
             self._states.pop(job_id, None)
             self._retries.pop(job_id, None)
+            self._created_at.pop(job_id, None)
         return len(to_delete)
 
     def get_pending_retries(self) -> list[tuple[UUID, datetime]]:
@@ -154,6 +178,11 @@ class InMemoryAttemptStore(AttemptStore):
             if existing.attempt_number == attempt.attempt_number:
                 attempts[i] = attempt
                 return
+        _LOGGER.warning(
+            "update() called for attempt %s (job=%s) but no matching record found",
+            attempt.attempt_number,
+            attempt.job_id,
+        )
 
     async def next_attempt_number(self, job_id: UUID) -> int:
         """Get the next attempt number for a job."""

@@ -91,7 +91,7 @@ class VolumeIntent:
     timestamp: str
     timeout: str
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for storage."""
         return asdict(self)
 
@@ -255,14 +255,25 @@ class VolumeRestorationRegistry:
         Args:
             entity_id: Media player entity ID.
             timeout_seconds: Intent expires after this many seconds (default: 1 hour).
-            override_volume: Volume that will be set for TTS. Initialising the
-                intent with the correct override avoids a stale-value window
-                between capture and the subsequent volume_set call.
+                Must be a positive integer.
+            override_volume: Volume that will be set for TTS (0.0–1.0).
+                Initialising the intent with the correct override avoids a
+                stale-value window between capture and the subsequent volume_set
+                call.  Must be in [0.0, 1.0] when provided.
 
         Raises:
             HomeAssistantError: If media player state cannot be retrieved.
+            ValueError: If ``timeout_seconds`` is not positive or ``override_volume``
+                is outside [0.0, 1.0].
 
         """
+        if timeout_seconds <= 0:
+            raise ValueError(f"timeout_seconds must be positive, got {timeout_seconds}")
+        if override_volume is not None and not (0.0 <= override_volume <= 1.0):
+            raise ValueError(
+                f"override_volume must be in [0.0, 1.0], got {override_volume}"
+            )
+
         async with self._get_lock(entity_id):
             state = self._hass.states.get(entity_id)
             if state is None:
@@ -378,14 +389,20 @@ class VolumeRestorationRegistry:
     async def _set_volume(self, entity_id: str, volume_level: float) -> None:
         """Set the media player volume via the HA service API.
 
+        ``volume_level`` is clamped to the valid [0.0, 1.0] range so callers
+        do not need to sanitize their values beforehand.
+
         Args:
             entity_id: Media player entity ID.
-            volume_level: Target volume level (0.0–1.0).
+            volume_level: Desired volume level (0.0–1.0). Values outside this
+                range are silently clamped.
 
         Raises:
             TTSVolumeControlError: If the service call fails or times out.
 
         """
+        # Clamp to valid media_player range before issuing the service call.
+        volume_level = max(0.0, min(1.0, volume_level))
         try:
             async with asyncio.timeout(VOLUME_SET_TIMEOUT):
                 await self._hass.services.async_call(
@@ -644,6 +661,11 @@ class VolumeRestorationRegistry:
 
     async def _do_cleanup(self) -> None:
         """Clean up expired intents (invoked every 5 minutes via the scheduler)."""
+        # Import here to avoid loading the component at module import time.
+        from homeassistant.components.persistent_notification import (  # noqa: PLC0415
+            async_create as pn_async_create,
+        )
+
         now = dt_util.utcnow()
         expired: list[str] = []
         try:
@@ -663,10 +685,6 @@ class VolumeRestorationRegistry:
                     "Notifying user.",
                     entity_id,
                 )
-                from homeassistant.components.persistent_notification import (  # noqa: PLC0415
-                    async_create as pn_async_create,
-                )
-
                 pn_async_create(
                     self._hass,
                     f"The volume on **{entity_id}** was not automatically "

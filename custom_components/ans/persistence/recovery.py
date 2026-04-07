@@ -7,13 +7,18 @@ Handles:
 - Reconstructing tasks from persisted snapshots
 """
 
+from __future__ import annotations
+
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.core import HomeAssistant
 
 from ..models import NotificationDeliveryTask
+
+if TYPE_CHECKING:
+    from .file import DeliveryAttemptLog, NotificationRegistry, RetryQueue
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -24,9 +29,9 @@ class PersistenceRecovery:
     def __init__(
         self,
         hass: HomeAssistant,
-        notification_registry=None,
-        attempt_log=None,
-        retry_queue=None,
+        notification_registry: NotificationRegistry | None = None,
+        attempt_log: DeliveryAttemptLog | None = None,
+        retry_queue: RetryQueue | None = None,
     ) -> None:
         """Initialize recovery manager.
 
@@ -39,19 +44,22 @@ class PersistenceRecovery:
 
         """
         self._hass = hass
+        # Lazy import to avoid circular dependencies; only executed when any
+        # store is absent so callers that pass all three stores pay no cost.
         if notification_registry is None or attempt_log is None or retry_queue is None:
-            # Lazy import to avoid circular dependencies
             from .file import (  # noqa: PLC0415
                 DeliveryAttemptLog,
                 NotificationRegistry,
                 RetryQueue,
             )
 
-            self.notification_registry = notification_registry or NotificationRegistry(
+            self.notification_registry: NotificationRegistry = (
+                notification_registry or NotificationRegistry(hass)
+            )
+            self.attempt_log: DeliveryAttemptLog = attempt_log or DeliveryAttemptLog(
                 hass
             )
-            self.attempt_log = attempt_log or DeliveryAttemptLog(hass)
-            self.retry_queue = retry_queue or RetryQueue(hass)
+            self.retry_queue: RetryQueue = retry_queue or RetryQueue(hass)
         else:
             self.notification_registry = notification_registry
             self.attempt_log = attempt_log
@@ -126,25 +134,33 @@ class PersistenceRecovery:
 
         Args:
             days: Remove records older than this many days. Default 7.
+                  Must be a non-negative integer.
 
         Returns:
-            Number of records removed.
+            Total number of records removed across all three stores.
+
+        Raises:
+            ValueError: If ``days`` is negative.
 
         """
+        if days < 0:
+            raise ValueError(f"days must be non-negative, got {days}")
+
         cutoff = datetime.now(UTC) - timedelta(days=days)
 
-        # Clean up all three stores
-        await self.notification_registry.cleanup_old(cutoff)
-        await self.attempt_log.cleanup_old(cutoff)
-        await self.retry_queue.cleanup_old(cutoff)
+        # Clean up all three stores and aggregate counts.
+        n_notifications = await self.notification_registry.cleanup_old(cutoff)
+        n_attempts = await self.attempt_log.cleanup_old(cutoff)
+        n_retries = await self.retry_queue.cleanup_old(cutoff)
 
+        total = n_notifications + n_attempts + n_retries
         _LOGGER.info(
-            "Cleaned up delivery records older than %d days (cutoff: %s)",
+            "Cleaned up %d delivery records older than %d days (cutoff: %s)",
+            total,
             days,
             cutoff.isoformat(),
         )
-
-        return 0  # Return count not tracked in new design
+        return total
 
 
 async def async_initialize_persistence(

@@ -10,4 +10,4 @@ export PYTHONPATH="${PYTHONPATH}:${PWD}/custom_components"
 # Activate the virtual environment
 source "${PWD}/.venv/bin/activate"
 
-python -m pytest custom_components/ans/tests/ --ignore=custom_components/ans/tests/test_integration.py "$@"
+python -m pytest custom_components/ans/tests/ "$@"

@@ -18,10 +18,9 @@ from homeassistant.config_entries import (
     ConfigFlow,
     ConfigFlowResult,
     ConfigSubentryFlow,
+    OptionsFlow,
 )
 from homeassistant.core import callback
-
-from custom_components.ans.config.validator import FieldValidationError
 
 from .channels.channel_manager import (
     detect_media_players,
@@ -36,6 +35,11 @@ from .config.forms import (
 # Import sub-entry flow for Home Assistant to discover
 # pyright: reportUnusedImport=false
 from .config.recipient_flow import RecipientConfigFlow  # noqa: F401
+from .config.validator import (
+    ConfigValidator,
+    FieldValidationError,
+    validate_tts_service,
+)
 from .const import (
     CONFIG_FLOW_ERROR_INVALID_SYSTEM_SETTINGS_KEY,
     CONFIG_FLOW_STEP_SYS_SETTINGS_KEY,
@@ -91,7 +95,7 @@ class ANSConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Initilizee the config flow."""
+        """Initialize the config flow."""
         # Prevent duplicate main entries; the integration is single-instance
         await self.async_set_unique_id(DOMAIN)
         self._abort_if_unique_id_configured()
@@ -117,8 +121,6 @@ class ANSConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             try:
                 # Validate TTS service if provided (PRIORITY 1 - Security)
-                from .config.validator import validate_tts_service  # noqa: PLC0415
-
                 if SYS_CONFIG_TTS_SERVICE_KEY in user_input:
                     tts_service = user_input[SYS_CONFIG_TTS_SERVICE_KEY]
                     try:
@@ -135,15 +137,17 @@ class ANSConfigFlow(ConfigFlow, domain=DOMAIN):
 
                 # Validate system configuration — only when user_input survived
                 # TTS validation above (which may have set it to None on failure).
-                from .config.validator import ConfigValidator  # noqa: PLC0415
-
                 if user_input is not None:
                     if is_reconfigure:
                         # In reconfigure mode, preserve existing options (rate limits)
-                        assert self._reconfigure_entry is not None
+                        reconfigure_entry = self._reconfigure_entry
+                        if reconfigure_entry is None:
+                            return self.async_abort(
+                                reason="reconfigure_entry_not_found"
+                            )
                         current_options = (
-                            dict(self._reconfigure_entry.options)
-                            if self._reconfigure_entry.options
+                            dict(reconfigure_entry.options)
+                            if reconfigure_entry.options
                             else {}
                         )
                         # Merge user input with current options for validation
@@ -200,16 +204,20 @@ class ANSConfigFlow(ConfigFlow, domain=DOMAIN):
 
                     if is_reconfigure:
                         # Update existing entry (type checked by is_reconfigure condition)
-                        assert self._reconfigure_entry is not None
+                        reconfigure_entry = self._reconfigure_entry
+                        if reconfigure_entry is None:
+                            return self.async_abort(
+                                reason="reconfigure_entry_not_found"
+                            )
                         self.hass.config_entries.async_update_entry(
-                            self._reconfigure_entry,
+                            reconfigure_entry,
                             data=data,
                             options=options,
                         )
 
                         # Reload the integration to apply changes
                         await self.hass.config_entries.async_reload(
-                            self._reconfigure_entry.entry_id
+                            reconfigure_entry.entry_id
                         )
 
                         return self.async_abort(reason="reconfigure_successful")
@@ -225,18 +233,15 @@ class ANSConfigFlow(ConfigFlow, domain=DOMAIN):
                         },
                     )
 
-            # except ValueError as e:
-            #     _LOGGER.debug("System configuration validation failed: %s", e)
-            #     errors["base"] = "invalid_system_settings"
-            # except Exception:
-            #     _LOGGER.exception("Unexpected error during system configuration")
-            #     errors["base"] = "unknown"
             except FieldValidationError as e:
                 _LOGGER.debug("Field validation error: %s - %s", e.field, e.message)
                 errors[e.field] = e.message
             except vol.Invalid as e:
-                _LOGGER.debug(str(e))
-                errors[str(e.path[0])] = str(e.path[len(e.path) - 1])
+                _LOGGER.debug("Voluptuous validation error: %s", e)
+                path = e.path
+                field_key = str(path[0]) if path else "base"
+                error_msg = str(path[-1]) if len(path) > 1 else str(e)
+                errors[field_key] = error_msg
             except Exception:
                 _LOGGER.exception("System config validation failed")
                 errors["base"] = CONFIG_FLOW_ERROR_INVALID_SYSTEM_SETTINGS_KEY
@@ -244,8 +249,8 @@ class ANSConfigFlow(ConfigFlow, domain=DOMAIN):
         # Prepare defaults
         if is_reconfigure:
             # For reconfigure, show current data only (not options - they're in options flow)
-            assert self._reconfigure_entry is not None
-            defaults = dict(self._reconfigure_entry.data)
+            reconfigure_entry = self._reconfigure_entry
+            defaults = dict(reconfigure_entry.data) if reconfigure_entry else {}
         else:
             defaults = user_input or {}
 
@@ -308,7 +313,7 @@ class ANSConfigFlow(ConfigFlow, domain=DOMAIN):
         config_entry: ConfigEntry,
     ) -> ANSOptionsFlow:
         """Get the options flow for this handler."""
-        return ANSOptionsFlow(config_entry)
+        return ANSOptionsFlow()
 
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
@@ -340,15 +345,13 @@ class ANSConfigFlow(ConfigFlow, domain=DOMAIN):
         return {"recipient": RecipientConfigFlow}
 
 
-class ANSOptionsFlow(ConfigFlow):
+class ANSOptionsFlow(OptionsFlow):
     """Handle options flow for ANS integration main entry.
 
-    Allows reconfiguring the system settings (rate limits, enabled channels).
+    Allows reconfiguring the tunable system parameters (rate limits, retry
+    settings, queue concurrency, storage retention).  Structural settings
+    (enabled channels) are changed via Reconfigure.
     """
-
-    def __init__(self, config_entry: ConfigEntry) -> None:
-        """Initialize options flow."""
-        self.config_entry = config_entry
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -358,9 +361,6 @@ class ANSOptionsFlow(ConfigFlow):
 
         if user_input is not None:
             try:
-                # Validate only the tunable parameters
-                from .config.validator import ConfigValidator  # noqa: PLC0415
-
                 # Merge with existing data (enabled_channels from data)
                 full_config = {
                     **dict(self.config_entry.data),

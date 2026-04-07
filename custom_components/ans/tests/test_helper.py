@@ -19,7 +19,7 @@ Coverage targets
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -34,7 +34,6 @@ from ..helper import (
     get_subentries,
 )
 from ..models import ChannelInfo, ChannelScope
-
 
 # ---------------------------------------------------------------------------
 # Factories

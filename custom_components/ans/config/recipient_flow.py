@@ -47,7 +47,6 @@ from ..const import (
     SUBENTRY_FLOW_ERROR_INVALID_RECIPIENT_DEFINITION_KEY,
     SUBENTRY_FLOW_ERROR_INVALID_RECIPIENT_SELECTION_KEY,
     SUBENTRY_FLOW_ERROR_INVALID_RECIPIENT_SETTINGS_KEY,
-    SUBENTRY_FLOW_SELECTED_HA_USER_KEY,
     SUBENTRY_FLOW_STEP_RECIPIENT_BASIC_SETTINGS_KEY,
     SUBENTRY_FLOW_STEP_RECIPIENT_CHANNEL_MAPPING_KEY,
     SUBENTRY_FLOW_STEP_RECIPIENT_DEFINITION_KEY,
@@ -301,15 +300,32 @@ class RecipientConfigFlow(ConfigSubentryFlow):
         # Build the options list here so the schema function stays pure
         options: list[SelectOptionDict] = []
 
-        options.extend(
-            [
-                SelectOptionDict(
-                    label=f"{user['label']}",
-                    value=f"{user['value']}",
-                )
-                for user in self._not_configured_ha_users
-            ]
-        )
+        if recipient_type == RecipientType.HA_USER:
+            self._not_configured_ha_users = await self._get_not_configured_ha_users()
+
+            if self._reconfigure_entry:
+                current_user_id = self._recipient_meta.get(RCPT_CONFIG_ID_KEY)
+                if current_user_id and not any(
+                    user["value"] == current_user_id
+                    for user in self._not_configured_ha_users
+                ):
+                    current_user_data = await self._get_ha_user_data(current_user_id)
+                    self._not_configured_ha_users.append(
+                        {
+                            "label": current_user_data.get("name", current_user_id),
+                            "value": current_user_id,
+                        }
+                    )
+
+            options.extend(
+                [
+                    SelectOptionDict(
+                        label=f"{user['label']}",
+                        value=f"{user['value']}",
+                    )
+                    for user in self._not_configured_ha_users
+                ]
+            )
 
         # Get available HA users for selection (empty dict if not HA_USER type)
         # ha_users = {}
@@ -320,6 +336,10 @@ class RecipientConfigFlow(ConfigSubentryFlow):
 
         # Prepare defaults from pre-filled data or user input
         defaults = user_input or self._recipient_meta.copy()
+        if recipient_type == RecipientType.HA_USER and RCPT_CONFIG_USER_KEY not in defaults:
+            defaults[RCPT_CONFIG_USER_KEY] = self._recipient_meta.get(
+                RCPT_CONFIG_ID_KEY
+            )
 
         # Show definition form
         return self.async_show_form(

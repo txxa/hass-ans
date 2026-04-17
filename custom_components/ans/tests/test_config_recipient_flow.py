@@ -20,6 +20,7 @@ from ..const import (
     RCPT_CONFIG_PHONE_KEY,
     RCPT_CONFIG_RECIPIENT_CHOICE_KEY,
     RCPT_CONFIG_TYPE_KEY,
+    RCPT_CONFIG_USER_KEY,
     RECIPIENT_CHOICE_GENERIC,
     RECIPIENT_CHOICE_HA_USER,
     RECIPIENT_CHOICE_SYSTEM_HA,
@@ -158,6 +159,27 @@ def _complete_settings() -> dict:
     }
 
 
+def _get_schema_field(result: dict, field_name: str) -> tuple:
+    """Return voluptuous marker and selector for a field in flow form schema."""
+    schema_dict = result["data_schema"].schema
+    for marker, selector_obj in schema_dict.items():
+        if getattr(marker, "schema", None) == field_name:
+            return marker, selector_obj
+    raise AssertionError(f"Field '{field_name}' not found in schema")
+
+
+def _selector_option_values(selector_obj: object) -> list[str]:
+    """Extract selector option values from SelectSelector config."""
+    options = getattr(getattr(selector_obj, "config", None), "options", [])
+    values: list[str] = []
+    for option in options:
+        if isinstance(option, dict):
+            values.append(option["value"])
+        else:
+            values.append(option.value)
+    return values
+
+
 # ===========================================================================
 # async_step_user
 # ===========================================================================
@@ -292,6 +314,8 @@ class TestAsyncStepRecipientSelection:
         assert result["type"] == FlowResultType.FORM
         assert result["step_id"] == SUBENTRY_FLOW_STEP_RECIPIENT_DEFINITION_KEY
         assert flow._recipient_meta[RCPT_CONFIG_TYPE_KEY] == RecipientType.HA_USER.value
+        _, user_selector = _get_schema_field(result, RCPT_CONFIG_USER_KEY)
+        assert "user123" in _selector_option_values(user_selector)
 
     async def test_invalid_choice_shows_error_on_selection_form(self):
         """An unrecognised choice shows invalid_selection on the form field."""
@@ -774,6 +798,39 @@ class TestAsyncStepReconfigure:
 
         assert flow._recipient_meta[RCPT_CONFIG_NAME_KEY] == "Alice"
         assert flow._recipient_meta[RCPT_CONFIG_EMAIL_KEY] == "alice@example.com"
+
+    async def test_reconfigure_ha_user_includes_current_user_and_preselects_it(self):
+        """HA_USER reconfigure keeps current user selectable and preselected."""
+        flow, main_entry = _make_flow()
+        ha_user_current = MagicMock()
+        ha_user_current.id = "user123"
+        ha_user_current.name = "Bob"
+        ha_user_current.credentials = []
+        ha_user_other = MagicMock()
+        ha_user_other.id = "user999"
+        ha_user_other.name = "Alice"
+        ha_user_other.credentials = []
+        flow.hass.auth.async_get_users = AsyncMock(
+            return_value=[ha_user_current, ha_user_other]
+        )
+
+        sub = MagicMock()
+        sub.data = {
+            RCPT_CONFIG_ID_KEY: "user123",
+            RCPT_CONFIG_NAME_KEY: "Bob",
+            RCPT_CONFIG_TYPE_KEY: RecipientType.HA_USER.value,
+            RCPT_CONFIG_EMAIL_KEY: None,
+            RCPT_CONFIG_PHONE_KEY: None,
+        }
+        main_entry.subentries = {"s1": sub}
+
+        with patch.object(flow, "_get_reconfigure_subentry", return_value=sub):
+            with patch(_PATCH_GET_MAIN_ENTRY, return_value=main_entry):
+                result = await flow.async_step_reconfigure()
+
+        marker, user_selector = _get_schema_field(result, RCPT_CONFIG_USER_KEY)
+        assert "user123" in _selector_option_values(user_selector)
+        assert marker.description["suggested_value"] == "user123"
 
 
 # ===========================================================================

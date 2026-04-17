@@ -252,19 +252,19 @@
                     "description": "Gérer les périodes de ne pas déranger et les exceptions. Définit quand les notifications sont supprimées ou transmises malgré les heures de silence.",
                     "data": {
                         "dnd_enabled": "Activer Ne pas déranger",
-                        "dnd_start": "Heure de début NDD (format 24h)",
-                        "dnd_end": "Heure de fin NDD (format 24h)",
-                        "dnd_allowed_sources_regex": "Sources autorisées pendant NDD (expression régulière)",
-                        "dnd_allowed_criticalities": "Niveaux de criticité contournant NDD (sélection multiple)",
-                        "dnd_allowed_types": "Types de notifications contournant NDD (sélection multiple)"
+                        "dnd_start": "Heure de début NPD (format 24h)",
+                        "dnd_end": "Heure de fin NPD (format 24h)",
+                        "dnd_allowed_sources_regex": "Sources autorisées pendant NPD (expression régulière)",
+                        "dnd_allowed_criticalities": "Niveaux de criticité contournant NPD (sélection multiple)",
+                        "dnd_allowed_types": "Types de notifications contournant NPD (sélection multiple)"
                     },
                     "data_description": {
                         "dnd_enabled": "Lorsqu'activé, les notifications sont supprimées pendant la plage horaire configurée, sauf si elles correspondent à une source, criticité ou type autorisé.",
-                        "dnd_start": "Heure à laquelle la période silencieuse commence (format 24h, ex. : 22:00). Requis lorsque NDD est activé.",
-                        "dnd_end": "Heure à laquelle la période silencieuse se termine (format 24h, ex. : 07:00). Peut passer minuit. Requis lorsque NDD est activé.",
-                        "dnd_allowed_sources_regex": "Expression régulière optionnelle. Les notifications provenant de sources correspondantes sont toujours livrées même pendant NDD (ex. : \"security\\..*\" pour autoriser toutes les sources de sécurité).",
-                        "dnd_allowed_criticalities": "Les notifications avec ces niveaux de criticité contournent NDD et sont toujours livrées.",
-                        "dnd_allowed_types": "Les notifications de ces types contournent NDD et sont toujours livrées."
+                        "dnd_start": "Heure à laquelle la période silencieuse commence (format 24h, ex. : 22:00). Requis lorsque NPD est activé.",
+                        "dnd_end": "Heure à laquelle la période silencieuse se termine (format 24h, ex. : 07:00). Peut passer minuit. Requis lorsque NPD est activé.",
+                        "dnd_allowed_sources_regex": "Expression régulière optionnelle. Les notifications provenant de sources correspondantes sont toujours livrées même pendant NPD (ex. : \"security\\..*\" pour autoriser toutes les sources de sécurité).",
+                        "dnd_allowed_criticalities": "Les notifications avec ces niveaux de criticité contournent NPD et sont toujours livrées.",
+                        "dnd_allowed_types": "Les notifications de ces types contournent NPD et sont toujours livrées."
                     }
                 }
             },
@@ -278,7 +278,7 @@
                 "invalid_definition": "Définition du destinataire invalide. Veuillez vérifier votre saisie.",
                 "invalid_settings": "Paramètres de base invalides. Veuillez vérifier votre saisie.",
                 "invalid_mapping": "Mappage des canaux invalide. Veuillez vérifier votre saisie.",
-                "invalid_dnd_settings": "Paramètres NDD invalides. Veuillez vérifier votre saisie.",
+                "invalid_dnd_settings": "Paramètres NPD invalides. Veuillez vérifier votre saisie.",
                 "name_already_exists": "Un destinataire portant ce nom existe déjà. Veuillez choisir un autre nom.",
                 "user": "Utilisateur Home Assistant invalide.",
                 "name": "Nom invalide ou existant.",

@@ -60,9 +60,9 @@ class RecipientType(str, Enum):
     """Types of users in the ANS system."""
 
     HA_USER = "HA_USER"
-    VIRTUAL = "VIRTUAL"
+    GENERIC = "GENERIC"
     SYSTEM = "SYSTEM"
-    TTS = "TTS"  # NEW: TTS recipient type
+    TTS = "TTS"
 
 
 @dataclass(frozen=True)

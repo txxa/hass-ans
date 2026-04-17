@@ -539,7 +539,7 @@ def test_channel_mapping_non_tts_rejects_media_player():
             channels_medium=None,
             channels_high=None,
             channels_critical=None,
-            recipient_type=RecipientType.VIRTUAL,
+            recipient_type=RecipientType.GENERIC,
         )
 
 
@@ -550,7 +550,7 @@ def test_channel_mapping_non_tts_accepts_notify():
         channels_medium=None,
         channels_high=None,
         channels_critical=None,
-        recipient_type=RecipientType.VIRTUAL,
+        recipient_type=RecipientType.GENERIC,
     )
 
 
@@ -594,7 +594,7 @@ def test_channel_mapping_none_channel_lists_ignored():
 
 
 def test_validate_recipient_consistency_matching_passes():
-    data = SimpleNamespace(type=RecipientType.VIRTUAL)
+    data = SimpleNamespace(type=RecipientType.GENERIC)
     config = SimpleNamespace(
         channels_low=["notify.mobile_app"],
         channels_medium=[],
@@ -866,7 +866,7 @@ def _raw_recipient(**overrides) -> SimpleNamespace:
     """Build a SimpleNamespace that mimics a valid RecipientData without triggering __post_init__."""
     defaults = {
         "id": "test-uuid",
-        "type": RecipientType.VIRTUAL,
+        "type": RecipientType.GENERIC,
         "name": "Alice",
         "email": None,
         "phone": None,

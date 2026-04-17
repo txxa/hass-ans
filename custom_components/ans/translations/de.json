@@ -15,9 +15,10 @@
         },
         "recipient_choice": {
             "options": {
-                "system_home_assistant": "System: Home Assistant",
-                "tts_new": "TTS: Text-to-Speech-Empfänger",
-                "virtual_new": "Virtuell: Benutzerdefinierter Empfänger"
+                "ha_system": "Home Assistant Instanz",
+                "ha_user": "Home Assistant Benutzer",
+                "tts": "Text-to-Speech-Empfänger",
+                "generic": "Generischer Empfänger"
             }
         }
     },
@@ -163,32 +164,34 @@
             },
             "step": {
                 "recipient_selection": {
-                    "title": "Empfänger — Auswahl",
-                    "description": "Wählen Sie den Typ des zu erstellenden Empfängers. Systemempfänger verwalten systemweite Kanäle, HA-Benutzerempfänger sind mit Home-Assistant-Benutzern verknüpft, und virtuelle Empfänger sind benutzerdefinierte Einträge.",
+                    "title": "Empfänger — Typ",
+                    "description": "Typ des hinzuzufügenden Empfängers auswählen.\n\nDie Auswahl steuert, welche Art von Benachrichtigungen und Kanälen für diesen Empfänger verfügbar sind.",
                     "data": {
-                        "recipient_choice": "Zu erstellenden Empfänger auswählen"
+                        "recipient_choice": "Empfängertyp"
                     },
                     "data_description": {
-                        "recipient_choice": "Wählen Sie aus verfügbaren Systemkanälen, noch nicht konfigurierten Home-Assistant-Benutzern oder erstellen Sie einen benutzerdefinierten virtuellen Empfänger."
+                        "recipient_choice": "Nur verfügbare Empfängertypen werden angezeigt, abhängig von der HA- und der ANS-Konfiguration."
                     }
                 },
                 "recipient_definition": {
-                    "title": "Empfänger — Definition",
-                    "description": "Namen, E-Mail-Adresse, Telefonnummer und mobile Geräte-ID für den Empfänger festlegen.",
+                    "title": "Empfänger — Details",
+                    "description": "Basisinformationen und Kontaktdaten für den Empfänger festlegen.\n\nDiese Angaben sind Grundlage für die weitere Konfiguration und Zustellung.",
                     "data": {
+                        "user": "Home Assistant Benutzer",
                         "name": "Anzeigename",
-                        "email": "E-Mail-Adresse (optional)",
-                        "phone": "Telefonnummer (optional)"
+                        "email": "E-Mail-Adresse",
+                        "phone": "Telefonnummer"
                     },
                     "data_description": {
-                        "name": "Anzeigename zur Identifizierung dieses Empfängers im gesamten System. Muss eindeutig sein.",
-                        "email": "Hinweis: Nur erforderlich, wenn ein E-Mail-basierter Benachrichtigungskanal konfiguriert ist.",
-                        "phone": "Hinweis: Nur erforderlich, wenn ein telefonbasierter Benachrichtigungskanal konfiguriert ist (z. B. Signal Messenger). Verwenden Sie das E.164-Format (z. B. +49123456789)."
+                        "user": "Home Assistant Benutzerkonto auswählen, das mit diesem Empfänger verknüpft werden soll.",
+                        "name": "Muss systemweit eindeutig sein.",
+                        "email": "Nur erforderlich für E-Mail-basierte Kanäle.",
+                        "phone": "Nur erforderlich für Telefonnummer-basierte Kanäle (z. B. Signal).\nE.164-Format verwenden (z.B. +49123456789)."
                     }
                 },
                 "recipient_basic_settings": {
                     "title": "Empfänger — Grundeinstellungen",
-                    "description": "Wiederholungsversuche, Ratenbegrenzungen und Benachrichtigungstypen für den Empfänger konfigurieren.",
+                    "description": "Verhalten und Filterregeln für die Benachrichtigungszustellung definieren.\n\nHier werden grundlegende Steuerungsmechanismen für diesen Empfänger gesetzt.",
                     "data": {
                         "rate_limit": "Ratenbegrenzung (Benachrichtigungen/Min.)",
                         "retry_attempts": "Wiederholungsversuche (pro Zustellung)",
@@ -203,34 +206,34 @@
                     }
                 },
                 "recipient_tts_settings": {
-                    "title": "TTS-Einstellungen",
-                    "description": "Lautstärke und Nachrichtenformat für die Text-zu-Sprache-Zustellung konfigurieren. Die Lautstärke wird basierend auf der aktuellen Tageszeit angewendet.",
+                    "title": "Empfänger — TTS-Einstellungen",
+                    "description": "Text-to-Speech-Optionen und Wiedergabeparameter konfigurieren.\n\nSteuert, wie Sprachnachrichten für diesen Empfänger verarbeitet und ausgegeben werden.",
                     "data": {
-                        "volume_morning": "Morgendliche Lautstärke (6:00–9:00)",
-                        "volume_daytime": "Tageslautstärke (9:00–18:00)",
-                        "volume_evening": "Abendlautstärke (18:00–22:00)",
-                        "volume_night": "Nachtlautstärke (22:00–6:00)",
-                        "volume_override_level": "Überschreibende Lautstärke",
-                        "volume_override_criticalities": "Überschreiben für Dringlichkeitsstufen",
                         "message_format": "Nachrichtenformat",
                         "ssml_enabled": "SSML-Modus aktivieren",
-                        "volume_management_enabled": "Lautstärkeverwaltung aktivieren"
+                        "volume_management_enabled": "Lautstärkeverwaltung aktivieren",
+                        "volume_morning": "Morgendliche Lautstärke (6:00-9:00)",
+                        "volume_daytime": "Tageslautstärke (9:00-18:00)",
+                        "volume_evening": "Abendlautstärke (18:00-22:00)",
+                        "volume_night": "Nachtlautstärke (22:00-6:00)",
+                        "volume_override_level": "Überschreibende Lautstärke",
+                        "volume_override_criticalities": "Überschreiben für Dringlichkeitsstufen"
                     },
                     "data_description": {
-                        "volume_morning": "Lautstärke (0–100) für Benachrichtigungen, die zwischen 6:00 und 9:00 Uhr zugestellt werden.",
-                        "volume_daytime": "Lautstärke (0–100) für Benachrichtigungen, die zwischen 9:00 und 18:00 Uhr zugestellt werden.",
-                        "volume_evening": "Lautstärke (0–100) für Benachrichtigungen, die zwischen 18:00 und 22:00 Uhr zugestellt werden.",
-                        "volume_night": "Lautstärke (0–100) für Benachrichtigungen, die zwischen 22:00 und 6:00 Uhr zugestellt werden.",
-                        "volume_override_level": "Lautstärke (0–100), die verwendet wird, wenn eine Benachrichtigung den unten festgelegten Überschreibungs-Dringlichkeitsstufen entspricht.",
-                        "volume_override_criticalities": "Wählen Sie Dringlichkeitsstufen aus, die die überschreibende Lautstärke anstelle der zeitbasierten Lautstärke verwenden sollen (z. B. KRITISCHE Benachrichtigungen immer mit maximaler Lautstärke abspielen).",
                         "message_format": "Legt fest, wie der Benachrichtigungsinhalt für TTS formatiert wird: 'Titel und Nachricht' spricht beides, 'Nur Nachricht' spricht nur die Nachricht, 'Nur Titel' spricht nur den Titel.",
                         "ssml_enabled": "Wenn aktiviert, wird die Nachricht in ein SSML-'<speak>'-Dokument eingebettet und Benutzerinhalte werden vor der Zustellung XML-maskiert. Nur aktivieren, wenn Ihre TTS-Engine SSML unterstützt (z. B. Google Cloud TTS, Amazon Polly, Azure TTS, edge-tts, Piper im SSML-Modus). Nicht für reine Klartextmaschinen aktivieren.",
-                        "volume_management_enabled": "Wenn aktiviert, passt ANS die Lautstärke des Media Players vor dem Sprechen automatisch auf den konfigurierten Wert an und stellt sie danach wieder her. Deaktivieren Sie diese Option, wenn Sie die Lautstärke extern verwalten oder TTS auf der aktuellen Gerätelautstärke abspielen möchten."
+                        "volume_management_enabled": "Wenn aktiviert, passt ANS die Lautstärke des Media Players vor dem Sprechen automatisch auf den konfigurierten Wert an und stellt sie danach wieder her. Deaktivieren Sie diese Option, wenn Sie die Lautstärke extern verwalten oder TTS auf der aktuellen Gerätelautstärke abspielen möchten.",
+                        "volume_morning": "Lautstärke (0-100) für Benachrichtigungen, die zwischen 6:00 und 9:00 Uhr zugestellt werden.",
+                        "volume_daytime": "Lautstärke (0-100) für Benachrichtigungen, die zwischen 9:00 und 18:00 Uhr zugestellt werden.",
+                        "volume_evening": "Lautstärke (0-100) für Benachrichtigungen, die zwischen 18:00 und 22:00 Uhr zugestellt werden.",
+                        "volume_night": "Lautstärke (0-100) für Benachrichtigungen, die zwischen 22:00 und 6:00 Uhr zugestellt werden.",
+                        "volume_override_level": "Lautstärke (0-100), die verwendet wird, wenn eine Benachrichtigung den unten festgelegten Überschreibungs-Dringlichkeitsstufen entspricht.",
+                        "volume_override_criticalities": "Wählen Sie Dringlichkeitsstufen aus, die die überschreibende Lautstärke anstelle der zeitbasierten Lautstärke verwenden sollen (z. B. KRITISCHE Benachrichtigungen immer mit maximaler Lautstärke abspielen)."
                     }
                 },
                 "recipient_channel_mapping": {
-                    "title": "Empfänger — Kanalzuordnung",
-                    "description": "Benachrichtigungs-Dringlichkeitsstufen den Zustellkanälen zuordnen.",
+                    "title": "Empfänger — Kanalkonfiguration",
+                    "description": "Benachrichtigungskanäle für Dringlichkeitsstufen definieren.\n\nSteuert, wie Benachrichtigungen abhängig von ihrer Priorität verteilt werden.",
                     "data": {
                         "channels_low": "Kanäle für geringe Dringlichkeit",
                         "channels_medium": "Kanäle für mittlere Dringlichkeit",
@@ -246,7 +249,7 @@
                 },
                 "recipient_dnd_settings": {
                     "title": "Empfänger — Nicht stören (DND)",
-                    "description": "Ruhestunden und Nicht-stören-Verhalten für den Empfänger konfigurieren.",
+                    "description": "Nicht-stören-Zeiten und Ausnahmen verwalten.\n\nLegt fest, wann Benachrichtigungen unterdrückt oder trotz Ruhezeiten zugestellt werden.",
                     "data": {
                         "dnd_enabled": "Nicht stören aktivieren",
                         "dnd_start": "Nicht-stören-Startzeit (24-Stunden-Format)",
@@ -277,7 +280,8 @@
                 "invalid_mapping": "Ungültige Kanalzuordnung. Bitte überprüfen Sie Ihre Eingabe.",
                 "invalid_dnd_settings": "Ungültige Nicht-stören-Einstellungen. Bitte überprüfen Sie Ihre Eingabe.",
                 "name_already_exists": "Ein Empfänger mit diesem Namen existiert bereits. Bitte wählen Sie einen anderen Namen.",
-                "name": "Ungültiger oder doppelter Name.",
+                "user": "Ungültiger Benutzer.",
+                "name": "Ungültiger oder existierender Name.",
                 "email": "Ungültige E-Mail-Adresse.",
                 "phone": "Ungültige Telefonnummer.",
                 "email_or_phone_required": "Entweder eine E-Mail-Adresse oder eine Telefonnummer wird benötigt.",

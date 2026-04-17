@@ -121,6 +121,7 @@ SYS_CONFIG_TTS_SERVICE_KEY = "tts_service"  # NEW: TTS service configuration
 
 # Recipient keys
 RCPT_CONFIG_ID_KEY = "id"
+RCPT_CONFIG_USER_KEY = "user"
 RCPT_CONFIG_TYPE_KEY = "type"
 RCPT_CONFIG_NAME_KEY = "name"
 RCPT_CONFIG_EMAIL_KEY = "email"
@@ -149,10 +150,10 @@ RCPT_CONFIG_DND_ALLOWED_TYPES_KEY = "dnd_allowed_types"
 RCPT_CONFIG_RECIPIENT_CHOICE_KEY = "recipient_choice"
 
 # Recipient choice values
-RECIPIENT_CHOICE_SYSTEM_HA = "system_home_assistant"
-RECIPIENT_CHOICE_HA_USER_PREFIX = "ha_user_"
-RECIPIENT_CHOICE_TTS = "tts_new"
-RECIPIENT_CHOICE_VIRTUAL = "virtual_new"
+RECIPIENT_CHOICE_SYSTEM_HA = "ha_system"
+RECIPIENT_CHOICE_HA_USER = "ha_user"
+RECIPIENT_CHOICE_TTS = "tts"
+RECIPIENT_CHOICE_GENERIC = "generic"
 
 # TTS Recipient Settings Keys
 RCPT_CONFIG_TTS_SETTINGS_KEY = "tts_settings"

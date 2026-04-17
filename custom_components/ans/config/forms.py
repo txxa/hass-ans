@@ -1,6 +1,7 @@
 """Voluptuous schema definitions for ANS config flows."""
 
 import logging
+from operator import is_
 
 import voluptuous as vol
 from homeassistant.core import HomeAssistant
@@ -39,6 +40,7 @@ from ..const import (
     RCPT_CONFIG_TTS_VOLUME_NIGHT_KEY,
     RCPT_CONFIG_TTS_VOLUME_OVERRIDE_CRITICALITIES_KEY,
     RCPT_CONFIG_TTS_VOLUME_OVERRIDE_LEVEL_KEY,
+    RCPT_CONFIG_USER_KEY,
     RCPT_DEFAULT_BLOCKED_SOURCES_PATTERN,
     RCPT_DEFAULT_CRITICALITY_LEVELS,
     RCPT_DEFAULT_DND_ALLOWED_CRITICALITIES,
@@ -376,14 +378,14 @@ def get_recipient_selection_schema(
 
 def get_recipient_definition_schema(
     defaults: dict | None,
-    values: dict | None = None,
+    options: list[SelectOptionDict] | None = None,
     recipient_type: RecipientType | None = None,
 ) -> vol.Schema:
     """Return schema for defining recipient basics.
 
     Args:
         defaults: Default values for form fields
-        values: Available options for select fields (currently unused)
+        options: Available options for select fields (currently unused)
         recipient_type: Recipient type; TTS recipients omit email and phone fields.
 
     Note:
@@ -394,17 +396,37 @@ def get_recipient_definition_schema(
 
     """
     defaults = defaults or {}
-    values = values or {}
+    options = options or []
     is_tts = recipient_type == RecipientType.TTS
+    is_ha_user = recipient_type == RecipientType.HA_USER
 
-    schema_dict: dict = {
-        vol.Required(
-            RCPT_CONFIG_NAME_KEY,
-            description={
-                "suggested_value": defaults.get(RCPT_CONFIG_NAME_KEY),
-            },
-        ): str,
-    }
+    schema_dict: dict = {}
+
+    if is_ha_user:
+        schema_dict[
+            vol.Required(
+                RCPT_CONFIG_USER_KEY,
+                description={
+                    "suggested_value": defaults.get(RCPT_CONFIG_USER_KEY),
+                },
+            )
+        ] = SelectSelector(
+            SelectSelectorConfig(
+                options=options,
+                translation_key=RCPT_CONFIG_USER_KEY,
+                multiple=False,
+                mode=SelectSelectorMode.DROPDOWN,
+            )
+        )
+    else:
+        schema_dict[
+            vol.Required(
+                RCPT_CONFIG_NAME_KEY,
+                description={
+                    "suggested_value": defaults.get(RCPT_CONFIG_NAME_KEY),
+                },
+            )
+        ] = str
 
     if not is_tts:
         schema_dict[
@@ -720,6 +742,15 @@ def get_recipient_tts_settings_schema(
                     ),
                 },
             ): volume_selector,
+            vol.Required(
+                RCPT_CONFIG_TTS_VOLUME_OVERRIDE_LEVEL_KEY,
+                description={
+                    "suggested_value": defaults.get(
+                        RCPT_CONFIG_TTS_VOLUME_OVERRIDE_LEVEL_KEY,
+                        TTS_DEFAULT_VOLUME_OVERRIDE_LEVEL,
+                    ),
+                },
+            ): volume_selector,
             vol.Optional(
                 RCPT_CONFIG_TTS_VOLUME_OVERRIDE_CRITICALITIES_KEY,
                 description={
@@ -736,15 +767,6 @@ def get_recipient_tts_settings_schema(
                     mode=SelectSelectorMode.DROPDOWN,
                 ),
             ),
-            vol.Required(
-                RCPT_CONFIG_TTS_VOLUME_OVERRIDE_LEVEL_KEY,
-                description={
-                    "suggested_value": defaults.get(
-                        RCPT_CONFIG_TTS_VOLUME_OVERRIDE_LEVEL_KEY,
-                        TTS_DEFAULT_VOLUME_OVERRIDE_LEVEL,
-                    ),
-                },
-            ): volume_selector,
         },
         required=True,
         extra=vol.PREVENT_EXTRA,

@@ -37,10 +37,11 @@ from ..const import (
     RCPT_CONFIG_RECIPIENT_ID_KEY,
     RCPT_CONFIG_TTS_SETTINGS_KEY,
     RCPT_CONFIG_TYPE_KEY,
-    RECIPIENT_CHOICE_HA_USER_PREFIX,
+    RCPT_CONFIG_USER_KEY,
+    RECIPIENT_CHOICE_GENERIC,
+    RECIPIENT_CHOICE_HA_USER,
     RECIPIENT_CHOICE_SYSTEM_HA,
     RECIPIENT_CHOICE_TTS,
-    RECIPIENT_CHOICE_VIRTUAL,
     SUBENTRY_FLOW_ERROR_INVALID_CHANNEL_MAPPING_KEY,
     SUBENTRY_FLOW_ERROR_INVALID_DND_SETTINGS_KEY,
     SUBENTRY_FLOW_ERROR_INVALID_RECIPIENT_DEFINITION_KEY,
@@ -99,6 +100,7 @@ class RecipientConfigFlow(ConfigSubentryFlow):
         self._recipient_meta: dict[str, Any] = {}
         self._recipient_settings: dict[str, Any] = {}
         self._reconfigure_entry: ConfigSubentry | None = None
+        self._not_configured_ha_users: list[dict[str, str]] = []
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -126,51 +128,28 @@ class RecipientConfigFlow(ConfigSubentryFlow):
                 choice = user_input.get(RCPT_CONFIG_RECIPIENT_CHOICE_KEY, "")
 
                 if choice == RECIPIENT_CHOICE_SYSTEM_HA:
-                    # System recipient selected
                     if await self._system_recipient_exists():
                         errors[RCPT_CONFIG_RECIPIENT_CHOICE_KEY] = (
                             "system_recipient_already_exists"
                         )
                     else:
-                        # Set up the Home Assistant system recipient
                         return await self._setup_system_recipient()
 
-                elif choice.startswith(RECIPIENT_CHOICE_HA_USER_PREFIX):
-                    # HA user selected
-                    user_id = choice[len(RECIPIENT_CHOICE_HA_USER_PREFIX) :]
-
-                    # Pre-fill HA user data
-                    user_data = await self._get_ha_user_data(user_id)
-                    self._recipient_meta.update(
-                        {
-                            RCPT_CONFIG_TYPE_KEY: RecipientType.HA_USER.value,
-                            RCPT_CONFIG_ID_KEY: user_id,
-                            RCPT_CONFIG_NAME_KEY: user_data.get("name", user_id),
-                            RCPT_CONFIG_EMAIL_KEY: user_data.get("email"),
-                        }
-                    )
-
-                    # Skip to definition step (to allow editing/adding phone)
-                    return await self.async_step_recipient_definition(None)
-
-                elif choice == RECIPIENT_CHOICE_VIRTUAL:
-                    # Virtual recipient - user will enter all details
-                    self._recipient_meta.update(
-                        {
-                            RCPT_CONFIG_TYPE_KEY: RecipientType.VIRTUAL.value,
-                            RCPT_CONFIG_ID_KEY: str(uuid.uuid4()),
-                        }
-                    )
-                    return await self.async_step_recipient_definition(None)
-
-                elif choice == RECIPIENT_CHOICE_TTS:
-                    # TTS recipient - user will enter name only (no contact info needed)
-                    self._recipient_meta.update(
-                        {
-                            RCPT_CONFIG_TYPE_KEY: RecipientType.TTS.value,
-                            RCPT_CONFIG_ID_KEY: str(uuid.uuid4()),
-                        }
-                    )
+                elif choice in (
+                    RECIPIENT_CHOICE_HA_USER,
+                    RECIPIENT_CHOICE_GENERIC,
+                    RECIPIENT_CHOICE_TTS,
+                ):
+                    type_map = {
+                        RECIPIENT_CHOICE_HA_USER: RecipientType.HA_USER,
+                        RECIPIENT_CHOICE_GENERIC: RecipientType.GENERIC,
+                        RECIPIENT_CHOICE_TTS: RecipientType.TTS,
+                    }
+                    self._recipient_meta[RCPT_CONFIG_TYPE_KEY] = type_map[choice].value
+                    # For HA user recipients the HA user ID will be applied in the definition step;
+                    # for others, a UUID is generated
+                    if choice != RECIPIENT_CHOICE_HA_USER:
+                        self._recipient_meta[RCPT_CONFIG_ID_KEY] = str(uuid.uuid4())
                     return await self.async_step_recipient_definition(None)
 
                 else:
@@ -189,16 +168,18 @@ class RecipientConfigFlow(ConfigSubentryFlow):
         # Always rebuild available options for the form (even on errors)
         # to ensure the list is up-to-date
         system_recipient_available = not await self._system_recipient_exists()
-        not_configured_ha_users = await self._get_not_configured_ha_users()
+        self._not_configured_ha_users = await self._get_not_configured_ha_users()
 
         _LOGGER.debug(
             "System recipient available: %s, Available HA users: %s",
             system_recipient_available,
-            [u["value"] for u in not_configured_ha_users],
+            [u["value"] for u in self._not_configured_ha_users],
         )
 
         # Build the options list here so the schema function stays pure
         options: list[SelectOptionDict] = []
+
+        # System recipient option only available if it doesn't already exist
         if system_recipient_available:
             options.append(
                 SelectOptionDict(
@@ -206,23 +187,23 @@ class RecipientConfigFlow(ConfigSubentryFlow):
                     label=RECIPIENT_CHOICE_SYSTEM_HA,
                 )
             )
-        # HA user labels are runtime names — cannot come from translations
-        options.extend(
-            [
+        # HA user option only available if not configured HA users are available
+        if self._not_configured_ha_users and len(self._not_configured_ha_users) > 0:
+            options.append(
                 SelectOptionDict(
-                    label=f"HA User: {user['label']}",
-                    value=f"{RECIPIENT_CHOICE_HA_USER_PREFIX}{user['value']}",
+                    value=RECIPIENT_CHOICE_HA_USER,
+                    label=RECIPIENT_CHOICE_HA_USER,
                 )
-                for user in not_configured_ha_users
-            ]
-        )
+            )
+        # TTS option only available if TTS service is configured at system level
         if self.system_config and self.system_config.tts_service:
             options.append(
                 SelectOptionDict(value=RECIPIENT_CHOICE_TTS, label=RECIPIENT_CHOICE_TTS)
             )
+        # Generic option is always available
         options.append(
             SelectOptionDict(
-                value=RECIPIENT_CHOICE_VIRTUAL, label=RECIPIENT_CHOICE_VIRTUAL
+                value=RECIPIENT_CHOICE_GENERIC, label=RECIPIENT_CHOICE_GENERIC
             )
         )
 
@@ -248,6 +229,20 @@ class RecipientConfigFlow(ConfigSubentryFlow):
 
         if user_input is not None:
             try:
+                if recipient_type == RecipientType.HA_USER:
+                    user_id = user_input.get(RCPT_CONFIG_USER_KEY)
+                    if not user_id:
+                        raise vol.Invalid(
+                            message="Invalid HA user selection",
+                            path=[RCPT_CONFIG_USER_KEY],
+                        )
+                    user_data = await self._get_ha_user_data(user_id)
+                    user_input[RCPT_CONFIG_NAME_KEY] = user_data.get("name", user_id)
+                    # user_input.pop(
+                    #     RCPT_CONFIG_RECIPIENT_CHOICE_KEY
+                    # )  # Remove choice from input before validation
+                    self._recipient_meta[RCPT_CONFIG_ID_KEY] = user_id
+
                 # Validate definition
                 validated = ConfigValidator.validate_recipient_definition_schema(
                     user_input
@@ -294,12 +289,34 @@ class RecipientConfigFlow(ConfigSubentryFlow):
                 _LOGGER.exception("Unexpected error during recipient definition")
                 errors["base"] = SUBENTRY_FLOW_ERROR_INVALID_RECIPIENT_DEFINITION_KEY
 
+        # if self._reconfigure_entry:
+        #         # Conditional branching based on recipient type
+        #         recipient_type = RecipientType(
+        #             self._recipient_meta[RCPT_CONFIG_TYPE_KEY]
+        #         )
+        #         if recipient_type == RecipientType.SYSTEM:
+        #             # TTS recipients go to TTS settings step
+        #             return await self.async_step_recipient_tts_settings(None)
+
+        # Build the options list here so the schema function stays pure
+        options: list[SelectOptionDict] = []
+
+        options.extend(
+            [
+                SelectOptionDict(
+                    label=f"{user['label']}",
+                    value=f"{user['value']}",
+                )
+                for user in self._not_configured_ha_users
+            ]
+        )
+
         # Get available HA users for selection (empty dict if not HA_USER type)
-        ha_users = {}
-        if recipient_type == RecipientType.HA_USER:
-            # HA users need to be fetched from Home Assistant
-            # For now, use empty dict - this would need to be implemented
-            ha_users = {}
+        # ha_users = {}
+        # if recipient_type == RecipientType.HA_USER:
+        #     # HA users need to be fetched from Home Assistant
+        #     # For now, use empty dict - this would need to be implemented
+        #     ha_users = {}
 
         # Prepare defaults from pre-filled data or user input
         defaults = user_input or self._recipient_meta.copy()
@@ -309,7 +326,7 @@ class RecipientConfigFlow(ConfigSubentryFlow):
             step_id=SUBENTRY_FLOW_STEP_RECIPIENT_DEFINITION_KEY,
             data_schema=get_recipient_definition_schema(
                 defaults=defaults,
-                values={SUBENTRY_FLOW_SELECTED_HA_USER_KEY: ha_users},
+                options=options,
                 recipient_type=recipient_type,
             ),
             errors=errors,
@@ -637,8 +654,11 @@ class RecipientConfigFlow(ConfigSubentryFlow):
 
         self.system_config = SystemConfig.from_dict(dict(self._main_entry.data))
 
-        # # Start reconfiguration from basic settings
+        # Start reconfiguration from basic settings
         # # (skip selection and definition as those are immutable)
+        if entry_data.get(RCPT_CONFIG_TYPE_KEY) == RecipientType.SYSTEM.value:
+            # For system recipient, skip directly to basic settings (no selection/definition)
+            return await self.async_step_recipient_basic_settings(None)
         # return await self.async_step_recipient_basic_settings(user_input)
 
         # Start reconfiguration from definition step to allow changing contact info

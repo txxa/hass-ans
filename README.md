@@ -166,23 +166,35 @@ To add a new recipient:
 2. Click "Add Recipient"
 3. Follow the configuration steps:
 
-**Step 1: Select/Create Recipient**
+**Step 1: Recipient — Type**
 
-Choose the recipient type:
-- **System: Home Assistant**: A special built-in recipient for system-level notifications via persistent notification. Recipient data (Step 2) is skipped — name and settings are applied automatically and cannot be changed.
-- **Home Assistant users** (listed individually): Links the recipient to an existing HA user account. Only users not yet configured as recipients appear in this list.
-- **TTS: Text-to-Speech recipient**: Creates a recipient that delivers spoken notifications to media player entities (requires a TTS service to be configured in the initial setup)
-- **Virtual: Custom recipient**: Creates a custom recipient identified by display name, email address, or phone number
+Choose the recipient type. The available options depend on the current system state:
+- **Home Assistant (System)** (`ha_system`): A special built-in recipient for system-level notifications via persistent notification. Only available if not yet added. Recipient details (Step 2) are skipped — name and settings are applied automatically.
+- **Home Assistant User** (`ha_user`): Links the recipient to an existing HA user account. Only available if there are Home Assistant users not yet configured as recipients.
+- **Text-to-Speech recipient** (`tts`): Creates a recipient that delivers spoken notifications to media player entities. Only available if a TTS service is configured in the initial setup.
+- **Generic recipient** (`generic`): Creates a custom recipient identified by display name, email address, or phone number. Always available.
 
-**Step 2: Recipient Data** *(skipped for System: Home Assistant)*
-- **Display Name**: Friendly name for the recipient
-- **Email Address**: Email contact for the recipient (if applicable, not applicable for TTS recipients)
-- **Phone Number**: Phone contact for the recipient (if applicable, not applicable for TTS recipients)
+**Step 2: Recipient — Details** *(skipped for Home Assistant (System))*
+
+The fields shown depend on the recipient type:
+
+*For Home Assistant User recipients:*
+- **Home Assistant user**: Dropdown to select the HA user account to link to this recipient. The display name is auto-filled from the selected user account.
+- **Email Address**: Email contact (optional, only required for email-based notification channels)
+- **Phone Number**: Phone contact in E.164 format e.g. +1234567890 (optional, only required for phone-based channels such as Signal)
+
+*For Generic recipients:*
+- **Display Name**: Friendly name for the recipient (must be unique across all recipients)
+- **Email Address**: Email contact (optional, only required for email-based notification channels)
+- **Phone Number**: Phone contact in E.164 format e.g. +1234567890 (optional, only required for phone-based channels such as Signal)
+
+*For TTS recipients:*
+- **Display Name**: Friendly name for the recipient (must be unique across all recipients)
 
 > **Note**: Contact info requirements depend on channels:
 > - Mobile app channels require Home Assistant user linkage (no email/phone needed)
 > - Email channels require email address
-> - SMS/Messenger channels require phone number
+> - SMS/Messenger channels (e.g. Signal) require phone number
 > - System channels (persistent notification) and TTS recipients require no contact info
 
 **Step 3: Basic Settings**
@@ -191,7 +203,7 @@ Choose the recipient type:
 - **Allowed Notification Types**: Select which notification types (INFO, WARNING, ALERT, REMINDER, EVENT, SECURITY) this recipient should receive
 - **Blocked Sources**: Regular expression patterns to block notifications from specific sources
 
-**Step 4: TTS Settings** *(TTS recipients only)*
+**Step 4: Recipient — TTS Settings** *(TTS recipients only)*
 - **Message Format**: How notification content is spoken:
   - `title_and_message`: speaks "{title}. {message}" *(default)*
   - `message_only`: speaks only the message
@@ -203,16 +215,16 @@ Choose the recipient type:
   - Daytime (09:00–19:00): default 75%
   - Evening (19:00–22:00): default 60%
   - Night (22:00–06:00): default 50%
-- **Override for Criticalities**: Select which criticality levels trigger the override volume (e.g., HIGH, CRITICAL)
 - **Override Volume Level**: Volume used when the criticality override is triggered (default 80%)
+- **Override for Criticalities**: Select which criticality levels trigger the override volume (e.g., HIGH, CRITICAL)
 
 **Step 5: Channel Mapping**
 - Map each criticality level (LOW, MEDIUM, HIGH, CRITICAL) to specific delivery channels
-- For the System: Home Assistant recipient: `persistent_notification` (the only available channel for this recipient type)
-- For notification recipients: notification services (e.g., `notify.mobile_app_phone`)
-- For TTS recipients: media player entities (e.g., `media_player.living_room_speaker`)
+- For the **Home Assistant (System)** recipient: `persistent_notification` (the only available channel for this recipient type)
+- For **Home Assistant User** and **Generic** recipients: notification services (e.g., `notify.mobile_app_phone`)
+- For **TTS** recipients: media player entities (e.g., `media_player.living_room_speaker`)
 
-**Step 6: Do Not Disturb Settings**
+**Step 6: Recipient — Do Not Disturb (DND)**
 - **Enable/Disable DND**: Turn Do Not Disturb mode on or off
 - **Start Time**: Time when DND period begins
 - **End Time**: Time when DND period ends
@@ -223,6 +235,8 @@ Choose the recipient type:
 #### Reconfiguring Recipients
 
 All recipient settings can be updated at any time using the Reconfigure flow for the specific recipient entry.
+
+> **Note**: When reconfiguring a **Home Assistant (System)** recipient, the Type and Details steps are skipped and reconfiguration starts directly at Basic Settings, since the system recipient type and identity are fixed.
 
 ### Services
 

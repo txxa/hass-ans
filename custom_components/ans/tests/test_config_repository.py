@@ -186,7 +186,7 @@ def _make_valid_entry_data(**overrides) -> dict:
     """Return a dict that produces valid RecipientData + RecipientConfig."""
     data = {
         RCPT_CONFIG_ID_KEY: "recipient-1",
-        "type": RecipientType.VIRTUAL.value,
+        "type": RecipientType.GENERIC.value,
         "name": "Alice",
         "email": None,
         "phone": None,

@@ -15,9 +15,10 @@
         },
         "recipient_choice": {
             "options": {
-                "system_home_assistant": "Système : Home Assistant",
-                "tts_new": "TTS : Destinataire synthèse vocale",
-                "virtual_new": "Virtuel : Destinataire personnalisé"
+                "ha_system": "Home Assistant (Système)",
+                "ha_user": "Home Assistant Utilisateur",
+                "tts": "Destinataire synthèse vocale",
+                "generic": "Destinataire générique"
             }
         }
     },
@@ -163,32 +164,34 @@
             },
             "step": {
                 "recipient_selection": {
-                    "title": "Destinataire — Sélection",
-                    "description": "Sélectionnez le type de destinataire à créer. Les destinataires système gèrent les canaux système, les destinataires utilisateur HA sont liés aux utilisateurs Home Assistant, et les destinataires virtuels sont des entrées personnalisées.",
+                    "title": "Destinataire — Type",
+                    "description": "Définir le type de destinataire. Le choix détermine quels types de notifications et canaux sont disponibles pour ce destinataire.",
                     "data": {
-                        "recipient_choice": "Sélectionner le destinataire à créer"
+                        "recipient_choice": "Type de destinataire"
                     },
                     "data_description": {
-                        "recipient_choice": "Choisissez parmi les canaux système disponibles, les utilisateurs Home Assistant non encore configurés, ou créez un destinataire virtuel personnalisé."
+                        "recipient_choice": "Le destinataire système (notifications persistantes) ne peut être ajouté qu'une seule fois.\nLes utilisateurs Home Assistant sont liés à un compte HA existant.\nLes destinataires TTS diffusent l'audio via un lecteur multimédia.\nLes destinataires génériques utilisent des coordonnées personnalisées (e-mail, téléphone)."
                     }
                 },
                 "recipient_definition": {
-                    "title": "Destinataire — Définition",
-                    "description": "Définir le nom, l'adresse e-mail, le numéro de téléphone et l'identifiant d'appareil mobile du destinataire.",
+                    "title": "Destinataire — Détails",
+                    "description": "Définir les informations de base et les coordonnées du destinataire. Ces informations servent de base à la configuration et à la distribution.",
                     "data": {
+                        "user": "Utilisateur Home Assistant",
                         "name": "Nom d'affichage",
-                        "email": "Adresse e-mail (optionnelle)",
-                        "phone": "Numéro de téléphone (optionnel)"
+                        "email": "Adresse e-mail",
+                        "phone": "Numéro de téléphone"
                     },
                     "data_description": {
-                        "name": "Nom convivial utilisé pour identifier ce destinataire dans tout le système. Doit être unique.",
-                        "email": "Remarque : uniquement nécessaire si un canal de notification basé sur l'e-mail est configuré.",
-                        "phone": "Remarque : uniquement nécessaire si un canal de notification basé sur le téléphone est configuré (ex. : Signal Messenger). Utilisez le format E.164 (ex. : +33612345678)."
+                        "user": "Sélectionnez le compte utilisateur Home Assistant à associer à ce destinataire.",
+                        "name": "Doit être unique parmi tous les destinataires.",
+                        "email": "Uniquement requis pour les canaux de notification par e-mail.",
+                        "phone": "Uniquement requis pour les canaux téléphoniques (ex. : Signal). Utilisez le format E.164 (ex. : +33612345678)."
                     }
                 },
                 "recipient_basic_settings": {
                     "title": "Destinataire — Paramètres de base",
-                    "description": "Configurer les tentatives, les limites de débit et les types de notifications que le destinataire doit recevoir.",
+                    "description": "Définir le comportement et les règles de filtrage pour la distribution des notifications. Définit les mécanismes de contrôle principaux pour ce destinataire.",
                     "data": {
                         "rate_limit": "Limite de débit (notifications/min)",
                         "retry_attempts": "Tentatives (par livraison)",
@@ -203,13 +206,13 @@
                     }
                 },
                 "recipient_tts_settings": {
-                    "title": "Paramètres TTS",
-                    "description": "Configurer les niveaux de volume et le format du message pour la livraison par synthèse vocale. Les niveaux de volume sont appliqués en fonction de l'heure de la journée.",
+                    "title": "Destinataire — Paramètres TTS",
+                    "description": "Configurer les options de synthèse vocale et les paramètres de lecture. Contrôle la façon dont les notifications vocales sont traitées et diffusées pour ce destinataire.",
                     "data": {
-                        "volume_morning": "Volume matin (6:00–9:00)",
-                        "volume_daytime": "Volume journée (9:00–18:00)",
-                        "volume_evening": "Volume soirée (18:00–22:00)",
-                        "volume_night": "Volume nuit (22:00–6:00)",
+                        "volume_morning": "Volume matin (6:00-9:00)",
+                        "volume_daytime": "Volume journée (9:00-18:00)",
+                        "volume_evening": "Volume soirée (18:00-22:00)",
+                        "volume_night": "Volume nuit (22:00-6:00)",
                         "volume_override_level": "Niveau de volume de remplacement",
                         "volume_override_criticalities": "Remplacement pour les criticités",
                         "message_format": "Format du message",
@@ -217,11 +220,11 @@
                         "volume_management_enabled": "Activer la gestion du volume"
                     },
                     "data_description": {
-                        "volume_morning": "Niveau de volume (0–100) pour les notifications livrées entre 6h00 et 9h00.",
-                        "volume_daytime": "Niveau de volume (0–100) pour les notifications livrées entre 9h00 et 18h00.",
-                        "volume_evening": "Niveau de volume (0–100) pour les notifications livrées entre 18h00 et 22h00.",
-                        "volume_night": "Niveau de volume (0–100) pour les notifications livrées entre 22h00 et 6h00.",
-                        "volume_override_level": "Niveau de volume (0–100) à utiliser lorsqu'une notification correspond aux criticités de remplacement ci-dessous.",
+                        "volume_morning": "Niveau de volume (0-100) pour les notifications livrées entre 6h00 et 9h00.",
+                        "volume_daytime": "Niveau de volume (0-100) pour les notifications livrées entre 9h00 et 18h00.",
+                        "volume_evening": "Niveau de volume (0-100) pour les notifications livrées entre 18h00 et 22h00.",
+                        "volume_night": "Niveau de volume (0-100) pour les notifications livrées entre 22h00 et 6h00.",
+                        "volume_override_level": "Niveau de volume (0-100) à utiliser lorsqu'une notification correspond aux criticités de remplacement ci-dessous.",
                         "volume_override_criticalities": "Sélectionnez les niveaux de criticité qui doivent utiliser le volume de remplacement au lieu des volumes horaires (ex. : toujours jouer les notifications CRITIQUES au volume maximum).",
                         "message_format": "Choisissez comment le contenu de la notification est formaté pour TTS : 'Titre et message' prononce les deux, 'Message uniquement' prononce seulement le message, 'Titre uniquement' prononce seulement le titre.",
                         "ssml_enabled": "Lorsqu'activé, le message est encapsulé dans un document SSML '<speak>' et le contenu utilisateur est échappé en XML avant livraison. Activez uniquement si votre moteur TTS supporte SSML (ex. : Google Cloud TTS, Amazon Polly, Azure TTS, edge-tts, Piper en mode SSML). Ne pas activer pour les moteurs texte brut uniquement.",
@@ -229,8 +232,8 @@
                     }
                 },
                 "recipient_channel_mapping": {
-                    "title": "Destinataire — Mappage des canaux",
-                    "description": "Associer les niveaux de criticité des notifications aux canaux de livraison.",
+                    "title": "Destinataire — Attribution des canaux",
+                    "description": "Attribuer les canaux de notification selon le niveau de criticité. Contrôle la distribution des notifications en fonction de leur priorité.",
                     "data": {
                         "channels_low": "Canaux pour criticité faible",
                         "channels_medium": "Canaux pour criticité moyenne",
@@ -245,8 +248,8 @@
                     }
                 },
                 "recipient_dnd_settings": {
-                    "title": "Destinataire — Ne pas déranger (NDD)",
-                    "description": "Configurer les heures silencieuses et le comportement Ne pas déranger pour le destinataire.",
+                    "title": "Destinataire — Ne pas déranger (NPD)",
+                    "description": "Gérer les périodes de ne pas déranger et les exceptions. Définit quand les notifications sont supprimées ou transmises malgré les heures de silence.",
                     "data": {
                         "dnd_enabled": "Activer Ne pas déranger",
                         "dnd_start": "Heure de début NDD (format 24h)",
@@ -277,7 +280,8 @@
                 "invalid_mapping": "Mappage des canaux invalide. Veuillez vérifier votre saisie.",
                 "invalid_dnd_settings": "Paramètres NDD invalides. Veuillez vérifier votre saisie.",
                 "name_already_exists": "Un destinataire portant ce nom existe déjà. Veuillez choisir un autre nom.",
-                "name": "Nom invalide ou dupliqué.",
+                "user": "Utilisateur Home Assistant invalide.",
+                "name": "Nom invalide ou existant.",
                 "email": "Adresse e-mail invalide.",
                 "phone": "Numéro de téléphone invalide.",
                 "email_or_phone_required": "Une adresse e-mail ou un numéro de téléphone est requis.",

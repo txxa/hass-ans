@@ -133,7 +133,7 @@ def test_system_options_schema_rejects_invalid_values(field, bad_value):
 def test_recipient_definition_schema_non_tts_has_email_and_phone():
     """Non-TTS schema includes email and phone optional fields."""
     schema = get_recipient_definition_schema(
-        defaults={}, recipient_type=RecipientType.VIRTUAL
+        defaults={}, recipient_type=RecipientType.GENERIC
     )
     key_names = _schema_key_strings(schema)
     assert RCPT_CONFIG_EMAIL_KEY in key_names
@@ -152,7 +152,7 @@ def test_recipient_definition_schema_tts_omits_email_and_phone():
 
 def test_recipient_definition_schema_name_always_present():
     """The name field is required regardless of recipient type."""
-    for rtype in (RecipientType.VIRTUAL, RecipientType.TTS):
+    for rtype in (RecipientType.GENERIC, RecipientType.TTS):
         schema = get_recipient_definition_schema(defaults={}, recipient_type=rtype)
         assert RCPT_CONFIG_NAME_KEY in _schema_key_strings(schema)
 

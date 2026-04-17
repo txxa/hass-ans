@@ -20,10 +20,10 @@ from ..const import (
     RCPT_CONFIG_PHONE_KEY,
     RCPT_CONFIG_RECIPIENT_CHOICE_KEY,
     RCPT_CONFIG_TYPE_KEY,
-    RECIPIENT_CHOICE_HA_USER_PREFIX,
+    RECIPIENT_CHOICE_GENERIC,
+    RECIPIENT_CHOICE_HA_USER,
     RECIPIENT_CHOICE_SYSTEM_HA,
     RECIPIENT_CHOICE_TTS,
-    RECIPIENT_CHOICE_VIRTUAL,
     SUBENTRY_FLOW_ERROR_INVALID_CHANNEL_MAPPING_KEY,
     SUBENTRY_FLOW_ERROR_INVALID_RECIPIENT_DEFINITION_KEY,
     SUBENTRY_FLOW_ERROR_INVALID_RECIPIENT_SELECTION_KEY,
@@ -90,7 +90,7 @@ def _make_flow(tts_service: str | None = None) -> tuple[RecipientConfigFlow, Mag
 def _prime_with_meta(
     flow: RecipientConfigFlow,
     main_entry: MagicMock,
-    recipient_type: RecipientType = RecipientType.VIRTUAL,
+    recipient_type: RecipientType = RecipientType.GENERIC,
 ) -> None:
     """Simulate having completed the selection step."""
     flow._main_entry = main_entry
@@ -107,7 +107,7 @@ def _prime_with_meta(
 def _prime_for_channel_mapping(
     flow: RecipientConfigFlow,
     main_entry: MagicMock,
-    recipient_type: RecipientType = RecipientType.VIRTUAL,
+    recipient_type: RecipientType = RecipientType.GENERIC,
 ) -> None:
     """Simulate having completed basic settings."""
     _prime_with_meta(flow, main_entry, recipient_type)
@@ -215,12 +215,12 @@ class TestAsyncStepRecipientSelection:
         _prime_with_meta(flow, main_entry)
         with patch(_PATCH_GET_MAIN_ENTRY, return_value=main_entry):
             result = await flow.async_step_recipient_selection(
-                {RCPT_CONFIG_RECIPIENT_CHOICE_KEY: RECIPIENT_CHOICE_VIRTUAL}
+                {RCPT_CONFIG_RECIPIENT_CHOICE_KEY: RECIPIENT_CHOICE_GENERIC}
             )
 
         assert result["type"] == FlowResultType.FORM
         assert result["step_id"] == SUBENTRY_FLOW_STEP_RECIPIENT_DEFINITION_KEY
-        assert flow._recipient_meta[RCPT_CONFIG_TYPE_KEY] == RecipientType.VIRTUAL.value
+        assert flow._recipient_meta[RCPT_CONFIG_TYPE_KEY] == RecipientType.GENERIC.value
 
     async def test_tts_choice_routes_to_definition(self):
         """Choosing TTS (when tts_service is configured) sets type and shows definition form."""
@@ -274,8 +274,8 @@ class TestAsyncStepRecipientSelection:
             == "system_recipient_already_exists"
         )
 
-    async def test_ha_user_choice_prefills_meta_and_shows_definition(self):
-        """Choosing an HA user pre-fills HA_USER type + user ID, shows definition form."""
+    async def test_ha_user_choice_sets_ha_user_type_and_shows_definition(self):
+        """Choosing HA_USER sets type in meta and shows the definition form with user dropdown."""
         flow, main_entry = _make_flow()
         ha_user = MagicMock()
         ha_user.id = "user123"
@@ -286,17 +286,12 @@ class TestAsyncStepRecipientSelection:
 
         with patch(_PATCH_GET_MAIN_ENTRY, return_value=main_entry):
             result = await flow.async_step_recipient_selection(
-                {
-                    RCPT_CONFIG_RECIPIENT_CHOICE_KEY: (
-                        f"{RECIPIENT_CHOICE_HA_USER_PREFIX}user123"
-                    )
-                }
+                {RCPT_CONFIG_RECIPIENT_CHOICE_KEY: RECIPIENT_CHOICE_HA_USER}
             )
 
         assert result["type"] == FlowResultType.FORM
         assert result["step_id"] == SUBENTRY_FLOW_STEP_RECIPIENT_DEFINITION_KEY
         assert flow._recipient_meta[RCPT_CONFIG_TYPE_KEY] == RecipientType.HA_USER.value
-        assert flow._recipient_meta[RCPT_CONFIG_ID_KEY] == "user123"
 
     async def test_invalid_choice_shows_error_on_selection_form(self):
         """An unrecognised choice shows invalid_selection on the form field."""
@@ -729,7 +724,7 @@ class TestAsyncStepReconfigure:
         sub.data = {
             RCPT_CONFIG_ID_KEY: "rcpt-uuid",
             RCPT_CONFIG_NAME_KEY: "Alice",
-            RCPT_CONFIG_TYPE_KEY: RecipientType.VIRTUAL.value,
+            RCPT_CONFIG_TYPE_KEY: RecipientType.GENERIC.value,
             RCPT_CONFIG_EMAIL_KEY: None,
             RCPT_CONFIG_PHONE_KEY: None,
         }
@@ -748,7 +743,7 @@ class TestAsyncStepReconfigure:
         sub.data = {
             RCPT_CONFIG_ID_KEY: "rcpt-uuid",
             RCPT_CONFIG_NAME_KEY: "Alice",
-            RCPT_CONFIG_TYPE_KEY: RecipientType.VIRTUAL.value,
+            RCPT_CONFIG_TYPE_KEY: RecipientType.GENERIC.value,
             RCPT_CONFIG_EMAIL_KEY: None,
             RCPT_CONFIG_PHONE_KEY: None,
         }
@@ -768,7 +763,7 @@ class TestAsyncStepReconfigure:
         sub.data = {
             RCPT_CONFIG_ID_KEY: "rcpt-uuid",
             RCPT_CONFIG_NAME_KEY: "Alice",
-            RCPT_CONFIG_TYPE_KEY: RecipientType.VIRTUAL.value,
+            RCPT_CONFIG_TYPE_KEY: RecipientType.GENERIC.value,
             RCPT_CONFIG_EMAIL_KEY: "alice@example.com",
             RCPT_CONFIG_PHONE_KEY: None,
         }
@@ -793,7 +788,7 @@ class TestCreateRecipientEntry:
         flow._main_entry = main_entry
         flow._recipient_meta = {
             RCPT_CONFIG_ID_KEY: "rcpt-uuid",
-            RCPT_CONFIG_TYPE_KEY: RecipientType.VIRTUAL.value,
+            RCPT_CONFIG_TYPE_KEY: RecipientType.GENERIC.value,
             RCPT_CONFIG_NAME_KEY: "Alice",
             RCPT_CONFIG_EMAIL_KEY: None,
             RCPT_CONFIG_PHONE_KEY: None,
@@ -811,7 +806,7 @@ class TestCreateRecipientEntry:
         flow._main_entry = main_entry
         flow._recipient_meta = {
             RCPT_CONFIG_ID_KEY: "rcpt-uuid",
-            RCPT_CONFIG_TYPE_KEY: RecipientType.VIRTUAL.value,
+            RCPT_CONFIG_TYPE_KEY: RecipientType.GENERIC.value,
             RCPT_CONFIG_NAME_KEY: "Alice",
             RCPT_CONFIG_EMAIL_KEY: None,
             RCPT_CONFIG_PHONE_KEY: None,
@@ -829,7 +824,7 @@ class TestCreateRecipientEntry:
         flow._main_entry = main_entry
         flow._recipient_meta = {
             RCPT_CONFIG_ID_KEY: "rcpt-uuid",
-            RCPT_CONFIG_TYPE_KEY: RecipientType.VIRTUAL.value,
+            RCPT_CONFIG_TYPE_KEY: RecipientType.GENERIC.value,
             RCPT_CONFIG_NAME_KEY: None,  # missing!
             RCPT_CONFIG_EMAIL_KEY: None,
             RCPT_CONFIG_PHONE_KEY: None,
@@ -847,7 +842,7 @@ class TestCreateRecipientEntry:
         flow._main_entry = main_entry
         flow._recipient_meta = {
             RCPT_CONFIG_ID_KEY: "rcpt-uuid",
-            RCPT_CONFIG_TYPE_KEY: RecipientType.VIRTUAL.value,
+            RCPT_CONFIG_TYPE_KEY: RecipientType.GENERIC.value,
             RCPT_CONFIG_NAME_KEY: "Alice",
             RCPT_CONFIG_EMAIL_KEY: None,
             RCPT_CONFIG_PHONE_KEY: None,
@@ -872,7 +867,7 @@ class TestCreateRecipientEntry:
         flow._reconfigure_entry = MagicMock()
         flow._recipient_meta = {
             RCPT_CONFIG_ID_KEY: "rcpt-uuid",
-            RCPT_CONFIG_TYPE_KEY: RecipientType.VIRTUAL.value,
+            RCPT_CONFIG_TYPE_KEY: RecipientType.GENERIC.value,
             RCPT_CONFIG_NAME_KEY: "Alice",
             RCPT_CONFIG_EMAIL_KEY: None,
             RCPT_CONFIG_PHONE_KEY: None,
@@ -913,7 +908,7 @@ class TestSystemRecipientExists:
         """Non-SYSTEM subentries do not cause the method to return True."""
         flow, main_entry = _make_flow()
         sub = MagicMock()
-        sub.data = {RCPT_CONFIG_TYPE_KEY: RecipientType.VIRTUAL.value}
+        sub.data = {RCPT_CONFIG_TYPE_KEY: RecipientType.GENERIC.value}
         main_entry.subentries = {"s1": sub}
         flow._main_entry = main_entry
 
@@ -1067,7 +1062,7 @@ class TestGetAvailableChannels:
         """Channels from the repo are filtered to those in system_config.enabled_channels."""
         flow, _ = _make_flow()
         flow.system_config = SystemConfig.from_dict(_sys_config_dict())
-        flow._recipient_meta = {RCPT_CONFIG_TYPE_KEY: RecipientType.VIRTUAL.value}
+        flow._recipient_meta = {RCPT_CONFIG_TYPE_KEY: RecipientType.GENERIC.value}
 
         ch_enabled = ChannelInfo(
             id=PERSISTENT_NOTIFICATION_CHANNEL,

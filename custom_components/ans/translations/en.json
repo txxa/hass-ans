@@ -15,9 +15,10 @@
         },
         "recipient_choice": {
             "options": {
-                "system_home_assistant": "System: Home Assistant",
-                "tts_new": "TTS: Text-to-Speech recipient",
-                "virtual_new": "Virtual: Custom recipient"
+                "ha_system": "Home Assistant (System)",
+                "ha_user": "Home Assistant User",
+                "tts": "Text-to-Speech recipient",
+                "generic": "Generic recipient"
             }
         }
     },
@@ -163,32 +164,34 @@
             },
             "step": {
                 "recipient_selection": {
-                    "title": "Recipient — Selection",
-                    "description": "Select the type of recipient to create. System recipients handle system-wide channels, HA User recipients are linked to Home Assistant users, and Virtual recipients are custom entries.",
+                    "title": "Recipient — Type",
+                    "description": "Define recipient type. The selection determines which kinds of notifications and channels are available for this recipient.",
                     "data": {
-                        "recipient_choice": "Select recipient to create"
+                        "recipient_choice": "Recipient type"
                     },
                     "data_description": {
-                        "recipient_choice": "Choose from available system channels, Home Assistant users not yet configured, or create a custom virtual recipient."
+                        "recipient_choice": "The system recipient (persistent notifications) can only be added once.\nHome Assistant user recipients are linked to an existing HA account.\nTTS recipients deliver audio via a media player.\nGeneric recipients use custom contact details (email, phone)."
                     }
                 },
                 "recipient_definition": {
-                    "title": "Recipient — Definition",
-                    "description": "Define name, email address, phone number, and mobile device ID for the recipient.",
+                    "title": "Recipient — Details",
+                    "description": "Set up basic information and contact details for the recipient. These details form the basis for further configuration and delivery.",
                     "data": {
+                        "user": "Home Assistant user",
                         "name": "Display name",
-                        "email": "Email address (optional)",
-                        "phone": "Phone number (optional)"
+                        "email": "Email address",
+                        "phone": "Phone number"
                     },
                     "data_description": {
-                        "name": "Friendly name used to identify this recipient throughout the system. Must be unique.",
-                        "email": "Note: Only needed if an email based notification channel is configured.",
-                        "phone": "Note: Only needed if a phone based notification channel is configured (e.g. Signal Messenger). Use E.164 format (e.g. +1234567890)."
+                        "user": "Select the Home Assistant user account to link to this recipient.",
+                        "name": "Must be unique across all recipients.",
+                        "email": "Only required for email-based notification channels.",
+                        "phone": "Only required for phone-based channels (e.g. Signal). Use E.164 format (e.g. +1234567890)."
                     }
                 },
                 "recipient_basic_settings": {
                     "title": "Recipient — Basic Settings",
-                    "description": "Configure retry, rate limits and the notification types the recipient should receive.",
+                    "description": "Define behavior and filtering rules for notification delivery. Sets up core control mechanisms for this recipient.",
                     "data": {
                         "rate_limit": "Rate limit (notifications/min)",
                         "retry_attempts": "Retry attempts (per delivery)",
@@ -203,8 +206,8 @@
                     }
                 },
                 "recipient_tts_settings": {
-                    "title": "TTS Settings",
-                    "description": "Configure volume levels and message format for text-to-speech delivery. Volume levels are applied based on the current time of day.",
+                    "title": "Recipient — TTS Settings",
+                    "description": "Configure text-to-speech options and playback parameters. Controls how spoken notifications are processed and output for this recipient.",
                     "data": {
                         "volume_morning": "Morning Volume (6:00-9:00)",
                         "volume_daytime": "Daytime Volume (9:00-18:00)",
@@ -230,7 +233,7 @@
                 },
                 "recipient_channel_mapping": {
                     "title": "Recipient — Channel Mapping",
-                    "description": "Map notification criticality levels to delivery channels.",
+                    "description": "Assign notification channels by criticality level. Controls how notifications are routed based on their priority.",
                     "data": {
                         "channels_low": "Channels for low criticality",
                         "channels_medium": "Channels for medium criticality",
@@ -245,8 +248,8 @@
                     }
                 },
                 "recipient_dnd_settings": {
-                    "title": "Recipient — Do Not Disturb (DND) Settings",
-                    "description": "Configure quiet hours and DND behavior for the recipient.",
+                    "title": "Recipient — Do Not Disturb (DND)",
+                    "description": "Manage do-not-disturb times and exceptions. Defines when notifications are suppressed or delivered despite quiet hours.",
                     "data": {
                         "dnd_enabled": "Enable Do Not Disturb",
                         "dnd_start": "DND start time (24-hour format)",
@@ -277,6 +280,7 @@
                 "invalid_mapping": "Invalid channel mapping. Please check your input.",
                 "invalid_dnd_settings": "Invalid DND settings. Please check your input.",
                 "name_already_exists": "A recipient with this name already exists. Please choose a different name.",
+                "user": "Invalid user.",
                 "name": "Invalid or duplicate name.",
                 "email": "Invalid email address.",
                 "phone": "Invalid phone number.",

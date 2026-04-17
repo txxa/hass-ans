@@ -201,7 +201,7 @@ class TestHappyPath:
         recipients = {
             "r1": _make_recipient(RecipientType.HA_USER),
             "r2": _make_recipient(RecipientType.HA_USER),
-            "r3": _make_recipient(RecipientType.VIRTUAL),
+            "r3": _make_recipient(RecipientType.GENERIC),
             "r4": _make_recipient(RecipientType.TTS),
         }
         repo = _make_config_repo(
@@ -214,7 +214,7 @@ class TestHappyPath:
         rcpts = result["recipients"]
         assert rcpts["total"] == 4
         assert rcpts["types"][RecipientType.HA_USER.value] == 2
-        assert rcpts["types"][RecipientType.VIRTUAL.value] == 1
+        assert rcpts["types"][RecipientType.GENERIC.value] == 1
         assert rcpts["types"][RecipientType.TTS.value] == 1
 
     async def test_no_recipients_returns_empty_types(self):

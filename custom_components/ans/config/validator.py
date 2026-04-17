@@ -31,6 +31,7 @@ from ..const import (
     RCPT_CONFIG_NOTIFICATION_TYPES_KEY,
     RCPT_CONFIG_PHONE_KEY,
     RCPT_CONFIG_RATE_LIMIT_KEY,
+    RCPT_CONFIG_RECIPIENT_CHOICE_KEY,
     RCPT_CONFIG_RETRY_ATTEMPTS_KEY,
     RCPT_CONFIG_TTS_MESSAGE_FORMAT_KEY,
     RCPT_CONFIG_TTS_SSML_ENABLED_KEY,
@@ -42,6 +43,7 @@ from ..const import (
     RCPT_CONFIG_TTS_VOLUME_OVERRIDE_CRITICALITIES_KEY,
     RCPT_CONFIG_TTS_VOLUME_OVERRIDE_LEVEL_KEY,
     RCPT_CONFIG_TYPE_KEY,
+    RCPT_CONFIG_USER_KEY,
     RCPT_MAX_RATE_LIMIT,
     RCPT_MAX_RETRY_ATTEMPTS,
     SYS_CONFIG_ENABLED_CHANNELS_KEY,
@@ -576,6 +578,7 @@ class ConfigValidator:
         """Validate the identity against a schema."""
         schema = vol.Schema(
             {
+                vol.Optional(RCPT_CONFIG_USER_KEY): vol.Any(str, None),
                 vol.Required(RCPT_CONFIG_NAME_KEY): vol.All(str),
                 vol.Optional(RCPT_CONFIG_EMAIL_KEY): vol.Any(
                     None, vol.Match(ConfigValidator.EMAIL_PATTERN)

@@ -1,7 +1,6 @@
 """Voluptuous schema definitions for ANS config flows."""
 
 import logging
-from operator import is_
 
 import voluptuous as vol
 from homeassistant.core import HomeAssistant
@@ -385,7 +384,8 @@ def get_recipient_definition_schema(
 
     Args:
         defaults: Default values for form fields
-        options: Available options for select fields (currently unused)
+        options: Available select options. For HA_USER recipients this populates
+            the `user` dropdown; otherwise it is ignored.
         recipient_type: Recipient type; TTS recipients omit email and phone fields.
 
     Note:

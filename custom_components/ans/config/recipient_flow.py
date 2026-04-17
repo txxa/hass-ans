@@ -327,15 +327,8 @@ class RecipientConfigFlow(ConfigSubentryFlow):
                 ]
             )
 
-        # Get available HA users for selection (empty dict if not HA_USER type)
-        # ha_users = {}
-        # if recipient_type == RecipientType.HA_USER:
-        #     # HA users need to be fetched from Home Assistant
-        #     # For now, use empty dict - this would need to be implemented
-        #     ha_users = {}
-
         # Prepare defaults from pre-filled data or user input
-        defaults = user_input or self._recipient_meta.copy()
+        defaults = user_input.copy() if user_input is not None else self._recipient_meta.copy()
         if recipient_type == RecipientType.HA_USER and (
             self._reconfigure_entry or RCPT_CONFIG_USER_KEY not in defaults
         ):

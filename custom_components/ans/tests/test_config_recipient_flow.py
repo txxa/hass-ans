@@ -6,6 +6,7 @@ validation-error paths, and unexpected-exception handlers.
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from homeassistant.data_entry_flow import FlowResultType
@@ -159,8 +160,8 @@ def _complete_settings() -> dict:
     }
 
 
-def _get_schema_field(result: dict, field_name: str) -> tuple:
-    """Return voluptuous marker and selector for a field in flow form schema."""
+def _get_schema_field(result: dict, field_name: str) -> tuple[Any, Any]:
+    """Return the schema marker and selector object for `field_name`."""
     schema_dict = result["data_schema"].schema
     for marker, selector_obj in schema_dict.items():
         if getattr(marker, "schema", None) == field_name:
@@ -168,8 +169,8 @@ def _get_schema_field(result: dict, field_name: str) -> tuple:
     raise AssertionError(f"Field '{field_name}' not found in schema")
 
 
-def _selector_option_values(selector_obj: object) -> list[str]:
-    """Extract selector option values from SelectSelector config."""
+def _selector_option_values(selector_obj: Any) -> list[str]:
+    """Extract option values from a SelectSelector-like object."""
     options = getattr(getattr(selector_obj, "config", None), "options", [])
     values: list[str] = []
     for option in options:

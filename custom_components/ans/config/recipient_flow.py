@@ -336,7 +336,9 @@ class RecipientConfigFlow(ConfigSubentryFlow):
 
         # Prepare defaults from pre-filled data or user input
         defaults = user_input or self._recipient_meta.copy()
-        if recipient_type == RecipientType.HA_USER and RCPT_CONFIG_USER_KEY not in defaults:
+        if recipient_type == RecipientType.HA_USER and (
+            self._reconfigure_entry or RCPT_CONFIG_USER_KEY not in defaults
+        ):
             defaults[RCPT_CONFIG_USER_KEY] = self._recipient_meta.get(
                 RCPT_CONFIG_ID_KEY
             )

@@ -161,7 +161,7 @@ def _complete_settings() -> dict:
 
 
 def _get_schema_field(result: dict, field_name: str) -> tuple[Any, Any]:
-    """Return the schema marker and selector object for `field_name`."""
+    """Return a tuple of (schema_marker, selector_object) for `field_name`."""
     schema_dict = result["data_schema"].schema
     for marker, selector_obj in schema_dict.items():
         if getattr(marker, "schema", None) == field_name:
@@ -170,7 +170,7 @@ def _get_schema_field(result: dict, field_name: str) -> tuple[Any, Any]:
 
 
 def _selector_option_values(selector_obj: Any) -> list[str]:
-    """Extract option values from a SelectSelector-like object."""
+    """Extract option values from selector options as dict['value'] or object.value."""
     options = getattr(getattr(selector_obj, "config", None), "options", [])
     values: list[str] = []
     for option in options:

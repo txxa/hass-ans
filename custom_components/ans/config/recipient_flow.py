@@ -235,6 +235,25 @@ class RecipientConfigFlow(ConfigSubentryFlow):
                             message="Invalid HA user selection",
                             path=[RCPT_CONFIG_USER_KEY],
                         )
+
+                    # Validate user_id against the allowed set to prevent
+                    # ghost recipients from tampered/invalid submissions.
+                    self._not_configured_ha_users = (
+                        await self._get_not_configured_ha_users()
+                    )
+                    allowed_ids = {u["value"] for u in self._not_configured_ha_users}
+                    # For reconfigure, the recipient's own existing user ID
+                    # must also remain accepted.
+                    existing_id = self._recipient_meta.get(RCPT_CONFIG_ID_KEY)
+                    if self._reconfigure_entry and existing_id:
+                        allowed_ids.add(existing_id)
+
+                    if user_id not in allowed_ids:
+                        raise vol.Invalid(
+                            message="Selected user does not exist or is already configured",
+                            path=[RCPT_CONFIG_USER_KEY],
+                        )
+
                     user_data = await self._get_ha_user_data(user_id)
                     user_input[RCPT_CONFIG_NAME_KEY] = user_data.get("name", user_id)
                     # user_input.pop(
@@ -332,7 +351,10 @@ class RecipientConfigFlow(ConfigSubentryFlow):
         if user_input:
             defaults.update(user_input)
 
-        if recipient_type == RecipientType.HA_USER and RCPT_CONFIG_USER_KEY not in defaults:
+        if (
+            recipient_type == RecipientType.HA_USER
+            and RCPT_CONFIG_USER_KEY not in defaults
+        ):
             defaults[RCPT_CONFIG_USER_KEY] = self._recipient_meta.get(
                 RCPT_CONFIG_ID_KEY
             )
@@ -887,10 +909,9 @@ class RecipientConfigFlow(ConfigSubentryFlow):
         user = next((u for u in users if u.id == user_id), None)
 
         if not user:
-            return {
-                "name": f"User {user_id}",
-                "email": None,
-            }
+            raise ValueError(
+                f"HA user with ID '{user_id}' does not exist in the auth system"
+            )
 
         # Extract email from credentials if available
         email = None

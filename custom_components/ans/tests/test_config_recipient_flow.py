@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from homeassistant.data_entry_flow import FlowResultType
 
 from ..config.recipient_flow import RecipientConfigFlow
@@ -171,7 +172,15 @@ def _get_schema_field(result: dict, field_name: str) -> tuple[Any, Any]:
 
 def _selector_option_values(selector_obj: Any) -> list[str]:
     """Extract option values from selector options as dict['value'] or object.value."""
-    options = getattr(getattr(selector_obj, "config", None), "options", [])
+    config = getattr(selector_obj, "config", None)
+    if config is None:
+        return []
+    # SelectSelectorConfig is a TypedDict (plain dict at runtime), so use
+    # dict access rather than attribute access.
+    if isinstance(config, dict):
+        options = config.get("options", [])
+    else:
+        options = getattr(config, "options", [])
     values: list[str] = []
     for option in options:
         if isinstance(option, dict):
@@ -1051,14 +1060,12 @@ class TestGetHaUserData:
         assert result["email"] is None
 
     async def test_returns_fallback_for_unknown_user(self):
-        """When the user_id is not found a generic fallback dict is returned."""
+        """When the user_id is not found a ValueError is raised."""
         flow, _ = _make_flow()
         flow.hass.auth.async_get_users = AsyncMock(return_value=[])
 
-        result = await flow._get_ha_user_data("ghost-id")
-
-        assert "name" in result
-        assert result["email"] is None
+        with pytest.raises(ValueError, match="ghost-id"):
+            await flow._get_ha_user_data("ghost-id")
 
     async def test_extracts_email_from_oauth_credentials(self):
         """An email-like username in credentials is used as the email address."""

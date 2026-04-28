@@ -76,6 +76,9 @@ class HousekeepingScheduler:
 
     async def _cleanup(self) -> None:
         """Run cleanup operation."""
+        if not self._retention_age:
+            return
+
         cutoff = datetime.now(UTC) - self._retention_age
 
         # Clean up old records from all three stores

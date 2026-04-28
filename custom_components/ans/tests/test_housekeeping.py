@@ -73,6 +73,17 @@ async def test_stop_cancels_running_task():
 # ---------------------------------------------------------------------------
 
 
+async def test_cleanup_skipped_when_retention_zero():
+    scheduler, notification_registry, attempt_log, retry_queue = _make_scheduler(
+        retention_age=timedelta(0)
+    )
+    await scheduler._cleanup()
+
+    notification_registry.cleanup_old.assert_not_called()
+    attempt_log.cleanup_old.assert_not_called()
+    retry_queue.cleanup_old.assert_not_called()
+
+
 async def test_cleanup_calls_all_stores():
     scheduler, notification_registry, attempt_log, retry_queue = _make_scheduler()
     await scheduler._cleanup()

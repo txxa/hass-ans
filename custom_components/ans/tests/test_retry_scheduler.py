@@ -45,10 +45,18 @@ class TestRetryPolicyBasic:
         assert decision.next_run_at is not None
         assert decision.reason == RetryReason.TRANSIENT_FAILURE
 
-    def test_no_retry_at_max_attempts(self):
+    def test_retry_allowed_at_max_attempts(self):
         policy = _policy(max_attempts=3)
         decision = policy.evaluate(
             attempt_number=3, reason=RetryReason.TRANSIENT_FAILURE, now=NOW
+        )
+        assert decision.should_retry is True
+        assert decision.next_run_at is not None
+
+    def test_no_retry_after_max_attempts(self):
+        policy = _policy(max_attempts=3)
+        decision = policy.evaluate(
+            attempt_number=4, reason=RetryReason.TRANSIENT_FAILURE, now=NOW
         )
         assert decision.should_retry is False
         assert decision.next_run_at is None
@@ -174,7 +182,7 @@ class TestRateLimitedRetry:
 
     def test_rate_limited_also_reaches_max_attempts(self):
         policy = _policy(max_attempts=2)
-        d = policy.evaluate(attempt_number=2, reason=RetryReason.RATE_LIMITED, now=NOW)
+        d = policy.evaluate(attempt_number=3, reason=RetryReason.RATE_LIMITED, now=NOW)
         assert d.should_retry is False
 
 

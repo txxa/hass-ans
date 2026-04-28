@@ -102,7 +102,7 @@ class RetryPolicy:
             Decision with retry timing and reason.
 
         """
-        if attempt_number >= self._max_attempts:
+        if attempt_number > self._max_attempts:
             return RetryDecision(False, None, None)
 
         delay = self._base_delay * (self._backoff_factor ** (attempt_number - 1))

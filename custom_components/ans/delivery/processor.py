@@ -473,7 +473,7 @@ class NotificationDeliveryProcessor:
         attempt_count = await self._attempt_log.count_attempts(task.job_id)
 
         # Check against policy max attempts
-        if attempt_count >= task.policy.retry_attempts:
+        if attempt_count > task.policy.retry_attempts:
             _LOGGER.warning(
                 "Max retries exceeded: notification_id=%s job_id=%s "
                 "recipient_id=%s channel=%s attempts=%s",

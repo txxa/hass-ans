@@ -227,7 +227,7 @@
                         "volume_override_level": "Volume level (0-100) to use when a notification matches the override criticalities below.",
                         "volume_override_criticalities": "Select criticality levels that should use the override volume instead of time-based volumes (e.g., always play CRITICAL notifications at maximum volume).",
                         "message_format": "Choose how notification content is formatted for TTS: 'Title and Message' speaks both, 'Message Only' speaks just the message, 'Title Only' speaks just the title.",
-                        "ssml_enabled": "When enabled, the message is wrapped in an SSML '<speak>' document and user content is XML-escaped before delivery. Only enable this if your TTS engine supports SSML (e.g. Google Cloud TTS, Amazon Polly, Azure TTS, edge-tts, Piper in SSML mode). Do not enable for plain-text-only engines.",
+                        "ssml_enabled": "When enabled, the message is wrapped in an SSML &lt;speak&gt; document and user content is XML-escaped before delivery. Only enable this if your TTS engine supports SSML (e.g. Google Cloud TTS, Amazon Polly, Azure TTS, edge-tts, Piper in SSML mode). Do not enable for plain-text-only engines.",
                         "volume_management_enabled": "When enabled, ANS automatically adjusts the media player volume to the configured level before speaking and restores it afterwards. Disable this if you manage the volume externally or want TTS to play at whatever level the device is currently set to."
                     }
                 },

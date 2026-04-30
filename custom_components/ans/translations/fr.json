@@ -227,7 +227,7 @@
                         "volume_override_level": "Niveau de volume (0-100) à utiliser lorsqu'une notification correspond aux criticités de remplacement ci-dessous.",
                         "volume_override_criticalities": "Sélectionnez les niveaux de criticité qui doivent utiliser le volume de remplacement au lieu des volumes horaires (ex. : toujours jouer les notifications CRITIQUES au volume maximum).",
                         "message_format": "Choisissez comment le contenu de la notification est formaté pour TTS : 'Titre et message' prononce les deux, 'Message uniquement' prononce seulement le message, 'Titre uniquement' prononce seulement le titre.",
-                        "ssml_enabled": "Lorsqu'activé, le message est encapsulé dans un document SSML '<speak>' et le contenu utilisateur est échappé en XML avant livraison. Activez uniquement si votre moteur TTS supporte SSML (ex. : Google Cloud TTS, Amazon Polly, Azure TTS, edge-tts, Piper en mode SSML). Ne pas activer pour les moteurs texte brut uniquement.",
+                        "ssml_enabled": "Lorsqu'activé, le message est encapsulé dans un document SSML &lt;speak&gt; et le contenu utilisateur est échappé en XML avant livraison. Activez uniquement si votre moteur TTS supporte SSML (ex. : Google Cloud TTS, Amazon Polly, Azure TTS, edge-tts, Piper en mode SSML). Ne pas activer pour les moteurs texte brut uniquement.",
                         "volume_management_enabled": "Lorsqu'activée, ANS ajuste automatiquement le volume du lecteur multimédia au niveau configuré avant de parler et le restaure ensuite. Désactivez si vous gérez le volume en externe ou souhaitez que TTS joue au niveau actuellement réglé sur l'appareil."
                     }
                 },

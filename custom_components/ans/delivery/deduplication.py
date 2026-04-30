@@ -7,6 +7,7 @@ cache size limits, TTL-based cleanup, and LRU eviction.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections import OrderedDict
 from datetime import UTC, datetime
@@ -108,10 +109,8 @@ class DeduplicationService:
         """Stop the periodic cleanup task."""
         if self._cleanup_task is not None:
             self._cleanup_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._cleanup_task
-            except asyncio.CancelledError:
-                pass
             self._cleanup_task = None
             _LOGGER.debug("Deduplication cleanup task stopped")
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
@@ -14,7 +14,7 @@ from .policy import RecipientNotificationPolicy
 from .recipient import RecipientContactInfo, TTSSettings
 
 
-class DeliveryStatus(str, Enum):
+class DeliveryStatus(StrEnum):
     """Status of a delivery attempt.
 
     Values

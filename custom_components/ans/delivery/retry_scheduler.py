@@ -6,10 +6,10 @@ attempts, and rate limit handling for notification delivery tasks.
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from enum import Enum
+from enum import StrEnum
 
 
-class RetryReason(str, Enum):
+class RetryReason(StrEnum):
     """Reason for scheduling a retry.
 
     Values

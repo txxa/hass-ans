@@ -220,10 +220,8 @@ class ConfigSnapshot:
                 if recipient_config.dnd_end
                 else None,
                 allowed_sources_regex=recipient_config.dnd_allowed_sources_regex,
-                allowed_criticalities=allowed_criticalities
-                if allowed_criticalities
-                else None,
-                allowed_types=allowed_types if allowed_types else None,
+                allowed_criticalities=allowed_criticalities or None,
+                allowed_types=allowed_types or None,
             )
 
         return RecipientNotificationPolicy(

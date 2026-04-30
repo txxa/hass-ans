@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 
-class ChannelScope(str, Enum):
+class ChannelScope(StrEnum):
     """Scope of a notification channel.
 
     Values

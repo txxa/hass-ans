@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 
-class NotificationType(str, Enum):
+class NotificationType(StrEnum):
     """Types of notifications."""
 
     INFO = "INFO"
@@ -19,7 +19,7 @@ class NotificationType(str, Enum):
     SECURITY = "SECURITY"
 
 
-class NotificationCriticality(str, Enum):
+class NotificationCriticality(StrEnum):
     """Criticality levels for notifications."""
 
     LOW = "LOW"

@@ -221,7 +221,7 @@
                     },
                     "data_description": {
                         "message_format": "Legt fest, wie der Benachrichtigungsinhalt für TTS formatiert wird: 'Titel und Nachricht' spricht beides, 'Nur Nachricht' spricht nur die Nachricht, 'Nur Titel' spricht nur den Titel.",
-                        "ssml_enabled": "Wenn aktiviert, wird die Nachricht in ein SSML-'<speak>'-Dokument eingebettet und Benutzerinhalte werden vor der Zustellung XML-maskiert. Nur aktivieren, wenn Ihre TTS-Engine SSML unterstützt (z. B. Google Cloud TTS, Amazon Polly, Azure TTS, edge-tts, Piper im SSML-Modus). Nicht für reine Klartextmaschinen aktivieren.",
+                        "ssml_enabled": "Wenn aktiviert, wird die Nachricht in ein SSML-&lt;speak&gt;-Dokument eingebettet und Benutzerinhalte werden vor der Zustellung XML-maskiert. Nur aktivieren, wenn Ihre TTS-Engine SSML unterstützt (z. B. Google Cloud TTS, Amazon Polly, Azure TTS, edge-tts, Piper im SSML-Modus). Nicht für reine Klartextmaschinen aktivieren.",
                         "volume_management_enabled": "Wenn aktiviert, passt ANS die Lautstärke des Media Players vor dem Sprechen automatisch auf den konfigurierten Wert an und stellt sie danach wieder her. Deaktivieren Sie diese Option, wenn Sie die Lautstärke extern verwalten oder TTS auf der aktuellen Gerätelautstärke abspielen möchten.",
                         "volume_morning": "Lautstärke (0-100) für Benachrichtigungen, die zwischen 6:00 und 9:00 Uhr zugestellt werden.",
                         "volume_daytime": "Lautstärke (0-100) für Benachrichtigungen, die zwischen 9:00 und 18:00 Uhr zugestellt werden.",

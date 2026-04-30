@@ -60,7 +60,7 @@ class MockDeliveryAdapter(DeliveryAdapter):
 
     @classmethod
     def get_metadata(cls) -> AdapterMetadata:
-        """Return adapter metadata."""
+        """Return adapter metadata for this stub adapter (used in integration test assertions)."""
         return AdapterMetadata(
             adapter_type=AdapterType.STATIC,
             channel_prefix=cls._CHANNEL_PREFIX,

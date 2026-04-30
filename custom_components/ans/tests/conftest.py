@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
+from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.ans.models import (
     ChannelInfo,
@@ -111,16 +112,19 @@ def make_task_snapshot(task: NotificationDeliveryTask) -> dict:
 
 @pytest.fixture
 def payload() -> NotificationPayload:
+    """Return a default NotificationPayload instance."""
     return make_payload()
 
 
 @pytest.fixture
 def policy() -> RecipientNotificationPolicy:
+    """Return a default RecipientNotificationPolicy instance."""
     return make_policy()
 
 
 @pytest.fixture
 def task() -> NotificationDeliveryTask:
+    """Return a default NotificationDeliveryTask instance."""
     return make_task()
 
 
@@ -128,7 +132,7 @@ def task() -> NotificationDeliveryTask:
 def mock_hass():
     """Return a minimal MagicMock that behaves like a HomeAssistant instance."""
     hass = MagicMock()
-    hass.config.path.return_value = "/tmp/ans_test_storage/file.json"
+    hass.config.path.return_value = "/tmp/ans_test_storage/file.json"  # noqa: S108
     hass.services.async_call = AsyncMock()
     hass.services.async_services = MagicMock(return_value={})
     hass.states.async_entity_ids = MagicMock(return_value=[])
@@ -164,14 +168,13 @@ def _patch_ha_exception_str(monkeypatch):
     running HA event loop this raises HomeAssistantError("wrong thread"). This fixture
     silently falls back to repr() instead.
     """
-    from homeassistant.exceptions import HomeAssistantError
 
     original_str = HomeAssistantError.__str__
 
     def _safe_str(self):
         try:
             return original_str(self)
-        except Exception:
+        except Exception:  # noqa: BLE001
             return repr(self)
 
     monkeypatch.setattr(HomeAssistantError, "__str__", _safe_str)

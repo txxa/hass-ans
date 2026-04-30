@@ -12,11 +12,12 @@ from ..models import RecipientType, SystemConfig
 
 
 def _make_hass() -> MagicMock:
-    hass = MagicMock()
-    return hass
+    """Return a minimal mocked HomeAssistant instance."""
+    return MagicMock()
 
 
 def _make_system_config_dict():
+    """Return a minimal valid system config dictionary."""
     return {
         "global_rate_limit": 100,
         "enabled_channels": ["notify.persistent_notification"],
@@ -36,6 +37,7 @@ def _make_system_config_dict():
 
 
 async def test_load_returns_false_when_no_main_entry():
+    """load() returns False when no main ANS config entry is found."""
     hass = _make_hass()
     repo = ConfigRepository(hass)
     with patch.object(repo, "_load_main_entry", return_value=False):
@@ -44,11 +46,13 @@ async def test_load_returns_false_when_no_main_entry():
 
 
 async def test_load_returns_true_with_valid_entry():
+    """load() returns True and populates system_config when a valid entry exists."""
     hass = _make_hass()
     repo = ConfigRepository(hass)
 
     # Inject a valid system config directly after _load_main_entry succeeds
     def _fake_load_main():
+        """Side-effect that injects a valid SystemConfig and returns True."""
         repo.system_config = SystemConfig.from_dict(_make_system_config_dict())
         return True
 
@@ -62,6 +66,7 @@ async def test_load_returns_true_with_valid_entry():
 
 
 async def test_load_options_override_data():
+    """Options values override the corresponding data values after load."""
     hass = _make_hass()
     repo = ConfigRepository(hass)
 
@@ -69,6 +74,7 @@ async def test_load_options_override_data():
     base["global_rate_limit"] = 999
 
     def _fake_load_main():
+        """Side-effect that injects a SystemConfig with the modified base dict."""
         repo.system_config = SystemConfig.from_dict(base)
         return True
 
@@ -82,6 +88,7 @@ async def test_load_options_override_data():
 
 
 def test_unload_clears_config():
+    """unload() clears system_config, recipients, and recipient_configs."""
     hass = _make_hass()
     repo = ConfigRepository(hass)
     repo.system_config = MagicMock()
@@ -101,6 +108,7 @@ def test_unload_clears_config():
 
 
 def test_snapshot_raises_when_no_system_config():
+    """snapshot() raises RuntimeError when system_config has not been loaded."""
     hass = _make_hass()
     repo = ConfigRepository(hass)
     repo.system_config = None
@@ -109,6 +117,7 @@ def test_snapshot_raises_when_no_system_config():
 
 
 def test_snapshot_returns_config_snapshot():
+    """snapshot() returns a ConfigSnapshot with the current system_config embedded."""
     hass = _make_hass()
     repo = ConfigRepository(hass)
     repo.system_config = SystemConfig.from_dict(_make_system_config_dict())
@@ -119,6 +128,7 @@ def test_snapshot_returns_config_snapshot():
 
 
 def test_snapshot_is_deep_copy():
+    """Each call to snapshot() returns a distinct object with a unique snapshot_id."""
     hass = _make_hass()
     repo = ConfigRepository(hass)
     repo.system_config = SystemConfig.from_dict(_make_system_config_dict())
@@ -135,6 +145,7 @@ def test_snapshot_is_deep_copy():
 
 
 def test_get_channels_for_ui_no_channel_manager():
+    """get_channels_for_ui returns [] when no channel_manager is set."""
     hass = _make_hass()
     repo = ConfigRepository(hass)
     repo.channel_manager = None
@@ -143,6 +154,7 @@ def test_get_channels_for_ui_no_channel_manager():
 
 
 def test_get_channels_for_ui_delegates_to_channel_manager():
+    """get_channels_for_ui delegates to channel_manager.get_all_infos() and returns its result."""
     hass = _make_hass()
     repo = ConfigRepository(hass)
     channel_manager = MagicMock()
@@ -309,6 +321,7 @@ async def test_load_returns_true_when_subentries_fail():
     repo = ConfigRepository(hass)
 
     def _fake_main():
+        """Side-effect that injects a valid SystemConfig and returns True."""
         repo.system_config = SystemConfig.from_dict(_make_system_config_dict())
         return True
 

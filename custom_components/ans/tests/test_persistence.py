@@ -10,11 +10,13 @@ from uuid import uuid4
 from ..persistence.file import DeliveryAttemptLog, NotificationRegistry, RetryQueue
 
 
-def _make_hass(storage_path: str = "/tmp/ans_test/.storage") -> MagicMock:
+def _make_hass(storage_path: str = "/tmp/ans_test/.storage") -> MagicMock:  # noqa: S108
+    """Return a mock hass with async_add_executor_job that calls functions synchronously and config.path() returning joined path segments."""
     hass = MagicMock()
     hass.config.path = MagicMock(side_effect=lambda *args: "/".join(args))
 
     async def _executor(fn, *args, **kwargs):
+        """Run a synchronous function inline, simulating an executor job."""
         return fn(*args, **kwargs)
 
     hass.async_add_executor_job = _executor
@@ -22,6 +24,7 @@ def _make_hass(storage_path: str = "/tmp/ans_test/.storage") -> MagicMock:
 
 
 def _now() -> datetime:
+    """Return the current UTC datetime."""
     return datetime.now(UTC)
 
 
@@ -31,7 +34,10 @@ def _now() -> datetime:
 
 
 class TestNotificationRegistry:
+    """Verify the file-backed NotificationRegistry: register, idempotency, get, cleanup_old, and disabled no-op behaviour."""
+
     async def test_register_notification_new(self, tmp_path):
+        """register_notification() stores a new notification that is retrievable by ID."""
         hass = _make_hass()
         hass.config.path.return_value = str(tmp_path / "notifications.json")
         registry = NotificationRegistry(hass, enabled=True)
@@ -54,6 +60,7 @@ class TestNotificationRegistry:
         assert registered["source"] == "test"
 
     async def test_register_notification_idempotent(self, tmp_path):
+        """Calling register_notification() multiple times with the same notification_id stores only one entry."""
         hass = _make_hass()
         registry = NotificationRegistry(hass, enabled=True)
         registry._storage_path = tmp_path / "notifications.json"
@@ -71,6 +78,7 @@ class TestNotificationRegistry:
         assert len(registry._notifications) == 1
 
     async def test_register_notification_disabled_is_noop(self, tmp_path):
+        """When enabled=False, register_notification() stores nothing."""
         hass = _make_hass()
         registry = NotificationRegistry(hass, enabled=False)
         registry._storage_path = tmp_path / "notifications.json"
@@ -86,6 +94,7 @@ class TestNotificationRegistry:
         assert len(registry._notifications) == 0
 
     async def test_get_notification_not_found(self, tmp_path):
+        """get_notification() returns None when the notification_id does not exist."""
         hass = _make_hass()
         registry = NotificationRegistry(hass, enabled=True)
         registry._storage_path = tmp_path / "notifications.json"
@@ -94,6 +103,7 @@ class TestNotificationRegistry:
         assert result is None
 
     async def test_cleanup_old_removes_old_records(self, tmp_path):
+        """cleanup_old() removes notifications whose triggered_at is before the cutoff and retains newer ones."""
         hass = _make_hass()
         registry = NotificationRegistry(hass, enabled=True)
         registry._storage_path = tmp_path / "notifications.json"
@@ -112,6 +122,7 @@ class TestNotificationRegistry:
         assert await registry.get_notification("new-notif") is not None
 
     async def test_cleanup_old_disabled_returns_zero(self, tmp_path):
+        """When enabled=False, cleanup_old() is a no-op that returns 0."""
         hass = _make_hass()
         registry = NotificationRegistry(hass, enabled=False)
         registry._storage_path = tmp_path / "notifications.json"
@@ -120,6 +131,7 @@ class TestNotificationRegistry:
         assert removed == 0
 
     async def test_load_from_json_file(self, tmp_path):
+        """Notifications written to disk are loaded and accessible via get_notification() on the next registry."""
         hass = _make_hass()
         storage_file = tmp_path / "notifications.json"
         storage_file.write_text(
@@ -149,7 +161,10 @@ class TestNotificationRegistry:
 
 
 class TestDeliveryAttemptLog:
+    """Verify the file-backed DeliveryAttemptLog: attempt numbering, count, log_attempt no-op when disabled, and cleanup_old."""
+
     async def test_get_next_attempt_number_starts_at_one(self, tmp_path):
+        """get_next_attempt_number() returns 1 when no attempts have been logged for the job."""
         hass = _make_hass()
         log = DeliveryAttemptLog(hass, enabled=True)
         log._storage_path = tmp_path / "attempts.json"
@@ -159,6 +174,7 @@ class TestDeliveryAttemptLog:
         assert n == 1
 
     async def test_get_next_attempt_number_increments(self, tmp_path):
+        """get_next_attempt_number() returns max(existing attempt_number) + 1."""
         hass = _make_hass()
         log = DeliveryAttemptLog(hass, enabled=True)
         log._storage_path = tmp_path / "attempts.json"
@@ -188,6 +204,7 @@ class TestDeliveryAttemptLog:
         assert n == 2
 
     async def test_count_attempts_empty(self, tmp_path):
+        """count_attempts() returns 0 when no attempts have been logged for the job."""
         hass = _make_hass()
         log = DeliveryAttemptLog(hass, enabled=True)
         log._storage_path = tmp_path / "attempts.json"
@@ -197,6 +214,7 @@ class TestDeliveryAttemptLog:
         assert count == 0
 
     async def test_disabled_log_attempt_is_noop(self, tmp_path):
+        """When enabled=False, log_attempt() stores nothing."""
         hass = _make_hass()
         log = DeliveryAttemptLog(hass, enabled=False)
         log._storage_path = tmp_path / "attempts.json"
@@ -208,6 +226,7 @@ class TestDeliveryAttemptLog:
         assert len(log._attempts) == 0
 
     async def test_cleanup_old_attempts(self, tmp_path):
+        """cleanup_old() removes attempt records whose started_at is before the cutoff and retains newer ones."""
         hass = _make_hass()
         log = DeliveryAttemptLog(hass, enabled=True)
         log._storage_path = tmp_path / "attempts.json"
@@ -232,7 +251,10 @@ class TestDeliveryAttemptLog:
 
 
 class TestRetryQueue:
+    """Verify the file-backed RetryQueue: schedule, replace, remove, get_pending_retries, and cleanup_old."""
+
     async def test_schedule_retry_adds_entry(self, tmp_path):
+        """schedule_retry() stores a retry entry that is retrievable via get_pending_retries()."""
         hass = _make_hass()
         queue = RetryQueue(hass)
         queue._storage_path = tmp_path / "retries.json"
@@ -250,6 +272,7 @@ class TestRetryQueue:
         assert pending[0][0] == job_id
 
     async def test_schedule_retry_replaces_existing(self, tmp_path):
+        """A second call to schedule_retry() with the same job_id replaces the existing entry (only one entry remains)."""
         hass = _make_hass()
         queue = RetryQueue(hass)
         queue._storage_path = tmp_path / "retries.json"
@@ -267,6 +290,7 @@ class TestRetryQueue:
         assert len(queue._retries) == 1
 
     async def test_remove_retry(self, tmp_path):
+        """remove_retry() deletes the retry entry so get_pending_retries() returns an empty list."""
         hass = _make_hass()
         queue = RetryQueue(hass)
         queue._storage_path = tmp_path / "retries.json"
@@ -284,6 +308,7 @@ class TestRetryQueue:
         assert len(pending) == 0
 
     async def test_cleanup_old_retries(self, tmp_path):
+        """cleanup_old() removes retry entries whose scheduled_at is before the cutoff and retains future ones."""
         hass = _make_hass()
         queue = RetryQueue(hass)
         queue._storage_path = tmp_path / "retries.json"

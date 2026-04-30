@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from enum import Enum
+from enum import Enum, StrEnum
 
 from ..const import (
     CONFIG_VERSION_KEY,
@@ -56,7 +56,7 @@ from ..const import (
 from .notification import NotificationCriticality, NotificationType
 
 
-class RecipientType(str, Enum):
+class RecipientType(StrEnum):
     """Types of users in the ANS system."""
 
     HA_USER = "HA_USER"

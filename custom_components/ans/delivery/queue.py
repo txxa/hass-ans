@@ -69,6 +69,7 @@ class NotificationDeliveryTaskQueue:
         self._queue: asyncio.Queue[NotificationDeliveryTask] = asyncio.Queue()
         self._max_concurrency = max_concurrency
         self._semaphore = asyncio.Semaphore(max_concurrency)
+        self._active_tasks = 0
         self._processor_factory = processor_factory
         self._worker_task: asyncio.Task | None = None
         self._retry_poller_task: asyncio.Task | None = None
@@ -147,7 +148,7 @@ class NotificationDeliveryTaskQueue:
     @property
     def active_task_count(self) -> int:
         """Number of delivery coroutines currently executing."""
-        return self._max_concurrency - self._semaphore._value  # type: ignore[attr-defined]
+        return self._active_tasks
 
     @property
     def is_running(self) -> bool:
@@ -334,20 +335,24 @@ class NotificationDeliveryTaskQueue:
             task: Task to process.
 
         """
-        async with self._semaphore:
-            try:
-                processor = self._processor_factory()
-                await processor.process(task)
-            except Exception:  # noqa: BLE001
-                # Last-resort handler: processor.process() has its own error
-                # handling and logs; this only fires for truly unexpected
-                # exceptions (e.g. programming errors) that escape the
-                # processor entirely.
-                _LOGGER.exception(
-                    "Unhandled exception while processing task job_id=%s "
-                    "notification_id=%s",
-                    task.job_id,
-                    task.payload.notification_id,
-                )
-            finally:
-                self._queue.task_done()
+        try:
+            async with self._semaphore:
+                self._active_tasks += 1
+                try:
+                    processor = self._processor_factory()
+                    await processor.process(task)
+                except Exception:  # noqa: BLE001
+                    # Last-resort handler: processor.process() has its own error
+                    # handling and logs; this only fires for truly unexpected
+                    # exceptions (e.g. programming errors) that escape the
+                    # processor entirely.
+                    _LOGGER.exception(
+                        "Unhandled exception while processing task job_id=%s "
+                        "notification_id=%s",
+                        task.job_id,
+                        task.payload.notification_id,
+                    )
+                finally:
+                    self._active_tasks -= 1
+        finally:
+            self._queue.task_done()

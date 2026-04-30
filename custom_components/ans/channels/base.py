@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from typing import TYPE_CHECKING, TypedDict
 
 if TYPE_CHECKING:
@@ -23,7 +23,7 @@ from ..models import (
 from ..models.recipient import TTSSettings
 
 
-class AdapterType(str, Enum):
+class AdapterType(StrEnum):
     """Type of adapter and its lifecycle behavior.
 
     Values
@@ -42,7 +42,7 @@ class AdapterType(str, Enum):
     DYNAMIC_MULTI = "dynamic_multi"
 
 
-class ChannelStatus(str, Enum):
+class ChannelStatus(StrEnum):
     """Status of a channel in the ChannelManager.
 
     Values
@@ -121,7 +121,7 @@ class ChannelRequirement(TypedDict, total=False):
     description: str
 
 
-class AdapterFailureType(str, Enum):
+class AdapterFailureType(StrEnum):
     """Classification of delivery adapter failures.
 
     Values

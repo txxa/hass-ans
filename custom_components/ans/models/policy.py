@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import time
-from enum import Enum
+from enum import StrEnum
 
 from .notification import NotificationCriticality, NotificationType
 
 
-class FilterDecisionType(str, Enum):
+class FilterDecisionType(StrEnum):
     """Outcome of notification filter evaluation.
 
     Values
@@ -25,7 +25,7 @@ class FilterDecisionType(str, Enum):
     FILTERED = "FILTERED"
 
 
-class FilterReason(str, Enum):
+class FilterReason(StrEnum):
     """Reason for filter decision outcome.
 
     Values

@@ -55,6 +55,7 @@ _PATCH_GET_CONFIG_REPO = "ans.get_config_repository"
 
 
 def _sys_config_dict(tts_service: str | None = None) -> dict:
+    """Return a minimal system config dict for use in recipient flow tests."""
     return {
         "global_rate_limit": 100,
         "enabled_channels": [PERSISTENT_NOTIFICATION_CHANNEL],
@@ -69,6 +70,7 @@ def _sys_config_dict(tts_service: str | None = None) -> dict:
 
 
 def _make_main_entry(tts_service: str | None = None) -> MagicMock:
+    """Create a mock main config entry with minimal system settings."""
     entry = MagicMock()
     entry.entry_id = "main_entry_id"
     entry.data = _sys_config_dict(tts_service=tts_service)
@@ -196,6 +198,8 @@ def _selector_option_values(selector_obj: Any) -> list[str]:
 
 
 class TestAsyncStepUser:
+    """Tests for RecipientConfigFlow.async_step_user (flow entry point)."""
+
     async def test_abort_when_no_main_entry(self):
         """No ANS config entry → immediate abort."""
         flow, _ = _make_flow()
@@ -230,6 +234,8 @@ class TestAsyncStepUser:
 
 
 class TestAsyncStepRecipientSelection:
+    """Tests for async_step_recipient_selection (choosing the recipient type)."""
+
     async def test_no_input_shows_selection_form_without_errors(self):
         """Calling with None returns the form with an empty error dict."""
         flow, main_entry = _make_flow()
@@ -354,11 +360,13 @@ class TestAsyncStepRecipientSelection:
 
         # First call (inside try) raises; second call (form rebuild) returns False
         mock_exists = AsyncMock(side_effect=[RuntimeError("db down"), False])
-        with patch(_PATCH_GET_MAIN_ENTRY, return_value=main_entry):
-            with patch.object(flow, "_system_recipient_exists", mock_exists):
-                result = await flow.async_step_recipient_selection(
-                    {RCPT_CONFIG_RECIPIENT_CHOICE_KEY: RECIPIENT_CHOICE_SYSTEM_HA}
-                )
+        with (
+            patch(_PATCH_GET_MAIN_ENTRY, return_value=main_entry),
+            patch.object(flow, "_system_recipient_exists", mock_exists),
+        ):
+            result = await flow.async_step_recipient_selection(
+                {RCPT_CONFIG_RECIPIENT_CHOICE_KEY: RECIPIENT_CHOICE_SYSTEM_HA}
+            )
 
         assert result["type"] == FlowResultType.FORM
         assert (
@@ -373,6 +381,8 @@ class TestAsyncStepRecipientSelection:
 
 
 class TestAsyncStepRecipientDefinition:
+    """Tests for async_step_recipient_definition (name, email, phone entry)."""
+
     async def test_no_input_shows_definition_form_without_errors(self):
         """Calling with None returns the definition form with an empty error dict."""
         flow, main_entry = _make_flow()
@@ -449,6 +459,8 @@ class TestAsyncStepRecipientDefinition:
 
 
 class TestAsyncStepRecipientBasicSettings:
+    """Tests for async_step_recipient_basic_settings (retry, rate limit, types)."""
+
     async def test_no_input_shows_basic_settings_form(self):
         """Calling with None returns the basic settings form."""
         flow, main_entry = _make_flow()
@@ -536,6 +548,8 @@ _VALID_TTS_INPUT = {
 
 
 class TestAsyncStepRecipientTtsSettings:
+    """Tests for async_step_recipient_tts_settings (TTS-specific configuration)."""
+
     async def test_no_input_shows_tts_settings_form(self):
         """Calling with None returns the TTS settings form."""
         flow, main_entry = _make_flow(tts_service="tts.cloud_say")
@@ -598,6 +612,8 @@ class TestAsyncStepRecipientTtsSettings:
 
 
 class TestAsyncStepRecipientChannelMapping:
+    """Tests for async_step_recipient_channel_mapping (per-criticality channel assignment)."""
+
     async def test_no_input_shows_channel_mapping_form(self):
         """Calling with None returns the channel mapping form with no errors."""
         flow, main_entry = _make_flow()
@@ -652,15 +668,17 @@ class TestAsyncStepRecipientChannelMapping:
         flow, main_entry = _make_flow()
         _prime_for_channel_mapping(flow, main_entry)
 
-        with patch.object(
-            ConfigValidator,
-            "validate_recipient_channel_mapping_schema",
-            side_effect=RuntimeError("schema crash"),
+        with (
+            patch.object(
+                ConfigValidator,
+                "validate_recipient_channel_mapping_schema",
+                side_effect=RuntimeError("schema crash"),
+            ),
+            patch(_PATCH_GET_CONFIG_REPO, return_value=None),
         ):
-            with patch(_PATCH_GET_CONFIG_REPO, return_value=None):
-                result = await flow.async_step_recipient_channel_mapping(
-                    {"channels_low": [PERSISTENT_NOTIFICATION_CHANNEL]}
-                )
+            result = await flow.async_step_recipient_channel_mapping(
+                {"channels_low": [PERSISTENT_NOTIFICATION_CHANNEL]}
+            )
 
         assert result["type"] == FlowResultType.FORM
         assert (
@@ -675,6 +693,8 @@ class TestAsyncStepRecipientChannelMapping:
 
 
 class TestAsyncStepRecipientDndSettings:
+    """Tests for async_step_recipient_dnd_settings (Do Not Disturb configuration)."""
+
     async def test_no_input_shows_dnd_form(self):
         """Calling with None returns the DND settings form with no errors."""
         flow, main_entry = _make_flow()
@@ -741,6 +761,8 @@ class TestAsyncStepRecipientDndSettings:
 
 
 class TestAsyncStepReconfigure:
+    """Tests for async_step_reconfigure (editing an existing recipient subentry)."""
+
     async def test_abort_when_no_subentry(self):
         """_get_reconfigure_subentry returning None aborts the flow."""
         flow, _ = _make_flow()
@@ -763,9 +785,11 @@ class TestAsyncStepReconfigure:
             RCPT_CONFIG_PHONE_KEY: None,
         }
 
-        with patch.object(flow, "_get_reconfigure_subentry", return_value=sub):
-            with patch(_PATCH_GET_MAIN_ENTRY, return_value=None):
-                result = await flow.async_step_reconfigure()
+        with (
+            patch.object(flow, "_get_reconfigure_subentry", return_value=sub),
+            patch(_PATCH_GET_MAIN_ENTRY, return_value=None),
+        ):
+            result = await flow.async_step_reconfigure()
 
         assert result["type"] == FlowResultType.ABORT
         assert result["reason"] == "no_main_entry"
@@ -782,9 +806,11 @@ class TestAsyncStepReconfigure:
             RCPT_CONFIG_PHONE_KEY: None,
         }
 
-        with patch.object(flow, "_get_reconfigure_subentry", return_value=sub):
-            with patch(_PATCH_GET_MAIN_ENTRY, return_value=main_entry):
-                result = await flow.async_step_reconfigure()
+        with (
+            patch.object(flow, "_get_reconfigure_subentry", return_value=sub),
+            patch(_PATCH_GET_MAIN_ENTRY, return_value=main_entry),
+        ):
+            result = await flow.async_step_reconfigure()
 
         assert result["type"] == FlowResultType.FORM
         assert result["step_id"] == SUBENTRY_FLOW_STEP_RECIPIENT_DEFINITION_KEY
@@ -802,9 +828,11 @@ class TestAsyncStepReconfigure:
             RCPT_CONFIG_PHONE_KEY: None,
         }
 
-        with patch.object(flow, "_get_reconfigure_subentry", return_value=sub):
-            with patch(_PATCH_GET_MAIN_ENTRY, return_value=main_entry):
-                await flow.async_step_reconfigure()
+        with (
+            patch.object(flow, "_get_reconfigure_subentry", return_value=sub),
+            patch(_PATCH_GET_MAIN_ENTRY, return_value=main_entry),
+        ):
+            await flow.async_step_reconfigure()
 
         assert flow._recipient_meta[RCPT_CONFIG_NAME_KEY] == "Alice"
         assert flow._recipient_meta[RCPT_CONFIG_EMAIL_KEY] == "alice@example.com"
@@ -834,9 +862,11 @@ class TestAsyncStepReconfigure:
         }
         main_entry.subentries = {"s1": sub}
 
-        with patch.object(flow, "_get_reconfigure_subentry", return_value=sub):
-            with patch(_PATCH_GET_MAIN_ENTRY, return_value=main_entry):
-                result = await flow.async_step_reconfigure()
+        with (
+            patch.object(flow, "_get_reconfigure_subentry", return_value=sub),
+            patch(_PATCH_GET_MAIN_ENTRY, return_value=main_entry),
+        ):
+            result = await flow.async_step_reconfigure()
 
         marker, user_selector = _get_schema_field(result, RCPT_CONFIG_USER_KEY)
         assert "user123" in _selector_option_values(user_selector)
@@ -849,6 +879,8 @@ class TestAsyncStepReconfigure:
 
 
 class TestCreateRecipientEntry:
+    """Tests for _create_recipient_entry (building the final config entry)."""
+
     async def test_creates_entry_with_valid_state(self):
         """A fully-populated flow state produces a CREATE_ENTRY result."""
         flow, main_entry = _make_flow()
@@ -955,6 +987,8 @@ class TestCreateRecipientEntry:
 
 
 class TestSystemRecipientExists:
+    """Tests for _system_recipient_exists (checking for an existing SYSTEM subentry)."""
+
     async def test_returns_false_when_main_entry_is_none(self):
         """Without a main entry the method returns False."""
         flow, _ = _make_flow()
@@ -996,6 +1030,8 @@ class TestSystemRecipientExists:
 
 
 class TestGetNotConfiguredHaUsers:
+    """Tests for _get_not_configured_ha_users (filtering already-linked HA users)."""
+
     async def test_returns_all_users_when_no_subentries(self):
         """All HA users are returned when no HA_USER subentries exist."""
         flow, main_entry = _make_flow()
@@ -1045,6 +1081,8 @@ class TestGetNotConfiguredHaUsers:
 
 
 class TestGetHaUserData:
+    """Tests for _get_ha_user_data (resolving HA user contact information)."""
+
     async def test_returns_name_for_known_user(self):
         """Returns the correct name for a found user."""
         flow, _ = _make_flow()
@@ -1104,6 +1142,8 @@ class TestGetHaUserData:
 
 
 class TestGetAvailableChannels:
+    """Tests for _get_available_channels (filtering channels for the mapping step)."""
+
     async def test_returns_empty_without_system_config(self):
         """Without system_config the method immediately returns []."""
         flow, _ = _make_flow()
@@ -1169,6 +1209,8 @@ class TestGetAvailableChannels:
 
 
 class TestSetupSystemRecipient:
+    """Tests for _setup_system_recipient (pre-populating the SYSTEM recipient defaults)."""
+
     async def test_populates_system_type_and_default_name(self):
         """_setup_system_recipient fills meta with SYSTEM type and default name."""
         flow, main_entry = _make_flow()

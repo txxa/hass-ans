@@ -40,6 +40,7 @@ def _make_queue(
     processor_factory=None,
     retry_queue=None,
 ) -> NotificationDeliveryTaskQueue:
+    """Return a NotificationDeliveryTaskQueue with a default processor factory and the given parameters."""
     factory = processor_factory or _make_processor_factory()
     return NotificationDeliveryTaskQueue(
         max_concurrency=max_concurrency,
@@ -80,19 +81,25 @@ def _make_stale_snapshot() -> dict:
 
 
 class TestInit:
+    """Verify that __init__() validates max_concurrency and sets correct initial queue state."""
+
     def test_valid_max_concurrency_does_not_raise(self):
+        """NotificationDeliveryTaskQueue() does not raise for valid positive max_concurrency values."""
         _make_queue(max_concurrency=1)
         _make_queue(max_concurrency=10)
 
     def test_zero_max_concurrency_raises(self):
+        """NotificationDeliveryTaskQueue() raises ValueError when max_concurrency is 0."""
         with pytest.raises(ValueError, match="max_concurrency"):
             _make_queue(max_concurrency=0)
 
     def test_negative_max_concurrency_raises(self):
+        """NotificationDeliveryTaskQueue() raises ValueError when max_concurrency is negative."""
         with pytest.raises(ValueError, match="max_concurrency"):
             _make_queue(max_concurrency=-1)
 
     def test_initial_state(self):
+        """A newly created queue reports 0 pending tasks, 0 active tasks, and is not running."""
         q = _make_queue(max_concurrency=3)
         assert q.pending_count == 0
         assert q.active_task_count == 0
@@ -105,7 +112,10 @@ class TestInit:
 
 
 class TestDiagnostics:
+    """Verify pending_count, is_running, active_task_count, and __repr__ reflect the queue state accurately."""
+
     async def test_pending_count_increases_on_enqueue(self):
+        """pending_count increments by 1 for each enqueue() call when the queue is not started."""
         q = _make_queue()
         # Don't start the queue so tasks accumulate
         task = make_task()
@@ -115,6 +125,7 @@ class TestDiagnostics:
         assert q.pending_count == 2
 
     async def test_is_running_true_after_start(self):
+        """is_running returns True after start() and before stop()."""
         q = _make_queue()
         await q.start()
         try:
@@ -123,12 +134,14 @@ class TestDiagnostics:
             await q.stop()
 
     async def test_is_running_false_after_stop(self):
+        """is_running returns False after stop()."""
         q = _make_queue()
         await q.start()
         await q.stop()
         assert not q.is_running
 
     def test_repr_contains_key_fields(self):
+        """__repr__() output includes max_concurrency, pending, active, and running fields."""
         q = _make_queue(max_concurrency=4)
         text = repr(q)
         assert "max_concurrency=4" in text
@@ -143,7 +156,10 @@ class TestDiagnostics:
 
 
 class TestLifecycle:
+    """Verify start/stop lifecycle: worker creation, idempotency, and retry poller management."""
+
     async def test_start_creates_worker_task(self):
+        """start() creates a non-done _worker_task."""
         q = _make_queue()
         await q.start()
         assert q._worker_task is not None
@@ -151,6 +167,7 @@ class TestLifecycle:
         await q.stop()
 
     async def test_stop_sets_stopped_flag_and_clears_tasks(self):
+        """stop() sets the _stopped event and sets _worker_task to None."""
         q = _make_queue()
         await q.start()
         await q.stop()
@@ -158,6 +175,7 @@ class TestLifecycle:
         assert q._worker_task is None
 
     async def test_double_start_does_not_create_second_worker(self):
+        """Calling start() twice keeps the original _worker_task (idempotent)."""
         q = _make_queue()
         await q.start()
         first_task = q._worker_task
@@ -170,6 +188,7 @@ class TestLifecycle:
         processed: list = []
 
         async def _process(task):
+            """Record the job_id when the processor handles a task."""
             processed.append(task.job_id)
 
         processor = MagicMock()
@@ -191,6 +210,7 @@ class TestLifecycle:
         assert task.job_id in processed
 
     async def test_start_creates_retry_poller_when_retry_queue_provided(self):
+        """start() creates a running _retry_poller_task when a retry_queue is configured."""
         mock_rq = MagicMock()
         mock_rq.get_pending_retries = AsyncMock(return_value=[])
         q = _make_queue(retry_queue=mock_rq)
@@ -200,6 +220,7 @@ class TestLifecycle:
         await q.stop()
 
     async def test_stop_clears_retry_poller_task(self):
+        """stop() cancels and clears _retry_poller_task."""
         mock_rq = MagicMock()
         mock_rq.get_pending_retries = AsyncMock(return_value=[])
         q = _make_queue(retry_queue=mock_rq)
@@ -208,6 +229,7 @@ class TestLifecycle:
         assert q._retry_poller_task is None
 
     async def test_stop_cancels_delayed_background_tasks(self):
+        """stop() cancels all pending delayed-delivery background tasks."""
         q = _make_queue()
         await q.start()
         task = make_task()
@@ -224,25 +246,31 @@ class TestLifecycle:
 
 
 class TestEnqueueAndAddTask:
+    """Verify enqueue() and add_task() behaviour with immediate and delayed enqueuing."""
+
     async def test_enqueue_puts_task_in_queue(self):
+        """enqueue() increments pending_count by 1."""
         q = _make_queue()
         task = make_task()
         await q.enqueue(task)
         assert q.pending_count == 1
 
     async def test_add_task_no_delay_enqueues_immediately(self):
+        """add_task() with delay=None enqueues the task immediately."""
         q = _make_queue()
         task = make_task()
         await q.add_task(task, delay=None)
         assert q.pending_count == 1
 
     async def test_add_task_zero_delay_enqueues_immediately(self):
+        """add_task() with delay=timedelta(seconds=0) enqueues the task without waiting."""
         q = _make_queue()
         task = make_task()
         await q.add_task(task, delay=timedelta(seconds=0))
         assert q.pending_count == 1
 
     async def test_add_task_positive_delay_does_not_enqueue_immediately(self):
+        """add_task() with a positive delay does not enqueue immediately (task is asleep in a background coroutine)."""
         q = _make_queue()
         task = make_task()
         await q.add_task(task, delay=timedelta(seconds=60))
@@ -253,12 +281,14 @@ class TestEnqueueAndAddTask:
             bg.cancel()
 
     async def test_add_task_with_delay_enqueues_after_delay(self):
+        """add_task() enqueues the task once the delay has elapsed."""
         q = _make_queue()
         task = make_task()
         # Capture real sleep before patching so we can actually yield
         real_sleep = asyncio.sleep
 
         async def _instant_sleep(*_args):
+            """Replace asyncio.sleep with a zero-duration yield so tests don't block."""
             await real_sleep(0)
 
         with patch.object(asyncio, "sleep", _instant_sleep):
@@ -286,10 +316,14 @@ class TestEnqueueAndAddTask:
 
 
 class TestWorkerProcessing:
+    """Verify the worker loop processes tasks, respects max_concurrency, and survives processor exceptions."""
+
     async def test_worker_processes_enqueued_task(self):
+        """The worker loop calls processor.process() for each enqueued task."""
         processed: list = []
 
         async def _process(task):
+            """Record the job_id to confirm the task was processed."""
             processed.append(task.job_id)
 
         processor = MagicMock()
@@ -306,9 +340,11 @@ class TestWorkerProcessing:
         assert task.job_id in processed
 
     async def test_worker_processes_multiple_tasks(self):
+        """The worker loop processes all enqueued tasks, in order."""
         processed: list = []
 
         async def _process(task):
+            """Record each processed job_id."""
             processed.append(task.job_id)
 
         processor = MagicMock()
@@ -323,14 +359,15 @@ class TestWorkerProcessing:
         await asyncio.sleep(0.1)
         await q.stop()
 
-        assert set(t.job_id for t in tasks) == set(processed)
+        assert {t.job_id for t in tasks} == set(processed)
 
     async def test_worker_respects_max_concurrency(self):
-        """No more than max_concurrency processors should run simultaneously."""
+        """No more than max_concurrency processors run simultaneously."""
         concurrency_peak = 0
         current_running = 0
 
         async def _slow_process(task):
+            """Track the concurrency peak while simulating a slow delivery operation."""
             nonlocal concurrency_peak, current_running
             current_running += 1
             concurrency_peak = max(concurrency_peak, current_running)
@@ -367,7 +404,7 @@ class TestWorkerProcessing:
         await q.stop()
 
     async def test_task_done_called_after_processing(self):
-        """queue.task_done() must be called for each dequeued item."""
+        """queue.task_done() is called after each dequeued item, allowing queue.join() to unblock."""
         q = _make_queue()
         task = make_task()
         await q.start()
@@ -385,6 +422,8 @@ class TestWorkerProcessing:
 
 
 class TestRetryPoller:
+    """Verify the retry poller loop: due retries re-enqueued, stale retries dropped, future retries skipped."""
+
     async def test_poller_enqueues_due_retry(self):
         """A retry whose scheduled_at is in the past must be re-enqueued."""
         job_id = uuid4()
@@ -401,6 +440,7 @@ class TestRetryPoller:
         original_enqueue = q.enqueue
 
         async def _capture_enqueue(task):
+            """Record enqueued tasks for assertion, then forward to the real enqueue."""
             enqueued.append(task)
             await original_enqueue(task)
 
@@ -410,6 +450,7 @@ class TestRetryPoller:
         iteration = 0
 
         async def _one_shot_sleep(*_args):
+            """Stop the poller after the first sleep iteration."""
             nonlocal iteration
             iteration += 1
             if iteration >= 1:
@@ -434,9 +475,8 @@ class TestRetryPoller:
         enqueued: list = []
         q = _make_queue(retry_queue=mock_rq)
 
-        original_enqueue = q.enqueue
-
         async def _capture_enqueue(task):  # noqa: RUF029
+            """Record enqueued tasks for assertion (stale tasks should not appear here)."""
             enqueued.append(task)
 
         q.enqueue = _capture_enqueue  # type: ignore[method-assign]
@@ -445,6 +485,7 @@ class TestRetryPoller:
         iteration = 0
 
         async def _one_shot_sleep(*_args):
+            """Stop the poller after the first sleep iteration."""
             nonlocal iteration
             iteration += 1
             if iteration >= 1:
@@ -473,6 +514,7 @@ class TestRetryPoller:
         q = _make_queue(retry_queue=mock_rq)
 
         async def _capture_enqueue(task):  # noqa: RUF029
+            """Record tasks that the poller tried to enqueue."""
             enqueued.append(task)
 
         q.enqueue = _capture_enqueue  # type: ignore[method-assign]
@@ -481,6 +523,7 @@ class TestRetryPoller:
         iteration = 0
 
         async def _one_shot_sleep(*_args):
+            """Stop the poller after the first sleep iteration."""
             nonlocal iteration
             iteration += 1
             if iteration >= 1:
@@ -509,6 +552,7 @@ class TestRetryPoller:
         iteration = 0
 
         async def _one_shot_sleep(*_args):
+            """Stop the poller after the first sleep iteration."""
             nonlocal iteration
             iteration += 1
             if iteration >= 1:
@@ -526,6 +570,7 @@ class TestRetryPoller:
         call_count = 0
 
         async def _fail_then_succeed():
+            """Raise RuntimeError on the first call; return an empty list on subsequent calls."""
             nonlocal call_count
             call_count += 1
             if call_count == 1:
@@ -542,6 +587,7 @@ class TestRetryPoller:
         iteration = 0
 
         async def _two_shot_sleep(*_args):
+            """Stop the poller after the second sleep iteration, allowing it to recover after the first failure."""
             nonlocal iteration
             iteration += 1
             if iteration >= 2:
@@ -566,6 +612,7 @@ class TestRetryPoller:
         iteration = 0
 
         async def _one_shot_sleep(*_args):
+            """Stop the poller after the first sleep iteration."""
             nonlocal iteration
             iteration += 1
             if iteration >= 1:
@@ -584,12 +631,15 @@ class TestRetryPoller:
 
 
 class TestEdgeCases:
+    """Verify edge cases: stop before start, idempotent stop, and enqueue after stop."""
+
     async def test_stop_without_start_is_safe(self):
         """Calling stop() before start() must not raise."""
         q = _make_queue()
         await q.stop()  # must not raise
 
     async def test_stop_is_idempotent(self):
+        """Calling stop() twice does not raise."""
         q = _make_queue()
         await q.start()
         await q.stop()
@@ -600,6 +650,7 @@ class TestEdgeCases:
         processed: list = []
 
         async def _track(task):
+            """Record each processed job_id."""
             processed.append(task.job_id)
 
         processor = MagicMock()

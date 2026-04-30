@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -28,6 +29,7 @@ from ..models.recipient import RecipientContactInfo, TTSSettings
 
 
 def _make_payload(title="Alert", message="Test message") -> NotificationPayload:
+    """Build a minimal NotificationPayload for use in TTS adapter tests."""
     return NotificationPayload(
         notification_id=str(uuid4()),
         source="test",
@@ -41,6 +43,7 @@ def _make_payload(title="Alert", message="Test message") -> NotificationPayload:
 
 
 def _make_contact() -> RecipientContactInfo:
+    """Return a RecipientContactInfo with no email or phone (TTS needs neither)."""
     return RecipientContactInfo(email_address=None, phone_number=None)
 
 
@@ -82,24 +85,29 @@ def _make_adapter(
 
 
 def test_matches_channel_true():
+    """matches_channel returns True for any media_player entity."""
     assert TTSMediaPlayerAdapter.matches_channel("media_player.living_room") is True
 
 
 def test_matches_channel_false():
+    """matches_channel returns False for non-media-player channel identifiers."""
     assert TTSMediaPlayerAdapter.matches_channel("notify.mobile_app_phone") is False
 
 
 def test_get_channel_label():
+    """get_channel_label converts a snake_case entity name to Title Case."""
     label = TTSMediaPlayerAdapter.get_channel_label("media_player.living_room")
     assert label == "Living Room"
 
 
 def test_get_channel_label_underscores():
+    """get_channel_label correctly converts multi-segment underscored names."""
     label = TTSMediaPlayerAdapter.get_channel_label("media_player.kitchen_speaker")
     assert label == "Kitchen Speaker"
 
 
 def test_get_requirements_no_contact_info_needed():
+    """TTS delivery requires no email, phone, or HA user contact information."""
     req = TTSMediaPlayerAdapter.get_requirements()
     assert req.get("requires_email", False) is False
     assert req.get("requires_phone", False) is False
@@ -107,6 +115,7 @@ def test_get_requirements_no_contact_info_needed():
 
 
 def test_channel_property():
+    """The channel property returns the canonical 'media_player.<entity_name>' string."""
     adapter, *_ = _make_adapter()
     assert adapter.channel == "media_player.living_room"
 
@@ -117,6 +126,7 @@ def test_channel_property():
 
 
 def test_sanitize_strips_control_chars():
+    """_sanitize_message removes C0 control characters and bidi override code points."""
     adapter, *_ = _make_adapter()
     # Embed C0 control character + bidi override
     dirty = "Hello\x00\x1fWorld\u202e"
@@ -125,6 +135,7 @@ def test_sanitize_strips_control_chars():
 
 
 def test_sanitize_truncates_at_max_length():
+    """_sanitize_message truncates messages that exceed MAX_MESSAGE_LENGTH and appends ellipsis."""
     adapter, *_ = _make_adapter()
     long_msg = "A" * (MAX_MESSAGE_LENGTH + 50)
     result = adapter._sanitize_message(long_msg)
@@ -133,6 +144,7 @@ def test_sanitize_truncates_at_max_length():
 
 
 def test_sanitize_short_message_unchanged():
+    """_sanitize_message returns short clean messages without modification."""
     adapter, *_ = _make_adapter()
     msg = "Short message"
     assert adapter._sanitize_message(msg) == msg
@@ -144,6 +156,7 @@ def test_sanitize_short_message_unchanged():
 
 
 def test_format_message_title_and_message():
+    """Default format combines title and message with a period separator."""
     adapter, *_ = _make_adapter()
     payload = _make_payload(title="Alert", message="Detected")
     settings = TTSSettings.default()
@@ -152,9 +165,9 @@ def test_format_message_title_and_message():
 
 
 def test_format_message_message_only():
+    """'message_only' format returns just the message body, omitting the title."""
     adapter, *_ = _make_adapter()
     payload = _make_payload(title="Title", message="Body")
-    from dataclasses import replace
 
     settings = TTSSettings.default()
     settings = replace(settings, message_format="message_only")
@@ -163,9 +176,9 @@ def test_format_message_message_only():
 
 
 def test_format_message_title_only():
+    """'title_only' format returns just the title, omitting the message body."""
     adapter, *_ = _make_adapter()
     payload = _make_payload(title="Title", message="Body")
-    from dataclasses import replace
 
     settings = TTSSettings.default()
     settings = replace(settings, message_format="title_only")
@@ -174,6 +187,7 @@ def test_format_message_title_only():
 
 
 def test_format_message_none_settings_uses_default():
+    """Passing None for settings falls back to TTSSettings.default() message format."""
     adapter, *_ = _make_adapter()
     payload = _make_payload(title="T", message="M")
     # None settings → uses TTSSettings.default().message_format
@@ -188,6 +202,7 @@ def test_format_message_none_settings_uses_default():
 
 
 async def test_no_tts_service_returns_permanent_failure():
+    """Absent TTS service in system config must yield a permanent delivery failure."""
     adapter, hass, config_repo, volume_registry = _make_adapter()
     snapshot = MagicMock()
     snapshot.system_config.tts_service = None
@@ -213,6 +228,7 @@ async def test_no_tts_service_returns_permanent_failure():
 
 
 async def test_media_player_not_found_returns_permanent_failure():
+    """A non-existent media player entity must yield a permanent failure."""
     adapter, hass, config_repo, volume_registry = _make_adapter()
     hass.states.get.return_value = None
 
@@ -227,6 +243,7 @@ async def test_media_player_not_found_returns_permanent_failure():
 
 
 async def test_media_player_off_returns_transient_failure():
+    """A media player in STATE_OFF must yield a transient failure (device may come back)."""
     adapter, hass, _, volume_registry = _make_adapter()
     state = MagicMock()
     state.state = STATE_OFF
@@ -242,6 +259,7 @@ async def test_media_player_off_returns_transient_failure():
 
 
 async def test_media_player_unavailable_returns_transient_failure():
+    """A media player in STATE_UNAVAILABLE must yield a transient failure."""
     adapter, hass, _, volume_registry = _make_adapter()
     state = MagicMock()
     state.state = STATE_UNAVAILABLE
@@ -262,6 +280,7 @@ async def test_media_player_unavailable_returns_transient_failure():
 
 
 async def test_service_not_found_returns_permanent_failure():
+    """ServiceNotFound raised by the TTS speak call must yield a permanent failure."""
     adapter, hass, _, volume_registry = _make_adapter()
     state = MagicMock()
     state.state = "idle"
@@ -279,6 +298,7 @@ async def test_service_not_found_returns_permanent_failure():
 
 
 async def test_service_validation_error_returns_permanent_failure():
+    """ServiceValidationError from the TTS service must yield a permanent failure."""
     adapter, hass, _, volume_registry = _make_adapter()
     state = MagicMock()
     state.state = "idle"
@@ -296,6 +316,7 @@ async def test_service_validation_error_returns_permanent_failure():
 
 
 async def test_ha_error_returns_transient_failure():
+    """Generic HomeAssistantError from the TTS speak call must yield a transient failure."""
     adapter, hass, _, volume_registry = _make_adapter()
     state = MagicMock()
     state.state = "idle"
@@ -318,6 +339,7 @@ async def test_ha_error_returns_transient_failure():
 
 
 async def test_successful_delivery():
+    """Full deliver() success path returns SUCCESS and applies volume."""
     adapter, hass, _, volume_registry = _make_adapter()
     state = MagicMock()
     state.state = "idle"
@@ -336,6 +358,7 @@ async def test_successful_delivery():
 
 
 async def test_successful_delivery_calls_tts_service():
+    """On success, the adapter must invoke tts.speak with correct domain and service name."""
     adapter, hass, _, volume_registry = _make_adapter()
     state = MagicMock()
     state.state = "idle"
@@ -360,6 +383,7 @@ async def test_successful_delivery_calls_tts_service():
 
 
 async def test_lock_timeout_returns_transient_failure():
+    """Failing to acquire the delivery lock within the timeout yields a transient failure."""
     # Provide a pre-acquired lock and set a tiny timeout so the test runs fast
     blocked_lock = asyncio.Lock()
     await blocked_lock.acquire()  # Lock is held; adapter can't acquire it
@@ -422,8 +446,6 @@ async def test_speak_message_ssml_disabled_sends_plain_text():
 
 async def test_successful_delivery_with_ssml_enabled():
     """Full deliver() path with ssml_enabled=True produces SUCCESS and correct SSML body."""
-    from dataclasses import replace
-
     adapter, hass, config_repo, volume_registry = _make_adapter()
     state = MagicMock()
     state.state = "idle"

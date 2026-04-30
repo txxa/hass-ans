@@ -14,6 +14,7 @@ async_get_config_entry_diagnostics
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import MagicMock, patch
 
 from ..diagnostics import async_get_config_entry_diagnostics
@@ -34,6 +35,7 @@ _PATCH_GET_REPO = "ans.get_config_repository"
 
 
 def _make_entry(entry_id: str = "test-entry-id", version: int = 1) -> MagicMock:
+    """Return a mock ConfigEntry with the given entry_id and version."""
     entry = MagicMock()
     entry.entry_id = entry_id
     entry.version = version
@@ -41,10 +43,12 @@ def _make_entry(entry_id: str = "test-entry-id", version: int = 1) -> MagicMock:
 
 
 def _make_hass() -> MagicMock:
+    """Return a minimal mock HomeAssistant instance."""
     return MagicMock()
 
 
 def _make_channel_info(scope: ChannelScope) -> MagicMock:
+    """Return a mock ChannelInfo with the given scope."""
     info = MagicMock()
     info.scope = scope
     return info
@@ -58,6 +62,7 @@ def _make_channel_record(
     status_value: str,
     has_adapter: bool,
 ) -> MagicMock:
+    """Return a mock ChannelRecord with the given field values."""
     rec = MagicMock()
     rec.info = MagicMock()
     rec.info.id = channel_id
@@ -71,6 +76,7 @@ def _make_channel_record(
 
 
 def _make_recipient(rtype: RecipientType) -> MagicMock:
+    """Return a mock RecipientData with the given RecipientType."""
     r = MagicMock()
     r.type = rtype
     return r
@@ -82,6 +88,7 @@ def _make_channel_manager(
     detected: int = 2,
     active: int = 1,
 ) -> MagicMock:
+    """Return a mock ChannelManager pre-configured with the given infos, records, and counts."""
     mgr = MagicMock()
     mgr.get_all_infos = MagicMock(return_value=infos or [])
     mgr.get_all_records = MagicMock(return_value=records or [])
@@ -96,6 +103,7 @@ def _make_config_repo(
     system_config: MagicMock | None = None,
     recipients: dict | None = None,
 ) -> MagicMock:
+    """Return a mock ConfigRepository with the given components; missing components are set to None or empty dict."""
     repo = MagicMock()
     repo.channel_manager = channel_manager
     repo.system_config = system_config
@@ -109,7 +117,10 @@ def _make_config_repo(
 
 
 class TestHappyPath:
+    """Verify that async_get_config_entry_diagnostics() returns a fully populated dict when all components are present."""
+
     async def test_returns_entry_id_and_version(self):
+        """The top-level result includes the config entry's entry_id and version."""
         hass = _make_hass()
         entry = _make_entry(entry_id="abc-123", version=2)
         repo = _make_config_repo(channel_manager=_make_channel_manager())
@@ -121,6 +132,7 @@ class TestHappyPath:
         assert result["version"] == 2
 
     async def test_channels_section_present(self):
+        """The result includes a 'channels' key with detected and active counts from the channel manager."""
         hass = _make_hass()
         entry = _make_entry()
         mgr = _make_channel_manager(detected=3, active=2)
@@ -134,6 +146,7 @@ class TestHappyPath:
         assert ch["active"] == 2
 
     async def test_channel_records_serialised(self):
+        """Channel records are serialised with id, label, scope, integration, status, and has_adapter keys."""
         hass = _make_hass()
         entry = _make_entry()
         rec = _make_channel_record(
@@ -161,6 +174,7 @@ class TestHappyPath:
         assert r["has_adapter"] is True
 
     async def test_channel_record_no_adapter(self):
+        """A channel record without an adapter serialises has_adapter as False."""
         hass = _make_hass()
         entry = _make_entry()
         rec = _make_channel_record(
@@ -180,6 +194,7 @@ class TestHappyPath:
         assert result["channels"]["records"][0]["has_adapter"] is False
 
     async def test_system_config_section_present(self):
+        """The result includes a 'system_config' key containing enabled_channels when system_config is set."""
         hass = _make_hass()
         entry = _make_entry()
         sys_cfg = MagicMock()
@@ -196,6 +211,7 @@ class TestHappyPath:
         ]
 
     async def test_recipient_totals_and_type_counts(self):
+        """The recipients section includes the total count and a per-type breakdown."""
         hass = _make_hass()
         entry = _make_entry()
         recipients = {
@@ -218,6 +234,7 @@ class TestHappyPath:
         assert rcpts["types"][RecipientType.TTS.value] == 1
 
     async def test_no_recipients_returns_empty_types(self):
+        """An empty recipients dict results in total=0 and an empty types dict."""
         hass = _make_hass()
         entry = _make_entry()
         repo = _make_config_repo(channel_manager=_make_channel_manager(), recipients={})
@@ -235,7 +252,10 @@ class TestHappyPath:
 
 
 class TestChannelScopeCounts:
+    """Verify that the 'by_scope' dict correctly counts channels for each ChannelScope."""
+
     async def test_by_scope_counts_all_three_scopes(self):
+        """by_scope counts SYSTEM, RECIPIENT, and TTS channels independently."""
         hass = _make_hass()
         entry = _make_entry()
         infos = [
@@ -258,6 +278,7 @@ class TestChannelScopeCounts:
         assert by_scope["tts"] == 3
 
     async def test_by_scope_zero_when_no_channels(self):
+        """When there are no channel infos, all by_scope counts are zero."""
         hass = _make_hass()
         entry = _make_entry()
         mgr = _make_channel_manager(infos=[])
@@ -278,7 +299,10 @@ class TestChannelScopeCounts:
 
 
 class TestAbsentComponents:
+    """Verify graceful degradation when the config repo, channel manager, or system config is absent."""
+
     async def test_no_config_repo_returns_error_key(self):
+        """When get_config_repository() returns None, the result contains only an 'error' key."""
         hass = _make_hass()
         entry = _make_entry()
 
@@ -289,7 +313,7 @@ class TestAbsentComponents:
         assert result["error"] == "Config repository not initialized"
 
     async def test_no_config_repo_logs_warning(self, caplog):
-        import logging
+        """When get_config_repository() returns None, a WARNING is logged containing the entry_id."""
 
         hass = _make_hass()
         entry = _make_entry(entry_id="warn-entry")
@@ -305,6 +329,7 @@ class TestAbsentComponents:
         assert "warn-entry" in caplog.text
 
     async def test_no_config_repo_does_not_include_channels_or_recipients(self):
+        """When config repo is absent, the result includes neither 'channels' nor 'recipients' keys."""
         hass = _make_hass()
         entry = _make_entry()
 
@@ -315,6 +340,7 @@ class TestAbsentComponents:
         assert "recipients" not in result
 
     async def test_no_channel_manager_returns_channels_error_key(self):
+        """When the channel manager is None, channels["error"] is set rather than raising."""
         hass = _make_hass()
         entry = _make_entry()
         repo = _make_config_repo(channel_manager=None)
@@ -325,6 +351,7 @@ class TestAbsentComponents:
         assert "error" in result["channels"]
 
     async def test_no_system_config_omits_system_config_key(self):
+        """When system_config is None, the 'system_config' key is omitted from the result entirely."""
         hass = _make_hass()
         entry = _make_entry()
         repo = _make_config_repo(

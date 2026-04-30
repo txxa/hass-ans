@@ -27,6 +27,7 @@ import voluptuous as vol
 from homeassistant.config_entries import OptionsFlow
 from homeassistant.data_entry_flow import FlowResultType
 
+from ..config.recipient_flow import RecipientConfigFlow
 from ..config.validator import FieldValidationError
 from ..config_flow import ANSConfigFlow, ANSOptionsFlow
 from ..const import (
@@ -91,6 +92,7 @@ _MINIMAL_VALIDATED = {
 
 
 def _minimal_user_input() -> dict:
+    """Return the minimum valid user_input dict for the system_settings step."""
     return {
         SYS_CONFIG_ENABLED_CHANNELS_KEY: ["notify.persistent_notification"],
         SYS_CONFIG_ENABLE_AUDIT_LOGGING_KEY: True,
@@ -125,7 +127,10 @@ def _make_system_config_mock(config_dict: dict | None = None) -> MagicMock:
 
 
 class TestAsyncStepUser:
+    """Tests for ANSConfigFlow.async_step_user (entry point for new installations)."""
+
     async def test_delegates_to_system_settings(self):
+        """async_step_user sets the unique ID and advances to the system_settings form."""
         flow = _make_flow()
         # async_set_unique_id and _abort_if_unique_id_configured are HA internals;
         # patch them so the test stays unit-level.
@@ -148,6 +153,7 @@ class TestAsyncStepUser:
         assert result["step_id"] == CONFIG_FLOW_STEP_SYS_SETTINGS_KEY
 
     async def test_aborts_if_unique_id_already_configured(self):
+        """async_step_user aborts when the integration is already configured."""
         flow = _make_flow()
         flow.async_set_unique_id = AsyncMock()
         flow._abort_if_unique_id_configured = MagicMock(
@@ -164,7 +170,10 @@ class TestAsyncStepUser:
 
 
 class TestAsyncStepSystemSettingsGet:
+    """Tests for the GET (form display) phase of async_step_system_settings."""
+
     async def test_shows_form_with_no_user_input(self):
+        """With no user_input the step returns a FORM result for the settings step."""
         flow = _make_flow()
 
         with (
@@ -214,7 +223,10 @@ class TestAsyncStepSystemSettingsGet:
 
 
 class TestAsyncStepSystemSettingsCreateEntry:
+    """Tests for the POST (entry creation) phase of async_step_system_settings."""
+
     async def test_creates_entry_on_valid_input(self):
+        """Valid user_input creates a config entry with the correct data keys."""
         flow = _make_flow()
         flow.async_set_unique_id = AsyncMock()
         flow._abort_if_unique_id_configured = MagicMock()
@@ -288,7 +300,10 @@ class TestAsyncStepSystemSettingsCreateEntry:
 
 
 class TestAsyncStepSystemSettingsErrors:
+    """Tests for the error-handling paths in async_step_system_settings."""
+
     async def test_tts_validation_error_shows_form_with_error(self):
+        """A TTS validation failure re-renders the form with the field error populated."""
         flow = _make_flow()
         invalid_exc = vol.Invalid("TTS entity not found", path=["tts_service"])
 
@@ -311,6 +326,7 @@ class TestAsyncStepSystemSettingsErrors:
         assert SYS_CONFIG_TTS_SERVICE_KEY in result.get("errors", {})
 
     async def test_field_validation_error_populates_errors(self):
+        """FieldValidationError maps field name and key to the errors dict."""
         flow = _make_flow()
         err = FieldValidationError("enabled_channels", "no_channels_selected")
 
@@ -383,6 +399,7 @@ class TestAsyncStepSystemSettingsErrors:
         assert errors["global_rate_limit"] == "too_large"
 
     async def test_unknown_exception_returns_base_error(self):
+        """An unexpected exception maps to the generic 'base' error key."""
         flow = _make_flow()
 
         with (
@@ -414,7 +431,10 @@ class TestAsyncStepSystemSettingsErrors:
 
 
 class TestAsyncStepReconfigure:
+    """Tests for ANSConfigFlow.async_step_reconfigure (editing an existing entry)."""
+
     async def test_aborts_when_no_entry_id_in_context(self):
+        """Missing entry_id in context causes an abort with the appropriate reason."""
         flow = _make_flow()
         flow.context = {}  # No entry_id
 
@@ -424,6 +444,7 @@ class TestAsyncStepReconfigure:
         assert result["reason"] == "reconfigure_entry_not_found"
 
     async def test_aborts_when_entry_not_found(self):
+        """An unresolvable entry_id causes an abort with the appropriate reason."""
         flow = _make_flow()
         flow.context = {"entry_id": "missing-id"}
         flow.hass.config_entries.async_get_entry = MagicMock(return_value=None)
@@ -434,6 +455,7 @@ class TestAsyncStepReconfigure:
         assert result["reason"] == "reconfigure_entry_not_found"
 
     async def test_happy_path_shows_form_with_entry_loaded(self):
+        """A valid entry_id loads the existing entry and renders the reconfigure form."""
         flow = _make_flow()
         entry_mock = MagicMock()
         entry_mock.entry_id = "existing-id"
@@ -458,6 +480,7 @@ class TestAsyncStepReconfigure:
         assert flow._reconfigure_entry is entry_mock
 
     async def test_reconfigure_success_updates_entry_and_aborts(self):
+        """Valid reconfigure input updates the entry and aborts with 'reconfigure_successful'."""
         flow = _make_flow()
         entry_mock = MagicMock()
         entry_mock.entry_id = "existing-id"
@@ -530,6 +553,8 @@ class TestAsyncStepReconfigure:
 
 
 class TestConfigFlowMetadata:
+    """Tests for class-level metadata and factory methods on ANSConfigFlow."""
+
     def test_get_options_flow_returns_options_flow_subclass(self):
         """async_get_options_flow must return an OptionsFlow, not a ConfigFlow."""
         entry = MagicMock()
@@ -543,8 +568,8 @@ class TestConfigFlowMetadata:
         assert instance is not None
 
     def test_get_supported_subentry_types_includes_recipient(self):
+        """async_get_supported_subentry_types must include 'recipient' mapped to RecipientConfigFlow."""
         entry = MagicMock()
-        from ..config.recipient_flow import RecipientConfigFlow
 
         types = ANSConfigFlow.async_get_supported_subentry_types(entry)
         assert "recipient" in types
@@ -578,7 +603,10 @@ def _make_options_flow() -> ANSOptionsFlow:
 
 
 class TestANSOptionsFlowInit:
+    """Tests for ANSOptionsFlow.async_step_init (tunable runtime settings)."""
+
     async def test_shows_form_on_get(self):
+        """With no user_input the step returns a FORM result for the init step."""
         flow = _make_options_flow()
 
         with patch(_PATCH_GET_OPTIONS_SCHEMA, return_value=vol.Schema({})):
@@ -589,6 +617,7 @@ class TestANSOptionsFlowInit:
         assert result.get("errors", {}) == {}
 
     async def test_creates_entry_on_valid_input(self):
+        """Valid options input creates an entry containing the tunable settings."""
         flow = _make_options_flow()
         valid_options = {
             SYS_CONFIG_GLOBAL_RATE_LIMIT_KEY: 50,
@@ -639,6 +668,7 @@ class TestANSOptionsFlowInit:
         assert expected_keys.issubset(options.keys())
 
     async def test_value_error_shows_form_with_base_error(self):
+        """A ValueError from validation re-renders the form with 'invalid_system_settings'."""
         flow = _make_options_flow()
 
         with (
@@ -656,6 +686,7 @@ class TestANSOptionsFlowInit:
         assert result["errors"].get("base") == "invalid_system_settings"
 
     async def test_unknown_exception_shows_form_with_unknown_error(self):
+        """An unexpected exception re-renders the form with the 'unknown' base error."""
         flow = _make_options_flow()
 
         with (

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import timedelta
+import datetime as dt_module
+from datetime import UTC, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 from ..persistence.housekeeping import HousekeepingScheduler
@@ -12,6 +13,7 @@ from ..persistence.housekeeping import HousekeepingScheduler
 def _make_scheduler(
     **kwargs,
 ) -> tuple[HousekeepingScheduler, MagicMock, MagicMock, MagicMock]:
+    """Return a (scheduler, notification_registry, attempt_log, retry_queue) tuple with sensible defaults; any kwarg overrides the corresponding HousekeepingScheduler parameter."""
     notification_registry = MagicMock()
     notification_registry.cleanup_old = AsyncMock(return_value=0)
 
@@ -40,6 +42,7 @@ def _make_scheduler(
 
 
 async def test_start_creates_task():
+    """start() spawns a background asyncio task and stores it in _task."""
     scheduler, *_ = _make_scheduler()
     assert scheduler._task is None
     await scheduler.start()
@@ -48,6 +51,7 @@ async def test_start_creates_task():
 
 
 async def test_start_twice_logs_warning(caplog):
+    """Calling start() while the scheduler is already running logs an 'already running' warning."""
     scheduler, *_ = _make_scheduler()
     await scheduler.start()
     await scheduler.start()
@@ -56,11 +60,13 @@ async def test_start_twice_logs_warning(caplog):
 
 
 async def test_stop_without_start_is_safe():
+    """Calling stop() before start() does not raise."""
     scheduler, *_ = _make_scheduler()
     await scheduler.stop()  # Should not raise
 
 
 async def test_stop_cancels_running_task():
+    """stop() cancels the background task and clears the _task reference."""
     scheduler, *_ = _make_scheduler()
     await scheduler.start()
     assert scheduler._task is not None
@@ -74,6 +80,7 @@ async def test_stop_cancels_running_task():
 
 
 async def test_cleanup_skipped_when_retention_zero():
+    """When retention_age is timedelta(0), the cleanup sweep is skipped and no stores are called."""
     scheduler, notification_registry, attempt_log, retry_queue = _make_scheduler(
         retention_age=timedelta(0)
     )
@@ -85,6 +92,7 @@ async def test_cleanup_skipped_when_retention_zero():
 
 
 async def test_cleanup_calls_all_stores():
+    """A single cleanup sweep calls cleanup_old() on the notification registry, attempt log, and retry queue."""
     scheduler, notification_registry, attempt_log, retry_queue = _make_scheduler()
     await scheduler._cleanup()
 
@@ -94,8 +102,7 @@ async def test_cleanup_calls_all_stores():
 
 
 async def test_cleanup_cutoff_uses_retention_age():
-    import datetime as dt_module
-    from datetime import UTC
+    """The cutoff datetime passed to stores is approximately now − retention_age."""
 
     scheduler, notification_registry, *_ = _make_scheduler(
         retention_age=timedelta(days=7)
@@ -116,6 +123,7 @@ async def test_cleanup_cutoff_uses_retention_age():
 
 
 async def test_run_loop_triggers_cleanup():
+    """The background run loop triggers at least one cleanup sweep within its configured interval."""
     scheduler, notification_registry, attempt_log, retry_queue = _make_scheduler(
         interval=timedelta(seconds=0.01)
     )

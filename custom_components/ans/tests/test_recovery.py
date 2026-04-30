@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import pytest
 
+from ..models import NotificationDeliveryTask
 from ..persistence.recovery import PersistenceRecovery, async_initialize_persistence
 
 # ---------------------------------------------------------------------------
@@ -16,12 +17,14 @@ from ..persistence.recovery import PersistenceRecovery, async_initialize_persist
 
 
 def _now() -> datetime:
+    """Return the current UTC datetime."""
     return datetime.now(UTC)
 
 
 def _make_hass() -> MagicMock:
+    """Return a mock HomeAssistant instance with config.path() pre-configured to a temp path."""
     hass = MagicMock()
-    hass.config.path.return_value = "/tmp/ans_test/file.json"
+    hass.config.path.return_value = "/tmp/ans_test/file.json"  # noqa: S108
     return hass
 
 
@@ -81,8 +84,10 @@ def _make_valid_snapshot():
 
 class TestPersistenceRecovery:
     # --- recover_on_startup --------------------------------------------------
+    """Verify PersistenceRecovery.recover_on_startup() and cleanup_old_records() behaviour."""
 
     async def test_recover_empty_queue_returns_empty_lists(self):
+        """An empty retry queue results in empty pending_tasks and orphaned_retries lists."""
         hass = _make_hass()
         nr, al, rq = _make_stores(pending_retries=[])
         recovery = PersistenceRecovery(hass, nr, al, rq)
@@ -94,6 +99,7 @@ class TestPersistenceRecovery:
         assert result["stores_initialized"] is True
 
     async def test_recover_valid_snapshot_reconstructs_task(self):
+        """A valid snapshot is deserialised via from_snapshot() and placed in pending_tasks with its scheduled run time."""
         hass = _make_hass()
         job_id = uuid4()
         run_at = _now() + timedelta(minutes=5)
@@ -101,8 +107,6 @@ class TestPersistenceRecovery:
 
         nr, al, rq = _make_stores(pending_retries=[(job_id, run_at, snapshot)])
         recovery = PersistenceRecovery(hass, nr, al, rq)
-
-        from ..models import NotificationDeliveryTask
 
         with patch.object(
             NotificationDeliveryTask,
@@ -118,6 +122,7 @@ class TestPersistenceRecovery:
         assert result["orphaned_retries"] == []
 
     async def test_recover_none_snapshot_goes_to_orphaned(self):
+        """A retry queue entry with a None snapshot is placed in orphaned_retries rather than pending_tasks."""
         hass = _make_hass()
         job_id = uuid4()
         run_at = _now() + timedelta(minutes=5)
@@ -131,6 +136,7 @@ class TestPersistenceRecovery:
         assert str(job_id) in result["orphaned_retries"]
 
     async def test_recover_invalid_snapshot_goes_to_orphaned(self):
+        """A snapshot that raises KeyError during deserialisation is placed in orphaned_retries."""
         hass = _make_hass()
         job_id = uuid4()
         run_at = _now() + timedelta(minutes=5)
@@ -138,8 +144,6 @@ class TestPersistenceRecovery:
 
         nr, al, rq = _make_stores(pending_retries=[(job_id, run_at, bad_snapshot)])
         recovery = PersistenceRecovery(hass, nr, al, rq)
-
-        from ..models import NotificationDeliveryTask
 
         with patch.object(
             NotificationDeliveryTask,
@@ -152,14 +156,13 @@ class TestPersistenceRecovery:
         assert str(job_id) in result["orphaned_retries"]
 
     async def test_recover_value_error_snapshot_goes_to_orphaned(self):
+        """A snapshot that raises ValueError during deserialisation is also placed in orphaned_retries."""
         hass = _make_hass()
         job_id = uuid4()
         run_at = _now() + timedelta(minutes=5)
 
         nr, al, rq = _make_stores(pending_retries=[(job_id, run_at, {"x": 1})])
         recovery = PersistenceRecovery(hass, nr, al, rq)
-
-        from ..models import NotificationDeliveryTask
 
         with patch.object(
             NotificationDeliveryTask,
@@ -187,11 +190,10 @@ class TestPersistenceRecovery:
         )
         recovery = PersistenceRecovery(hass, nr, al, rq)
 
-        from ..models import NotificationDeliveryTask
-
         mock_task = MagicMock(spec=NotificationDeliveryTask)
 
         def _from_snapshot(j, s):
+            """Return a mock task for job_valid; raise KeyError for all other job IDs."""
             if j == job_valid:
                 return mock_task
             raise KeyError("channel_info")
@@ -209,6 +211,7 @@ class TestPersistenceRecovery:
     # --- cleanup_old_records -------------------------------------------------
 
     async def test_cleanup_returns_aggregate_count(self):
+        """cleanup_old_records() returns the sum of deleted records across all three stores."""
         hass = _make_hass()
         nr, al, rq = _make_stores()
         nr.cleanup_old = AsyncMock(return_value=3)
@@ -221,6 +224,7 @@ class TestPersistenceRecovery:
         assert total == 10  # 3 + 5 + 2
 
     async def test_cleanup_negative_days_raises_value_error(self):
+        """A negative days argument raises ValueError with a message mentioning 'non-negative'."""
         hass = _make_hass()
         nr, al, rq = _make_stores()
         recovery = PersistenceRecovery(hass, nr, al, rq)
@@ -241,6 +245,7 @@ class TestPersistenceRecovery:
         assert total == 1
 
     async def test_cleanup_calls_all_three_stores(self):
+        """cleanup_old_records() invokes cleanup_old() on the notification registry, attempt log, and retry queue."""
         hass = _make_hass()
         nr, al, rq = _make_stores()
         recovery = PersistenceRecovery(hass, nr, al, rq)
@@ -270,6 +275,7 @@ class TestPersistenceRecovery:
     # --- constructor ---------------------------------------------------------
 
     async def test_constructor_accepts_all_three_stores(self):
+        """When all three stores are provided explicitly, they are stored as instance attributes."""
         hass = _make_hass()
         nr, al, rq = _make_stores()
         recovery = PersistenceRecovery(hass, nr, al, rq)
@@ -318,7 +324,10 @@ class TestPersistenceRecovery:
 
 
 class TestAsyncInitializePersistence:
+    """Verify that async_initialize_persistence() correctly separates recovered tasks from orphaned retries."""
+
     async def test_returns_pending_tasks_and_orphans(self):
+        """Entries with None snapshots are classified as orphans; valid entries go to pending_tasks."""
         hass = _make_hass()
         job_id = uuid4()
         run_at = _now() + timedelta(minutes=1)
@@ -331,6 +340,7 @@ class TestAsyncInitializePersistence:
         assert str(job_id) in orphaned
 
     async def test_passes_through_existing_stores(self):
+        """When stores are passed explicitly, async_initialize_persistence() uses them and queries get_pending_retries()."""
         hass = _make_hass()
         nr, al, rq = _make_stores(pending_retries=[])
 

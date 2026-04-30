@@ -8,7 +8,12 @@ from unittest.mock import MagicMock
 import pytest
 import voluptuous as vol
 
-from ..config.validator import ConfigValidator, FieldValidationError, ValidationContext
+from ..config.validator import (
+    ConfigValidator,
+    FieldValidationError,
+    ValidationContext,
+    validate_tts_service,
+)
 from ..const import (
     RCPT_MAX_RATE_LIMIT,
     RCPT_MAX_RETRY_ATTEMPTS,
@@ -25,21 +30,25 @@ from ..models import (
 
 
 def test_validate_time_format_valid_hhmm():
+    """A time in HH:MM format ('08:30') is valid and returned unchanged."""
     result = ConfigValidator._validate_time_format("08:30")
     assert result == "08:30"
 
 
 def test_validate_time_format_valid_hhmmss():
+    """A time in HH:MM:SS format ('22:00:00') is valid and returned unchanged."""
     result = ConfigValidator._validate_time_format("22:00:00")
     assert result == "22:00:00"
 
 
 def test_validate_time_format_invalid_raises():
+    """An invalid time string ('25:99') raises ValueError containing 'HH:MM'."""
     with pytest.raises(ValueError, match="HH:MM"):
         ConfigValidator._validate_time_format("25:99")
 
 
 def test_validate_time_format_none_returns_none():
+    """_validate_time_format(None) returns None."""
     assert ConfigValidator._validate_time_format(None) is None
 
 
@@ -49,6 +58,7 @@ def test_validate_time_format_none_returns_none():
 
 
 def test_validate_email_valid():
+    """_validate_email_format('user@example.com') returns the address unchanged."""
     result = ConfigValidator._validate_email_format("user@example.com")
     assert result == "user@example.com"
 
@@ -58,11 +68,13 @@ def test_validate_email_invalid_is_accepted_by_helper():
     # (treating `value` as the error-message parameter) rather than validating the input.
     # As a result _validate_email_format does not reject malformed addresses;
     # real email validation happens only at the schema level (validate_recipient_definition_schema).
+    """Due to a vol.Email quirk, _validate_email_format() does not reject malformed addresses."""
     result = ConfigValidator._validate_email_format("not-an-email")
     assert result == "not-an-email"  # silently accepted — no ValueError is raised
 
 
 def test_validate_email_none_returns_none():
+    """_validate_email_format(None) returns None."""
     assert ConfigValidator._validate_email_format(None) is None
 
 
@@ -72,17 +84,20 @@ def test_validate_email_none_returns_none():
 
 
 def test_validate_phone_valid_e164():
+    """_validate_phone_format('+1234567890') returns the number unchanged."""
     result = ConfigValidator._validate_phone_format("+1234567890")
     assert result == "+1234567890"
 
 
 def test_validate_phone_invalid_starts_with_zero():
     # PHONE_PATTERN is r"^\+?[1-9]\d{1,14}$" — leading 0 is not allowed
+    """A phone number starting with '0' raises ValueError containing 'E.164'."""
     with pytest.raises(ValueError, match="E.164"):
         ConfigValidator._validate_phone_format("0123456789")
 
 
 def test_validate_phone_none_returns_none():
+    """_validate_phone_format(None) returns None."""
     assert ConfigValidator._validate_phone_format(None) is None
 
 
@@ -92,11 +107,13 @@ def test_validate_phone_none_returns_none():
 
 
 def test_validate_regex_valid():
+    """_validate_regex_pattern() returns a valid regex pattern unchanged."""
     result = ConfigValidator._validate_regex_pattern("^home.*$")
     assert result == "^home.*$"
 
 
 def test_validate_regex_invalid_raises():
+    """An unclosed character class raises ValueError containing 'Invalid regex'."""
     with pytest.raises(ValueError, match="Invalid regex"):
         ConfigValidator._validate_regex_pattern("[unclosed")
 
@@ -108,6 +125,7 @@ def test_validate_regex_invalid_raises():
 
 def test_dnd_disabled_no_times_required():
     # Should not raise when DND is disabled and times are absent
+    """When DND is disabled, dnd_start and dnd_end are not required."""
     ConfigValidator._validate_recipient_dnd_settings(
         dnd_enabled=False,
         dnd_start=None,
@@ -117,6 +135,7 @@ def test_dnd_disabled_no_times_required():
 
 
 def test_dnd_enabled_requires_times():
+    """When DND is enabled with no times set, FieldValidationError names a time-related field."""
     with pytest.raises(FieldValidationError) as exc_info:
         ConfigValidator._validate_recipient_dnd_settings(
             dnd_enabled=True,
@@ -132,6 +151,7 @@ def test_dnd_enabled_requires_times():
 
 
 def test_dnd_same_start_end_raises():
+    """Equal start and end times raise FieldValidationError even when both are set."""
     with pytest.raises(FieldValidationError):
         ConfigValidator._validate_recipient_dnd_settings(
             dnd_enabled=True,
@@ -142,6 +162,7 @@ def test_dnd_same_start_end_raises():
 
 
 def test_dnd_valid_times_ok():
+    """Valid DND start ('22:00') and end ('08:00') times do not raise."""
     ConfigValidator._validate_recipient_dnd_settings(
         dnd_enabled=True,
         dnd_start="22:00",
@@ -151,6 +172,7 @@ def test_dnd_valid_times_ok():
 
 
 def test_dnd_invalid_criticality_raises():
+    """An unrecognised criticality level in dnd_allowed_criticalities raises FieldValidationError."""
     with pytest.raises(FieldValidationError):
         ConfigValidator._validate_recipient_dnd_settings(
             dnd_enabled=False,
@@ -163,6 +185,7 @@ def test_dnd_invalid_criticality_raises():
 
 def test_dnd_valid_allowed_criticalities():
     # Should not raise
+    """A list of recognised criticality strings ('LOW', 'HIGH') does not raise."""
     ConfigValidator._validate_recipient_dnd_settings(
         dnd_enabled=False,
         dnd_start=None,
@@ -178,6 +201,7 @@ def test_dnd_valid_allowed_criticalities():
 
 
 def test_system_settings_schema_valid():
+    """validate_system_settings_schema() accepts a dict with a positive rate limit and at least one channel."""
     data = {
         "global_rate_limit": 100,
         "enabled_channels": ["notify.persistent_notification"],
@@ -187,7 +211,7 @@ def test_system_settings_schema_valid():
 
 
 def test_system_settings_schema_empty_channels_raises():
-    import voluptuous as vol
+    """validate_system_settings_schema() raises vol.Invalid when enabled_channels is an empty list."""
 
     data = {
         "global_rate_limit": 100,
@@ -203,19 +227,21 @@ def test_system_settings_schema_empty_channels_raises():
 
 
 def test_recipient_definition_schema_valid():
+    """validate_recipient_definition_schema() accepts a dict with at least a 'name' key."""
     data = {"name": "Alice"}
     result = ConfigValidator.validate_recipient_definition_schema(data)
     assert result["name"] == "Alice"
 
 
 def test_recipient_definition_schema_with_email():
+    """A valid email address in the definition is accepted and stored unchanged."""
     data = {"name": "Alice", "email": "alice@example.com"}
     result = ConfigValidator.validate_recipient_definition_schema(data)
     assert result["email"] == "alice@example.com"
 
 
 def test_recipient_definition_schema_invalid_email():
-    import voluptuous as vol
+    """An invalid email address raises vol.Invalid at the schema level."""
 
     data = {"name": "Alice", "email": "not-an-email"}
     with pytest.raises(vol.Invalid):
@@ -228,14 +254,17 @@ def test_recipient_definition_schema_invalid_email():
 
 
 def test_validate_boolean_true():
+    """_validate_boolean(True) returns True."""
     assert ConfigValidator._validate_boolean(True) is True
 
 
 def test_validate_boolean_false():
+    """_validate_boolean(False) returns False."""
     assert ConfigValidator._validate_boolean(False) is False
 
 
 def test_validate_boolean_invalid():
+    """_validate_boolean('yes') raises TypeError containing 'boolean'."""
     with pytest.raises(TypeError, match="boolean"):
         ConfigValidator._validate_boolean("yes")
 
@@ -262,7 +291,7 @@ def _valid_tts_data(**overrides) -> dict:
 
 
 @pytest.mark.parametrize(
-    "ssml_value,expected",
+    ("ssml_value", "expected"),
     [
         (True, True),
         (False, False),
@@ -299,7 +328,7 @@ def test_tts_settings_schema_rejects_non_boolean_ssml():
 
 
 @pytest.mark.parametrize(
-    "value,min_val,max_val",
+    ("value", "min_val", "max_val"),
     [
         (1, 1, None),  # at minimum boundary
         (5, 1, 10),  # within range
@@ -307,6 +336,7 @@ def test_tts_settings_schema_rejects_non_boolean_ssml():
     ],
 )
 def test_validate_positive_integer_valid(value, min_val, max_val):
+    """Values at or within the [min_val, max_val] range are accepted and returned unchanged."""
     result = ConfigValidator._validate_positive_integer(
         value, min_val=min_val, max_val=max_val
     )
@@ -314,22 +344,26 @@ def test_validate_positive_integer_valid(value, min_val, max_val):
 
 
 def test_validate_positive_integer_below_min_raises():
+    """A value below min_val raises ValueError containing '>='."""
     with pytest.raises(ValueError, match=">="):
         ConfigValidator._validate_positive_integer(0, min_val=1)
 
 
 def test_validate_positive_integer_above_max_raises():
+    """A value above max_val raises ValueError containing '<='."""
     with pytest.raises(ValueError, match="<="):
         ConfigValidator._validate_positive_integer(11, min_val=1, max_val=10)
 
 
 def test_validate_positive_integer_non_integer_raises():
+    """A non-integer value raises TypeError containing 'integer'."""
     with pytest.raises(TypeError, match="integer"):
         ConfigValidator._validate_positive_integer("5", min_val=1)
 
 
 def test_validate_positive_integer_no_max_allows_large():
     # max_val=None means no upper bound
+    """When max_val=None there is no upper bound and very large values are accepted."""
     result = ConfigValidator._validate_positive_integer(
         10_000_000, min_val=1, max_val=None
     )
@@ -342,15 +376,18 @@ def test_validate_positive_integer_no_max_allows_large():
 
 
 def test_validate_non_negative_integer_zero_accepted():
+    """_validate_non_negative_integer(0) returns 0 (zero is non-negative)."""
     assert ConfigValidator._validate_non_negative_integer(0) == 0
 
 
 def test_validate_non_negative_integer_negative_raises():
+    """_validate_non_negative_integer(-1) raises ValueError."""
     with pytest.raises(ValueError):
         ConfigValidator._validate_non_negative_integer(-1)
 
 
 def test_validate_non_negative_integer_respects_max_val():
+    """A value above max_val raises ValueError containing '<='."""
     with pytest.raises(ValueError, match="<="):
         ConfigValidator._validate_non_negative_integer(101, max_val=100)
 
@@ -361,14 +398,17 @@ def test_validate_non_negative_integer_respects_max_val():
 
 
 def test_validate_string_or_none_none_returns_none():
+    """_validate_string_or_none(None) returns None."""
     assert ConfigValidator._validate_string_or_none(None) is None
 
 
 def test_validate_string_or_none_string_returned_unchanged():
+    """_validate_string_or_none('hello') returns 'hello' unchanged."""
     assert ConfigValidator._validate_string_or_none("hello") == "hello"
 
 
 def test_validate_string_or_none_non_string_non_none_raises():
+    """A non-string, non-None value raises TypeError containing 'string or None'."""
     with pytest.raises(TypeError, match="string or None"):
         ConfigValidator._validate_string_or_none(42)
 
@@ -379,36 +419,43 @@ def test_validate_string_or_none_non_string_non_none_raises():
 
 
 def test_validate_string_list_non_list_raises():
+    """A non-list argument raises TypeError containing 'list'."""
     with pytest.raises(TypeError, match="list"):
         ConfigValidator._validate_string_list("not-a-list")
 
 
 def test_validate_string_list_too_short_raises():
+    """A list shorter than min_length raises ValueError containing 'at least 2'."""
     with pytest.raises(ValueError, match="at least 2"):
         ConfigValidator._validate_string_list(["one"], min_length=2)
 
 
 def test_validate_string_list_non_string_item_raises():
+    """A list containing a non-string item raises TypeError containing 'string'."""
     with pytest.raises(TypeError, match="string"):
         ConfigValidator._validate_string_list([1, 2, 3])
 
 
 def test_validate_string_list_item_not_in_allowed_values_raises():
+    """An item absent from allowed_values raises ValueError containing 'not a valid'."""
     with pytest.raises(ValueError, match="not a valid"):
         ConfigValidator._validate_string_list(["bad"], allowed_values=["good"])
 
 
 def test_validate_string_list_item_not_matching_regex_raises():
+    """An item not matching regex_pattern raises ValueError containing 'does not match'."""
     with pytest.raises(ValueError, match="does not match"):
         ConfigValidator._validate_string_list(["ABC"], regex_pattern="^[a-z]+$")
 
 
 def test_validate_string_list_invalid_regex_pattern_raises():
+    """An invalid regex_pattern raises ValueError containing 'Invalid regex'."""
     with pytest.raises(ValueError, match="Invalid regex"):
         ConfigValidator._validate_string_list(["x"], regex_pattern="[unclosed")
 
 
 def test_validate_string_list_valid_all_constraints():
+    """A valid list satisfying all constraints (min_length, allowed_values, regex) is returned unchanged."""
     items = ["abc", "def"]
     result = ConfigValidator._validate_string_list(
         items,
@@ -425,6 +472,7 @@ def test_validate_string_list_valid_all_constraints():
 
 
 def test_recipient_basic_settings_retry_above_max_raises():
+    """_validate_recipient_basic_settings() raises FieldValidationError('retry_attempts') when retry_attempts > RCPT_MAX_RETRY_ATTEMPTS."""
     with pytest.raises(FieldValidationError) as exc_info:
         ConfigValidator._validate_recipient_basic_settings(
             retry_attempts=RCPT_MAX_RETRY_ATTEMPTS + 1,
@@ -436,9 +484,10 @@ def test_recipient_basic_settings_retry_above_max_raises():
 
 
 def test_recipient_basic_settings_non_int_retry_raises():
+    """A non-integer retry_attempts raises FieldValidationError on field 'retry_attempts'."""
     with pytest.raises(FieldValidationError) as exc_info:
         ConfigValidator._validate_recipient_basic_settings(
-            retry_attempts="three",
+            retry_attempts="three",  # pyright: ignore[reportArgumentType]
             rate_limit=0,
             notification_types=[NotificationType.INFO],
             blocked_sources_pattern=None,
@@ -447,6 +496,7 @@ def test_recipient_basic_settings_non_int_retry_raises():
 
 
 def test_recipient_basic_settings_rate_limit_above_max_raises():
+    """A rate_limit above the ValidationContext maximum raises FieldValidationError on field 'rate_limit'."""
     ctx = ValidationContext()
     with pytest.raises(FieldValidationError) as exc_info:
         ConfigValidator._validate_recipient_basic_settings(
@@ -460,6 +510,7 @@ def test_recipient_basic_settings_rate_limit_above_max_raises():
 
 
 def test_recipient_basic_settings_invalid_notification_type_string_raises():
+    """An unrecognised notification type string raises FieldValidationError on field 'notification_types'."""
     with pytest.raises(FieldValidationError) as exc_info:
         ConfigValidator._validate_recipient_basic_settings(
             retry_attempts=0,
@@ -471,6 +522,7 @@ def test_recipient_basic_settings_invalid_notification_type_string_raises():
 
 
 def test_recipient_basic_settings_non_notification_type_object_raises():
+    """A non-NotificationType object in notification_types raises FieldValidationError on field 'notification_types'."""
     with pytest.raises(FieldValidationError) as exc_info:
         ConfigValidator._validate_recipient_basic_settings(
             retry_attempts=0,
@@ -482,6 +534,7 @@ def test_recipient_basic_settings_non_notification_type_object_raises():
 
 
 def test_recipient_basic_settings_invalid_blocked_sources_regex_raises():
+    """An invalid regex for blocked_sources_pattern raises FieldValidationError on a 'blocked_sources' field."""
     with pytest.raises(FieldValidationError) as exc_info:
         ConfigValidator._validate_recipient_basic_settings(
             retry_attempts=0,
@@ -494,6 +547,7 @@ def test_recipient_basic_settings_invalid_blocked_sources_regex_raises():
 
 
 def test_recipient_basic_settings_all_valid_with_context():
+    """_validate_recipient_basic_settings() with all valid arguments and a ValidationContext does not raise."""
     ctx = ValidationContext()
     # Must not raise
     ConfigValidator._validate_recipient_basic_settings(
@@ -511,6 +565,7 @@ def test_recipient_basic_settings_all_valid_with_context():
 
 
 def test_channel_mapping_tts_rejects_notify():
+    """A TTS recipient with a 'notify.*' channel raises FieldValidationError."""
     with pytest.raises(FieldValidationError):
         ConfigValidator._validate_recipient_channel_mapping(
             channels_low=["notify.mobile_app"],
@@ -523,6 +578,7 @@ def test_channel_mapping_tts_rejects_notify():
 
 def test_channel_mapping_tts_accepts_media_player():
     # Must not raise
+    """A TTS recipient with a 'media_player.*' channel does not raise."""
     ConfigValidator._validate_recipient_channel_mapping(
         channels_low=["media_player.bedroom"],
         channels_medium=None,
@@ -533,6 +589,7 @@ def test_channel_mapping_tts_accepts_media_player():
 
 
 def test_channel_mapping_non_tts_rejects_media_player():
+    """A non-TTS recipient with a 'media_player.*' channel raises FieldValidationError."""
     with pytest.raises(FieldValidationError):
         ConfigValidator._validate_recipient_channel_mapping(
             channels_low=["media_player.bedroom"],
@@ -545,6 +602,7 @@ def test_channel_mapping_non_tts_rejects_media_player():
 
 def test_channel_mapping_non_tts_accepts_notify():
     # Must not raise
+    """A non-TTS recipient with a 'notify.*' channel does not raise."""
     ConfigValidator._validate_recipient_channel_mapping(
         channels_low=["notify.mobile_app"],
         channels_medium=None,
@@ -556,6 +614,7 @@ def test_channel_mapping_non_tts_accepts_notify():
 
 def test_channel_mapping_none_recipient_type_accepts_both():
     # Must not raise for either channel pattern
+    """When recipient_type is None, both 'notify.*' and 'media_player.*' channels are accepted."""
     ConfigValidator._validate_recipient_channel_mapping(
         channels_low=["notify.mobile_app"],
         channels_medium=["media_player.bedroom"],
@@ -566,6 +625,7 @@ def test_channel_mapping_none_recipient_type_accepts_both():
 
 
 def test_channel_mapping_channel_not_in_available_raises():
+    """A channel not present in available_channels raises FieldValidationError."""
     with pytest.raises(FieldValidationError):
         ConfigValidator._validate_recipient_channel_mapping(
             channels_low=["notify.mobile_app"],
@@ -579,6 +639,7 @@ def test_channel_mapping_channel_not_in_available_raises():
 
 def test_channel_mapping_none_channel_lists_ignored():
     # All None lists should silently pass regardless of recipient_type
+    """All-None channel lists silently pass regardless of recipient_type."""
     ConfigValidator._validate_recipient_channel_mapping(
         channels_low=None,
         channels_medium=None,
@@ -594,6 +655,7 @@ def test_channel_mapping_none_channel_lists_ignored():
 
 
 def test_validate_recipient_consistency_matching_passes():
+    """A GENERIC recipient with 'notify.*' channels is consistent and does not raise."""
     data = SimpleNamespace(type=RecipientType.GENERIC)
     config = SimpleNamespace(
         channels_low=["notify.mobile_app"],
@@ -606,6 +668,7 @@ def test_validate_recipient_consistency_matching_passes():
 
 def test_validate_recipient_consistency_mismatch_raises():
     # TTS recipient but notify.* channel — incompatible
+    """A TTS recipient with a 'notify.*' channel raises FieldValidationError."""
     data = SimpleNamespace(type=RecipientType.TTS)
     config = SimpleNamespace(
         channels_low=["notify.mobile_app"],
@@ -623,6 +686,7 @@ def test_validate_recipient_consistency_mismatch_raises():
 
 
 def test_dnd_non_bool_enabled_raises():
+    """A non-bool dnd_enabled value raises FieldValidationError on field 'dnd_enabled'."""
     with pytest.raises(FieldValidationError) as exc_info:
         ConfigValidator._validate_recipient_dnd_settings(
             dnd_enabled="yes",
@@ -634,6 +698,7 @@ def test_dnd_non_bool_enabled_raises():
 
 
 def test_dnd_enabled_only_start_set_raises():
+    """DND enabled with dnd_start set but dnd_end missing raises FieldValidationError."""
     with pytest.raises(FieldValidationError):
         ConfigValidator._validate_recipient_dnd_settings(
             dnd_enabled=True,
@@ -644,6 +709,7 @@ def test_dnd_enabled_only_start_set_raises():
 
 
 def test_dnd_enabled_only_end_set_raises():
+    """DND enabled with dnd_end set but dnd_start missing raises FieldValidationError."""
     with pytest.raises(FieldValidationError):
         ConfigValidator._validate_recipient_dnd_settings(
             dnd_enabled=True,
@@ -654,6 +720,7 @@ def test_dnd_enabled_only_end_set_raises():
 
 
 def test_dnd_allowed_types_not_list_raises():
+    """A non-list dnd_allowed_types raises FieldValidationError on field 'dnd_allowed_types'."""
     with pytest.raises(FieldValidationError) as exc_info:
         ConfigValidator._validate_recipient_dnd_settings(
             dnd_enabled=False,
@@ -666,6 +733,7 @@ def test_dnd_allowed_types_not_list_raises():
 
 
 def test_dnd_allowed_types_invalid_string_raises():
+    """An unrecognised type string in dnd_allowed_types raises FieldValidationError on field 'dnd_allowed_types'."""
     with pytest.raises(FieldValidationError) as exc_info:
         ConfigValidator._validate_recipient_dnd_settings(
             dnd_enabled=False,
@@ -678,6 +746,7 @@ def test_dnd_allowed_types_invalid_string_raises():
 
 
 def test_dnd_allowed_criticalities_not_list_raises():
+    """A non-list dnd_allowed_criticalities raises FieldValidationError on field 'dnd_allowed_criticalities'."""
     with pytest.raises(FieldValidationError) as exc_info:
         ConfigValidator._validate_recipient_dnd_settings(
             dnd_enabled=False,
@@ -691,6 +760,7 @@ def test_dnd_allowed_criticalities_not_list_raises():
 
 def test_dnd_allowed_types_valid_passes():
     # Must not raise with valid type strings
+    """Valid dnd_allowed_types strings ('INFO', 'ALERT') do not raise."""
     ConfigValidator._validate_recipient_dnd_settings(
         dnd_enabled=False,
         dnd_start=None,
@@ -717,6 +787,7 @@ def _valid_basic_settings(**overrides) -> dict:
 
 
 def test_recipient_basic_settings_schema_valid():
+    """validate_recipient_basic_settings_schema() accepts a valid dict and normalises values."""
     ctx = ValidationContext()
     result = ConfigValidator.validate_recipient_basic_settings_schema(
         _valid_basic_settings(), ctx
@@ -727,6 +798,7 @@ def test_recipient_basic_settings_schema_valid():
 
 
 def test_recipient_basic_settings_schema_retry_above_max_raises():
+    """retry_attempts above RCPT_MAX_RETRY_ATTEMPTS raises vol.Invalid."""
     ctx = ValidationContext()
     with pytest.raises(vol.Invalid):
         ConfigValidator.validate_recipient_basic_settings_schema(
@@ -735,6 +807,7 @@ def test_recipient_basic_settings_schema_retry_above_max_raises():
 
 
 def test_recipient_basic_settings_schema_rate_limit_above_max_raises():
+    """A rate_limit above the context maximum raises vol.Invalid."""
     ctx = ValidationContext()
     with pytest.raises(vol.Invalid):
         ConfigValidator.validate_recipient_basic_settings_schema(
@@ -744,6 +817,7 @@ def test_recipient_basic_settings_schema_rate_limit_above_max_raises():
 
 
 def test_recipient_basic_settings_schema_empty_notification_types_raises():
+    """An empty notification_types list raises vol.Invalid."""
     ctx = ValidationContext()
     with pytest.raises(vol.Invalid):
         ConfigValidator.validate_recipient_basic_settings_schema(
@@ -752,6 +826,7 @@ def test_recipient_basic_settings_schema_empty_notification_types_raises():
 
 
 def test_recipient_basic_settings_schema_invalid_blocked_regex_raises():
+    """An invalid blocked_sources_pattern regex raises vol.Invalid."""
     ctx = ValidationContext()
     with pytest.raises(vol.Invalid):
         ConfigValidator.validate_recipient_basic_settings_schema(
@@ -765,12 +840,14 @@ def test_recipient_basic_settings_schema_invalid_blocked_regex_raises():
 
 
 def test_recipient_channel_mapping_schema_empty_dict_passes():
+    """validate_recipient_channel_mapping_schema({}, ctx) accepts an empty mapping without raising."""
     ctx = ValidationContext(available_channels=["notify.mobile_app"])
     result = ConfigValidator.validate_recipient_channel_mapping_schema({}, ctx)
     assert result is not None
 
 
 def test_recipient_channel_mapping_schema_valid_channel_passes():
+    """A channel present in available_channels is accepted and stored in the result."""
     ctx = ValidationContext(available_channels=["notify.mobile_app"])
     result = ConfigValidator.validate_recipient_channel_mapping_schema(
         {"channels_low": ["notify.mobile_app"]}, ctx
@@ -783,6 +860,7 @@ def test_recipient_channel_mapping_schema_channel_not_available_accepts():
     # Because vol.Length(min=0) accepts *any* list (length >= 0), the fallback branch
     # makes invalid channels silently pass.  This test documents the current (known)
     # behaviour rather than the desired behaviour.
+    """Due to the vol.Length(min=0) fallback branch, unavailable channels are silently accepted (documented behaviour)."""
     ctx = ValidationContext(available_channels=["notify.other"])
     result = ConfigValidator.validate_recipient_channel_mapping_schema(
         {"channels_low": ["notify.mobile_app"]}, ctx
@@ -791,6 +869,7 @@ def test_recipient_channel_mapping_schema_channel_not_available_accepts():
 
 
 def test_recipient_channel_mapping_schema_extra_key_raises():
+    """An unknown key in the channel mapping dict raises vol.Invalid."""
     ctx = ValidationContext(available_channels=[])
     with pytest.raises(vol.Invalid):
         ConfigValidator.validate_recipient_channel_mapping_schema(
@@ -817,12 +896,14 @@ def _valid_dnd_data(**overrides) -> dict:
 
 
 def test_dnd_settings_schema_valid_passes():
+    """A valid DND settings dict is accepted and its values preserved in the result."""
     result = ConfigValidator.validate_recipient_dnd_settings_schema(_valid_dnd_data())
     assert result["dnd_enabled"] is True
     assert result["dnd_start"] == "22:00"
 
 
 def test_dnd_settings_schema_enabled_no_start_raises():
+    """DND enabled without dnd_start raises vol.Invalid."""
     data = _valid_dnd_data()
     del data["dnd_start"]
     with pytest.raises(vol.Invalid):
@@ -830,6 +911,7 @@ def test_dnd_settings_schema_enabled_no_start_raises():
 
 
 def test_dnd_settings_schema_enabled_no_end_raises():
+    """DND enabled without dnd_end raises vol.Invalid."""
     data = _valid_dnd_data()
     del data["dnd_end"]
     with pytest.raises(vol.Invalid):
@@ -837,6 +919,7 @@ def test_dnd_settings_schema_enabled_no_end_raises():
 
 
 def test_dnd_settings_schema_same_start_end_raises():
+    """Equal dnd_start and dnd_end values raise vol.Invalid."""
     with pytest.raises(vol.Invalid):
         ConfigValidator.validate_recipient_dnd_settings_schema(
             _valid_dnd_data(dnd_start="22:00", dnd_end="22:00")
@@ -844,6 +927,7 @@ def test_dnd_settings_schema_same_start_end_raises():
 
 
 def test_dnd_settings_schema_invalid_criticality_raises():
+    """An unrecognised criticality string in dnd_allowed_criticalities raises vol.Invalid."""
     with pytest.raises(vol.Invalid):
         ConfigValidator.validate_recipient_dnd_settings_schema(
             _valid_dnd_data(dnd_allowed_criticalities=["NOT_A_CRITICALITY"])
@@ -851,6 +935,7 @@ def test_dnd_settings_schema_invalid_criticality_raises():
 
 
 def test_dnd_settings_schema_invalid_notification_type_raises():
+    """An unrecognised notification type string in dnd_allowed_types raises vol.Invalid."""
     with pytest.raises(vol.Invalid):
         ConfigValidator.validate_recipient_dnd_settings_schema(
             _valid_dnd_data(dnd_allowed_types=["NOT_A_TYPE"])
@@ -877,16 +962,19 @@ def _raw_recipient(**overrides) -> SimpleNamespace:
 
 
 def test_validate_recipient_valid_passes():
+    """validate_recipient() accepts a well-formed recipient namespace without raising."""
     ConfigValidator.validate_recipient(_raw_recipient())  # must not raise
 
 
 def test_validate_recipient_empty_id_raises():
+    """An empty id raises FieldValidationError on field 'id'."""
     with pytest.raises(FieldValidationError) as exc_info:
         ConfigValidator.validate_recipient(_raw_recipient(id=""))
     assert exc_info.value.field == "id"
 
 
 def test_validate_recipient_empty_name_raises():
+    """An empty name raises FieldValidationError on field 'name'."""
     with pytest.raises(FieldValidationError) as exc_info:
         ConfigValidator.validate_recipient(_raw_recipient(name=""))
     assert exc_info.value.field == "name"
@@ -899,16 +987,19 @@ def test_validate_recipient_invalid_email_raises():
     # exercised via validate_recipient_definition_schema.
     # This test documents the end-to-end behaviour: a bad email is silently
     # accepted by validate_recipient because _validate_email_format doesn't raise.
+    """Due to the vol.Email quirk, validate_recipient() silently accepts a malformed email address."""
     ConfigValidator.validate_recipient(_raw_recipient(email="not-an-email"))
 
 
 def test_validate_recipient_invalid_phone_raises():
+    """An invalid phone number raises FieldValidationError on field 'phone'."""
     with pytest.raises(FieldValidationError) as exc_info:
         ConfigValidator.validate_recipient(_raw_recipient(phone="00000000"))
     assert exc_info.value.field == "phone"
 
 
 def test_validate_recipient_version_below_one_raises():
+    """A version below 1 raises FieldValidationError on field 'version'."""
     with pytest.raises(FieldValidationError) as exc_info:
         ConfigValidator.validate_recipient(_raw_recipient(version=0))
     assert exc_info.value.field == "version"
@@ -945,10 +1036,12 @@ def _raw_config(**overrides) -> SimpleNamespace:
 
 
 def test_validate_recipient_config_valid_passes():
+    """validate_recipient_config() accepts a well-formed config namespace without raising."""
     ConfigValidator.validate_recipient_config(_raw_config())  # must not raise
 
 
 def test_validate_recipient_config_invalid_retry_raises():
+    """retry_attempts above RCPT_MAX_RETRY_ATTEMPTS raises FieldValidationError on field 'retry_attempts'."""
     with pytest.raises(FieldValidationError) as exc_info:
         ConfigValidator.validate_recipient_config(
             _raw_config(retry_attempts=RCPT_MAX_RETRY_ATTEMPTS + 1)
@@ -957,6 +1050,7 @@ def test_validate_recipient_config_invalid_retry_raises():
 
 
 def test_validate_recipient_config_invalid_channel_raises():
+    """A malformed channel name (no dot separator) raises FieldValidationError."""
     with pytest.raises(FieldValidationError):
         ConfigValidator.validate_recipient_config(
             # TTS channel in a non-TTS config (no recipient_type enforced here —
@@ -966,6 +1060,7 @@ def test_validate_recipient_config_invalid_channel_raises():
 
 
 def test_validate_recipient_config_invalid_dnd_raises():
+    """A non-bool dnd_enabled raises FieldValidationError on field 'dnd_enabled'."""
     with pytest.raises(FieldValidationError) as exc_info:
         ConfigValidator.validate_recipient_config(
             _raw_config(dnd_enabled="yes")  # non-bool dnd_enabled
@@ -974,6 +1069,7 @@ def test_validate_recipient_config_invalid_dnd_raises():
 
 
 def test_validate_recipient_config_version_below_one_raises():
+    """A version below 1 raises FieldValidationError on field 'version'."""
     with pytest.raises(FieldValidationError) as exc_info:
         ConfigValidator.validate_recipient_config(_raw_config(version=0))
     assert exc_info.value.field == "version"
@@ -1002,22 +1098,26 @@ def _raw_sys_config(**overrides) -> SimpleNamespace:
 
 
 def test_validate_system_config_valid_passes():
+    """validate_system_config() accepts a well-formed system config namespace without raising."""
     ConfigValidator.validate_system_config(_raw_sys_config())  # must not raise
 
 
 def test_validate_system_config_negative_rate_limit_raises():
+    """A negative global_rate_limit raises FieldValidationError on field 'global_rate_limit'."""
     with pytest.raises(FieldValidationError) as exc_info:
         ConfigValidator.validate_system_config(_raw_sys_config(global_rate_limit=-1))
     assert exc_info.value.field == "global_rate_limit"
 
 
 def test_validate_system_config_retry_base_delay_below_one_raises():
+    """retry_base_delay of 0 raises FieldValidationError on field 'retry_base_delay'."""
     with pytest.raises(FieldValidationError) as exc_info:
         ConfigValidator.validate_system_config(_raw_sys_config(retry_base_delay=0))
     assert exc_info.value.field == "retry_base_delay"
 
 
 def test_validate_system_config_retry_backoff_below_one_raises():
+    """retry_backoff_factor below 1.0 raises FieldValidationError on field 'retry_backoff_factor'."""
     with pytest.raises(FieldValidationError) as exc_info:
         ConfigValidator.validate_system_config(
             _raw_sys_config(retry_backoff_factor=0.5)
@@ -1026,18 +1126,21 @@ def test_validate_system_config_retry_backoff_below_one_raises():
 
 
 def test_validate_system_config_retry_max_delay_below_60_raises():
+    """retry_max_delay below 60 raises FieldValidationError on field 'retry_max_delay'."""
     with pytest.raises(FieldValidationError) as exc_info:
         ConfigValidator.validate_system_config(_raw_sys_config(retry_max_delay=59))
     assert exc_info.value.field == "retry_max_delay"
 
 
 def test_validate_system_config_queue_concurrency_below_one_raises():
+    """queue_max_concurrency of 0 raises FieldValidationError on field 'queue_max_concurrency'."""
     with pytest.raises(FieldValidationError) as exc_info:
         ConfigValidator.validate_system_config(_raw_sys_config(queue_max_concurrency=0))
     assert exc_info.value.field == "queue_max_concurrency"
 
 
 def test_validate_system_config_storage_retention_negative_raises():
+    """A negative storage_retention_days raises FieldValidationError on field 'storage_retention_days'."""
     with pytest.raises(FieldValidationError) as exc_info:
         ConfigValidator.validate_system_config(
             _raw_sys_config(storage_retention_days=-1)
@@ -1046,6 +1149,7 @@ def test_validate_system_config_storage_retention_negative_raises():
 
 
 def test_validate_system_config_no_channels_no_persistent_raises():
+    """Empty enabled_channels with persistent_notifications_enabled=False raises FieldValidationError('enabled_channels')."""
     with pytest.raises(FieldValidationError) as exc_info:
         ConfigValidator.validate_system_config(
             _raw_sys_config(enabled_channels=[], persistent_notifications_enabled=False)
@@ -1054,6 +1158,7 @@ def test_validate_system_config_no_channels_no_persistent_raises():
 
 
 def test_validate_system_config_malformed_channel_raises():
+    """A channel name without a dot separator raises FieldValidationError on field 'enabled_channels'."""
     with pytest.raises(FieldValidationError) as exc_info:
         ConfigValidator.validate_system_config(
             _raw_sys_config(
@@ -1065,6 +1170,7 @@ def test_validate_system_config_malformed_channel_raises():
 
 
 def test_validate_system_config_version_below_one_raises():
+    """A version below 1 raises FieldValidationError on field 'version'."""
     with pytest.raises(FieldValidationError) as exc_info:
         ConfigValidator.validate_system_config(_raw_sys_config(version=0))
     assert exc_info.value.field == "version"
@@ -1089,28 +1195,28 @@ def _make_mock_hass(
 
 
 async def test_tts_service_none_string_returns_none():
-    from ..config.validator import validate_tts_service
+    """validate_tts_service(hass, 'None') returns None."""
 
     result = await validate_tts_service(_make_mock_hass(), "None")
     assert result is None
 
 
 async def test_tts_service_none_value_returns_none():
-    from ..config.validator import validate_tts_service
+    """validate_tts_service(hass, None) returns None."""
 
     result = await validate_tts_service(_make_mock_hass(), None)
     assert result is None
 
 
 async def test_tts_service_empty_string_returns_none():
-    from ..config.validator import validate_tts_service
+    """validate_tts_service(hass, '') returns None."""
 
     result = await validate_tts_service(_make_mock_hass(), "")
     assert result is None
 
 
 async def test_tts_service_not_starting_with_tts_raises():
-    from ..config.validator import validate_tts_service
+    """A service ID not prefixed with 'tts.' raises vol.Invalid."""
 
     with pytest.raises(vol.Invalid, match="tts\\."):
         await validate_tts_service(_make_mock_hass(), "media_player.bedroom")
@@ -1125,14 +1231,14 @@ async def test_tts_service_not_starting_with_tts_raises():
     ],
 )
 async def test_tts_service_invalid_chars_raises(bad_value):
-    from ..config.validator import validate_tts_service
+    """Service IDs with spaces, uppercase letters, or hyphens raise vol.Invalid."""
 
     with pytest.raises(vol.Invalid):
         await validate_tts_service(_make_mock_hass(), bad_value)
 
 
 async def test_tts_service_entity_absent_raises():
-    from ..config.validator import validate_tts_service
+    """A well-formed service ID whose state entity is absent raises vol.Invalid listing available entities."""
 
     hass = _make_mock_hass(entity_present=False, entity_ids=["tts.piper"])
     with pytest.raises(vol.Invalid, match="tts.piper"):
@@ -1140,7 +1246,7 @@ async def test_tts_service_entity_absent_raises():
 
 
 async def test_tts_service_entity_present_returns_entity_id():
-    from ..config.validator import validate_tts_service
+    """A well-formed service ID whose entity exists in the state machine is returned unchanged."""
 
     result = await validate_tts_service(
         _make_mock_hass(entity_present=True), "tts.piper"
@@ -1154,16 +1260,19 @@ async def test_tts_service_entity_present_returns_entity_id():
 
 
 def test_validation_context_max_global_rate_limit_no_system_limits():
+    """When system_limits is None, get_max_global_rate_limit() returns the global constant SYS_MAX_GLOBAL_RATE_LIMIT."""
     ctx = ValidationContext(system_limits=None)
     assert ctx.get_max_global_rate_limit() == SYS_MAX_GLOBAL_RATE_LIMIT
 
 
 def test_validation_context_max_global_rate_limit_custom():
+    """When system_limits provides a 'global_rate_limit', get_max_global_rate_limit() returns that value."""
     ctx = ValidationContext(system_limits={"global_rate_limit": 500})
     assert ctx.get_max_global_rate_limit() == 500
 
 
 def test_validation_context_max_recipient_rate_limit():
+    """get_max_recipient_rate_limit() returns RCPT_MAX_RATE_LIMIT."""
     ctx = ValidationContext()
     assert ctx.get_max_recipient_rate_limit() == RCPT_MAX_RATE_LIMIT
 
@@ -1174,11 +1283,13 @@ def test_validation_context_max_recipient_rate_limit():
 
 
 def test_field_validation_error_str():
+    """str(FieldValidationError) formats as 'field: message'."""
     err = FieldValidationError("my_field", "Something went wrong")
     assert str(err) == "my_field: Something went wrong"
 
 
 def test_field_validation_error_placeholders_accessible():
+    """FieldValidationError exposes .field, .message, and .placeholders attributes."""
     placeholders = {"min": "0", "max": "100"}
     err = FieldValidationError("my_field", "Out of range", placeholders=placeholders)
     assert err.placeholders == {"min": "0", "max": "100"}

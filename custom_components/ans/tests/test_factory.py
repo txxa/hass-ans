@@ -6,14 +6,19 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from custom_components.ans.delivery.factory import (
+from ..channels.channel_manager import ChannelManager
+from ..delivery.factory import (
     _ALL_ADAPTER_CLASSES,
     ADAPTER_CLASS_MAP,
     ANSSystem,
     _create_channel_manager,
+    _create_processor_factory,
     create_system,
 )
-from custom_components.ans.models import SystemConfig
+from ..delivery.processor import (
+    NotificationDeliveryProcessor,
+)
+from ..models import SystemConfig
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -49,12 +54,14 @@ def _make_config_repo(system_config: SystemConfig | None = None) -> MagicMock:
 
 
 def _make_volume_registry() -> MagicMock:
+    """Return a minimal mock VolumeRestorationRegistry."""
     return MagicMock()
 
 
 def _make_hass() -> MagicMock:
+    """Return a mock HomeAssistant instance with config.path() set to a temp directory."""
     hass = MagicMock()
-    hass.config.path.return_value = "/tmp/ans_test/.storage/file.json"
+    hass.config.path.return_value = "/tmp/ans_test/.storage/file.json"  # noqa: S108
     return hass
 
 
@@ -64,6 +71,8 @@ def _make_hass() -> MagicMock:
 
 
 class TestAdapterClassMap:
+    """Verify that ADAPTER_CLASS_MAP is consistent with _ALL_ADAPTER_CLASSES — no missing and no extra entries."""
+
     def test_map_contains_all_adapter_classes(self):
         """Every registered adapter class must appear in the channel map."""
         for cls in _ALL_ADAPTER_CLASSES:
@@ -79,6 +88,7 @@ class TestAdapterClassMap:
         assert set(ADAPTER_CLASS_MAP.keys()) == expected_prefixes
 
     def test_map_values_are_classes(self):
+        """Every value in ADAPTER_CLASS_MAP is a class and every key is a non-empty string prefix."""
         for prefix, cls in ADAPTER_CLASS_MAP.items():
             assert isinstance(prefix, str) and prefix
             assert isinstance(cls, type)
@@ -90,15 +100,17 @@ class TestAdapterClassMap:
 
 
 class TestCreateChannelManager:
+    """Verify that _create_channel_manager() returns a ChannelManager with all adapter factories registered."""
+
     def test_returns_channel_manager_instance(self):
-        from custom_components.ans.channels.channel_manager import ChannelManager
+        """_create_channel_manager() returns a ChannelManager instance."""
 
         hass = _make_hass()
         repo = _make_config_repo()
         vol_reg = _make_volume_registry()
 
         with (
-            patch.object(ChannelManager, "register_factory") as mock_register,
+            patch.object(ChannelManager, "register_factory"),
             patch.object(ChannelManager, "initialize_static_adapters"),
         ):
             mgr = _create_channel_manager(hass, repo, vol_reg)
@@ -107,7 +119,6 @@ class TestCreateChannelManager:
 
     def test_registers_all_adapter_factories(self):
         """One factory must be registered per adapter class."""
-        from custom_components.ans.channels.channel_manager import ChannelManager
 
         hass = _make_hass()
         repo = _make_config_repo()
@@ -128,27 +139,26 @@ class TestCreateChannelManager:
 
 
 class TestCreateSystemHappyPath:
+    """Verify that create_system() builds a fully populated ANSSystem from a valid config repository."""
+
     def test_returns_ans_system(self):
+        """create_system() returns an ANSSystem instance."""
         hass = _make_hass()
         repo = _make_config_repo()
         vol_reg = _make_volume_registry()
 
         with (
-            patch(
-                "custom_components.ans.delivery.factory._create_channel_manager"
-            ) as mock_cm_factory,
-            patch("custom_components.ans.delivery.factory.NotificationRegistry"),
-            patch("custom_components.ans.delivery.factory.DeliveryAttemptLog"),
-            patch("custom_components.ans.delivery.factory.RetryQueue"),
-            patch("custom_components.ans.delivery.factory.FilterEngine"),
-            patch("custom_components.ans.delivery.factory.RateLimiter"),
-            patch("custom_components.ans.delivery.factory.RetryPolicy"),
-            patch(
-                "custom_components.ans.delivery.factory.NotificationDeliveryTaskQueue"
-            ),
-            patch("custom_components.ans.delivery.factory.DeduplicationService"),
-            patch("custom_components.ans.delivery.factory.NotificationOrchestrator"),
-            patch("custom_components.ans.delivery.factory.HousekeepingScheduler"),
+            patch("ans.delivery.factory._create_channel_manager") as mock_cm_factory,
+            patch("ans.delivery.factory.NotificationRegistry"),
+            patch("ans.delivery.factory.DeliveryAttemptLog"),
+            patch("ans.delivery.factory.RetryQueue"),
+            patch("ans.delivery.factory.FilterEngine"),
+            patch("ans.delivery.factory.RateLimiter"),
+            patch("ans.delivery.factory.RetryPolicy"),
+            patch("ans.delivery.factory.NotificationDeliveryTaskQueue"),
+            patch("ans.delivery.factory.DeduplicationService"),
+            patch("ans.delivery.factory.NotificationOrchestrator"),
+            patch("ans.delivery.factory.HousekeepingScheduler"),
         ):
             mock_cm = MagicMock()
             mock_cm_factory.return_value = mock_cm
@@ -165,47 +175,47 @@ class TestCreateSystemHappyPath:
 
         with (
             patch(
-                "custom_components.ans.delivery.factory._create_channel_manager",
+                "ans.delivery.factory._create_channel_manager",
                 return_value=MagicMock(),
             ),
             patch(
-                "custom_components.ans.delivery.factory.NotificationRegistry",
+                "ans.delivery.factory.NotificationRegistry",
                 return_value=MagicMock(),
             ),
             patch(
-                "custom_components.ans.delivery.factory.DeliveryAttemptLog",
+                "ans.delivery.factory.DeliveryAttemptLog",
                 return_value=MagicMock(),
             ),
             patch(
-                "custom_components.ans.delivery.factory.RetryQueue",
+                "ans.delivery.factory.RetryQueue",
                 return_value=MagicMock(),
             ),
             patch(
-                "custom_components.ans.delivery.factory.FilterEngine",
+                "ans.delivery.factory.FilterEngine",
                 return_value=MagicMock(),
             ),
             patch(
-                "custom_components.ans.delivery.factory.RateLimiter",
+                "ans.delivery.factory.RateLimiter",
                 return_value=MagicMock(),
             ),
             patch(
-                "custom_components.ans.delivery.factory.RetryPolicy",
+                "ans.delivery.factory.RetryPolicy",
                 return_value=MagicMock(),
             ),
             patch(
-                "custom_components.ans.delivery.factory.NotificationDeliveryTaskQueue",
+                "ans.delivery.factory.NotificationDeliveryTaskQueue",
                 return_value=MagicMock(),
             ),
             patch(
-                "custom_components.ans.delivery.factory.DeduplicationService",
+                "ans.delivery.factory.DeduplicationService",
                 return_value=MagicMock(),
             ),
             patch(
-                "custom_components.ans.delivery.factory.NotificationOrchestrator",
+                "ans.delivery.factory.NotificationOrchestrator",
                 return_value=MagicMock(),
             ),
             patch(
-                "custom_components.ans.delivery.factory.HousekeepingScheduler",
+                "ans.delivery.factory.HousekeepingScheduler",
                 return_value=MagicMock(),
             ),
         ):
@@ -225,21 +235,21 @@ class TestCreateSystemHappyPath:
 
         with (
             patch(
-                "custom_components.ans.delivery.factory._create_channel_manager",
+                "ans.delivery.factory._create_channel_manager",
                 return_value=MagicMock(),
             ),
-            patch("custom_components.ans.delivery.factory.NotificationRegistry"),
-            patch("custom_components.ans.delivery.factory.DeliveryAttemptLog"),
-            patch("custom_components.ans.delivery.factory.RetryQueue"),
-            patch("custom_components.ans.delivery.factory.FilterEngine"),
-            patch("custom_components.ans.delivery.factory.RateLimiter"),
-            patch("custom_components.ans.delivery.factory.RetryPolicy"),
+            patch("ans.delivery.factory.NotificationRegistry"),
+            patch("ans.delivery.factory.DeliveryAttemptLog"),
+            patch("ans.delivery.factory.RetryQueue"),
+            patch("ans.delivery.factory.FilterEngine"),
+            patch("ans.delivery.factory.RateLimiter"),
+            patch("ans.delivery.factory.RetryPolicy"),
             patch(
-                "custom_components.ans.delivery.factory.NotificationDeliveryTaskQueue"
+                "ans.delivery.factory.NotificationDeliveryTaskQueue"
             ) as mock_queue_cls,
-            patch("custom_components.ans.delivery.factory.DeduplicationService"),
-            patch("custom_components.ans.delivery.factory.NotificationOrchestrator"),
-            patch("custom_components.ans.delivery.factory.HousekeepingScheduler"),
+            patch("ans.delivery.factory.DeduplicationService"),
+            patch("ans.delivery.factory.NotificationOrchestrator"),
+            patch("ans.delivery.factory.HousekeepingScheduler"),
         ):
             mock_queue_cls.return_value = MagicMock()
             create_system(hass=hass, config_repo=repo, volume_registry=vol_reg)
@@ -256,26 +266,22 @@ class TestCreateSystemHappyPath:
 
         with (
             patch(
-                "custom_components.ans.delivery.factory._create_channel_manager",
+                "ans.delivery.factory._create_channel_manager",
                 return_value=MagicMock(),
             ),
+            patch("ans.delivery.factory.NotificationRegistry") as mock_reg,
+            patch("ans.delivery.factory.DeliveryAttemptLog") as mock_log,
+            patch("ans.delivery.factory.RetryQueue"),
+            patch("ans.delivery.factory.FilterEngine"),
+            patch("ans.delivery.factory.RateLimiter"),
+            patch("ans.delivery.factory.RetryPolicy"),
             patch(
-                "custom_components.ans.delivery.factory.NotificationRegistry"
-            ) as mock_reg,
-            patch(
-                "custom_components.ans.delivery.factory.DeliveryAttemptLog"
-            ) as mock_log,
-            patch("custom_components.ans.delivery.factory.RetryQueue"),
-            patch("custom_components.ans.delivery.factory.FilterEngine"),
-            patch("custom_components.ans.delivery.factory.RateLimiter"),
-            patch("custom_components.ans.delivery.factory.RetryPolicy"),
-            patch(
-                "custom_components.ans.delivery.factory.NotificationDeliveryTaskQueue",
+                "ans.delivery.factory.NotificationDeliveryTaskQueue",
                 return_value=MagicMock(),
             ),
-            patch("custom_components.ans.delivery.factory.DeduplicationService"),
-            patch("custom_components.ans.delivery.factory.NotificationOrchestrator"),
-            patch("custom_components.ans.delivery.factory.HousekeepingScheduler"),
+            patch("ans.delivery.factory.DeduplicationService"),
+            patch("ans.delivery.factory.NotificationOrchestrator"),
+            patch("ans.delivery.factory.HousekeepingScheduler"),
         ):
             mock_reg.return_value = MagicMock()
             mock_log.return_value = MagicMock()
@@ -285,6 +291,7 @@ class TestCreateSystemHappyPath:
         assert mock_log.call_args.kwargs["enabled"] is True
 
     def test_audit_logging_disabled_passed_to_stores(self):
+        """When enable_audit_logging=False, NotificationRegistry and DeliveryAttemptLog are created with enabled=False."""
         hass = _make_hass()
         sc = _make_system_config(enable_audit_logging=False)
         repo = _make_config_repo(sc)
@@ -292,26 +299,22 @@ class TestCreateSystemHappyPath:
 
         with (
             patch(
-                "custom_components.ans.delivery.factory._create_channel_manager",
+                "ans.delivery.factory._create_channel_manager",
                 return_value=MagicMock(),
             ),
+            patch("ans.delivery.factory.NotificationRegistry") as mock_reg,
+            patch("ans.delivery.factory.DeliveryAttemptLog") as mock_log,
+            patch("ans.delivery.factory.RetryQueue"),
+            patch("ans.delivery.factory.FilterEngine"),
+            patch("ans.delivery.factory.RateLimiter"),
+            patch("ans.delivery.factory.RetryPolicy"),
             patch(
-                "custom_components.ans.delivery.factory.NotificationRegistry"
-            ) as mock_reg,
-            patch(
-                "custom_components.ans.delivery.factory.DeliveryAttemptLog"
-            ) as mock_log,
-            patch("custom_components.ans.delivery.factory.RetryQueue"),
-            patch("custom_components.ans.delivery.factory.FilterEngine"),
-            patch("custom_components.ans.delivery.factory.RateLimiter"),
-            patch("custom_components.ans.delivery.factory.RetryPolicy"),
-            patch(
-                "custom_components.ans.delivery.factory.NotificationDeliveryTaskQueue",
+                "ans.delivery.factory.NotificationDeliveryTaskQueue",
                 return_value=MagicMock(),
             ),
-            patch("custom_components.ans.delivery.factory.DeduplicationService"),
-            patch("custom_components.ans.delivery.factory.NotificationOrchestrator"),
-            patch("custom_components.ans.delivery.factory.HousekeepingScheduler"),
+            patch("ans.delivery.factory.DeduplicationService"),
+            patch("ans.delivery.factory.NotificationOrchestrator"),
+            patch("ans.delivery.factory.HousekeepingScheduler"),
         ):
             mock_reg.return_value = MagicMock()
             mock_log.return_value = MagicMock()
@@ -330,22 +333,22 @@ class TestCreateSystemHappyPath:
 
         with (
             patch(
-                "custom_components.ans.delivery.factory._create_channel_manager",
+                "ans.delivery.factory._create_channel_manager",
                 return_value=mock_cm,
             ),
-            patch("custom_components.ans.delivery.factory.NotificationRegistry"),
-            patch("custom_components.ans.delivery.factory.DeliveryAttemptLog"),
-            patch("custom_components.ans.delivery.factory.RetryQueue"),
-            patch("custom_components.ans.delivery.factory.FilterEngine"),
-            patch("custom_components.ans.delivery.factory.RateLimiter"),
-            patch("custom_components.ans.delivery.factory.RetryPolicy"),
+            patch("ans.delivery.factory.NotificationRegistry"),
+            patch("ans.delivery.factory.DeliveryAttemptLog"),
+            patch("ans.delivery.factory.RetryQueue"),
+            patch("ans.delivery.factory.FilterEngine"),
+            patch("ans.delivery.factory.RateLimiter"),
+            patch("ans.delivery.factory.RetryPolicy"),
             patch(
-                "custom_components.ans.delivery.factory.NotificationDeliveryTaskQueue",
+                "ans.delivery.factory.NotificationDeliveryTaskQueue",
                 return_value=MagicMock(),
             ),
-            patch("custom_components.ans.delivery.factory.DeduplicationService"),
-            patch("custom_components.ans.delivery.factory.NotificationOrchestrator"),
-            patch("custom_components.ans.delivery.factory.HousekeepingScheduler"),
+            patch("ans.delivery.factory.DeduplicationService"),
+            patch("ans.delivery.factory.NotificationOrchestrator"),
+            patch("ans.delivery.factory.HousekeepingScheduler"),
         ):
             create_system(hass=hass, config_repo=repo, volume_registry=vol_reg)
 
@@ -358,6 +361,8 @@ class TestCreateSystemHappyPath:
 
 
 class TestCreateSystemErrors:
+    """Verify that create_system() raises descriptively when the config repository is not properly loaded."""
+
     def test_raises_when_snapshot_returns_none(self):
         """create_system must raise ValueError when no system config is loaded."""
         hass = _make_hass()
@@ -374,6 +379,7 @@ class TestCreateSystemErrors:
             )
 
     def test_raises_when_snapshot_is_none(self):
+        """When config_repo.snapshot() returns None, create_system() raises ValueError or AttributeError."""
         hass = _make_hass()
         repo = MagicMock()
         repo.snapshot.return_value = None
@@ -385,10 +391,6 @@ class TestCreateSystemErrors:
 
     def test_processor_factory_callable_returns_processor(self):
         """The processor factory closure must return a NotificationDeliveryProcessor."""
-        from custom_components.ans.delivery.factory import _create_processor_factory
-        from custom_components.ans.delivery.processor import (
-            NotificationDeliveryProcessor,
-        )
 
         filter_engine = MagicMock()
         rate_limiter = MagicMock()
@@ -415,7 +417,6 @@ class TestCreateSystemErrors:
 
     def test_processor_factory_each_call_returns_new_instance(self):
         """Factory must produce a distinct instance on every call."""
-        from custom_components.ans.delivery.factory import _create_processor_factory
 
         factory = _create_processor_factory(
             filter_engine=MagicMock(),

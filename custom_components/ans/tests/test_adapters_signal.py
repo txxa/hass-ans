@@ -23,6 +23,7 @@ def _make_payload(
     message: str = "Hello world",
     metadata: dict | None = None,
 ) -> NotificationPayload:
+    """Build a minimal NotificationPayload for use in signal adapter tests."""
     return NotificationPayload(
         notification_id=str(uuid4()),
         source="test",
@@ -36,10 +37,12 @@ def _make_payload(
 
 
 def _make_contact(phone: str | None = "+49123456789") -> RecipientContactInfo:
+    """Build a RecipientContactInfo with an optional phone number."""
     return RecipientContactInfo(email_address=None, phone_number=phone)
 
 
 def _make_adapter() -> tuple[SignalDeliveryAdapter, MagicMock]:
+    """Create a SignalDeliveryAdapter with a fully mocked hass instance."""
     hass = MagicMock()
     hass.services = MagicMock()
     hass.services.async_call = AsyncMock()

@@ -22,6 +22,7 @@ from ..const import (
     RCPT_CONFIG_EMAIL_KEY,
     RCPT_CONFIG_NAME_KEY,
     RCPT_CONFIG_PHONE_KEY,
+    RCPT_MAX_RETRY_ATTEMPTS,
     SYS_CONFIG_GLOBAL_RATE_LIMIT_KEY,
     SYS_CONFIG_RETRY_BACKOFF_FACTOR_KEY,
     SYS_CONFIG_RETRY_BASE_DELAY_KEY,
@@ -110,7 +111,7 @@ def test_system_options_schema_without_retention_valid():
 
 
 @pytest.mark.parametrize(
-    "field,bad_value",
+    ("field", "bad_value"),
     [
         (SYS_CONFIG_RETRY_BASE_DELAY_KEY, 0),  # below minimum of 1
         (SYS_CONFIG_RETRY_MAX_DELAY_KEY, 59),  # below minimum of 60
@@ -201,7 +202,6 @@ def test_recipient_basic_settings_schema_rate_limit_out_of_range_raises():
 
 def test_recipient_basic_settings_schema_retry_out_of_range_raises():
     """retry_attempts above max raises vol.Invalid."""
-    from ..const import RCPT_MAX_RETRY_ATTEMPTS
 
     ctx = ValidationContext()
     schema = get_recipient_basic_settings_schema(

@@ -8,15 +8,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from homeassistant.util import dt as dt_util
 
-from ..channels.tts_mediaplayer import (
+from ...channels.tts_mediaplayer import (
     VOLUME_SCALE,
     TTSMediaPlayerAdapter,
     _calculate_target_volume,
 )
-from ..exceptions import TTSVolumeControlError
-from ..models.notification import NotificationCriticality
-from ..models.recipient import TTSSettings
-from ..persistence.volume_restoration import VolumeRestorationRegistry
+from ...exceptions import TTSVolumeControlError
+from ...models.notification import NotificationCriticality
+from ...models.recipient import TTSSettings
+from ...persistence.volume_restoration import VolumeRestorationRegistry
 
 
 def _make_tts_settings(**overrides) -> TTSSettings:

@@ -7,8 +7,8 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 from uuid import uuid4
 
-from ..models import Attempt, DeliveryStatus
-from ..persistence.memory import InMemoryAttemptStore, InMemoryDeliveryStateStore
+from ...models import Attempt, DeliveryStatus
+from ...persistence.memory import InMemoryAttemptStore, InMemoryDeliveryStateStore
 
 # ---------------------------------------------------------------------------
 # Helpers

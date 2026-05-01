@@ -8,18 +8,18 @@ from unittest.mock import MagicMock
 import pytest
 import voluptuous as vol
 
-from ..config.validator import (
+from ...config.validator import (
     ConfigValidator,
     FieldValidationError,
     ValidationContext,
     validate_tts_service,
 )
-from ..const import (
+from ...const import (
     RCPT_MAX_RATE_LIMIT,
     RCPT_MAX_RETRY_ATTEMPTS,
     SYS_MAX_GLOBAL_RATE_LIMIT,
 )
-from ..models import (
+from ...models import (
     NotificationType,
     RecipientType,
 )

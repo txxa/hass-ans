@@ -13,7 +13,7 @@ from custom_components.ans.models import (
     NotificationType,
 )
 
-from .conftest import make_dnd, make_payload, make_policy, make_task
+from ..conftest import make_dnd, make_payload, make_policy, make_task
 
 ENGINE = FilterEngine()
 

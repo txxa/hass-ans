@@ -15,19 +15,19 @@ from homeassistant.exceptions import (
     ServiceValidationError,
 )
 
-from ..channels.tts_mediaplayer import (
+from ...channels.tts_mediaplayer import (
     MAX_MESSAGE_LENGTH,
     TTSMediaPlayerAdapter,
     _calculate_target_volume,
 )
-from ..exceptions import TTSVolumeControlError
-from ..models.delivery import DeliveryStatus
-from ..models.notification import (
+from ...exceptions import TTSVolumeControlError
+from ...models.delivery import DeliveryStatus
+from ...models.notification import (
     NotificationCriticality,
     NotificationPayload,
     NotificationType,
 )
-from ..models.recipient import RecipientContactInfo, TTSSettings
+from ...models.recipient import RecipientContactInfo, TTSSettings
 
 
 def _make_payload(title="Alert", message="Test message") -> NotificationPayload:
@@ -453,7 +453,7 @@ async def test_successful_delivery_with_ssml_enabled():
     state.state = "idle"
     hass.states.get.return_value = state
 
-    from ..channels.base import TTSDeliveryOptions  # noqa: PLC0415
+    from ...channels.base import TTSDeliveryOptions  # noqa: PLC0415
 
     settings = replace(
         TTSSettings.default(),
@@ -571,7 +571,7 @@ async def test_unknown_message_format_returns_permanent_failure():
     hass.states.get.return_value = state
 
     # Bypass TTSSettings.__post_init__ validation by patching _format_message directly
-    from ..exceptions import TTSDeliveryError  # noqa: PLC0415
+    from ...exceptions import TTSDeliveryError  # noqa: PLC0415
 
     original_format = adapter._format_message
 
@@ -664,7 +664,7 @@ async def test_volume_management_disabled_skips_volume():
 
     settings = replace(TTSSettings.default(), volume_management_enabled=False)
 
-    from ..channels.base import TTSDeliveryOptions  # noqa: PLC0415
+    from ...channels.base import TTSDeliveryOptions  # noqa: PLC0415
 
     result = await adapter.deliver(
         payload=_make_payload(),

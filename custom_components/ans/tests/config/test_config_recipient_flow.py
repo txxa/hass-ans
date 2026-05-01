@@ -12,9 +12,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from homeassistant.data_entry_flow import FlowResultType
 
-from ..config.recipient_flow import RecipientConfigFlow
-from ..config.validator import ConfigValidator, FieldValidationError
-from ..const import (
+from ...config.recipient_flow import RecipientConfigFlow
+from ...config.validator import ConfigValidator, FieldValidationError
+from ...const import (
     PERSISTENT_NOTIFICATION_CHANNEL,
     RCPT_CONFIG_EMAIL_KEY,
     RCPT_CONFIG_ID_KEY,
@@ -39,7 +39,7 @@ from ..const import (
     SUBENTRY_FLOW_STEP_RECIPIENT_TTS_SETTINGS_KEY,
     SYS_DEFAULT_SYSTEM_RECIPIENT_NAME,
 )
-from ..models import ChannelInfo, ChannelScope, RecipientType, SystemConfig
+from ...models import ChannelInfo, ChannelScope, RecipientType, SystemConfig
 
 # ---------------------------------------------------------------------------
 # Patch target constants

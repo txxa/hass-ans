@@ -6,9 +6,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ..channels.channel_manager import ChannelManager
-from ..channels.tts_mediaplayer import TTSMediaPlayerAdapter
-from ..delivery.factory import (
+from ...channels.channel_manager import ChannelManager
+from ...channels.tts_mediaplayer import TTSMediaPlayerAdapter
+from ...delivery.factory import (
     _ALL_ADAPTER_CLASSES,
     ADAPTER_CLASS_MAP,
     ANSSystem,
@@ -16,10 +16,10 @@ from ..delivery.factory import (
     _create_processor_factory,
     create_system,
 )
-from ..delivery.processor import (
+from ...delivery.processor import (
     NotificationDeliveryProcessor,
 )
-from ..models import SystemConfig
+from ...models import SystemConfig
 
 # ---------------------------------------------------------------------------
 # Helpers

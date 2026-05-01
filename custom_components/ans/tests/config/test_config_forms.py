@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import voluptuous as vol
 
-from ..config.forms import (
+from ...config.forms import (
     detect_tts_integrations,
     get_recipient_basic_settings_schema,
     get_recipient_criticality_channel_mapping_schema,
@@ -15,8 +15,8 @@ from ..config.forms import (
     get_system_config_schema,
     get_system_options_schema,
 )
-from ..config.validator import ValidationContext
-from ..const import (
+from ...config.validator import ValidationContext
+from ...const import (
     RCPT_CONFIG_CHANNELS_KEY,
     RCPT_CONFIG_CONFIGURED_CHANNELS_KEY,
     RCPT_CONFIG_CRITICALITY_LEVELS_KEY,
@@ -39,7 +39,7 @@ from ..const import (
     SYS_MAX_GLOBAL_RATE_LIMIT,
     SYS_STORAGE_DEFAULT_FILE_RETENTION_DAYS,
 )
-from ..models import NotificationCriticality, RecipientType
+from ...models import NotificationCriticality, RecipientType
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from ..channels.channel_manager import ChannelManager
+from ..channels.tts_mediaplayer import TTSMediaPlayerAdapter
 from ..delivery.factory import (
     _ALL_ADAPTER_CLASSES,
     ADAPTER_CLASS_MAP,
@@ -131,6 +132,60 @@ class TestCreateChannelManager:
             _create_channel_manager(hass, repo, vol_reg)
 
         assert mock_register.call_count == len(_ALL_ADAPTER_CLASSES)
+
+    def test_tts_adapter_factory_receives_delivery_lock_other_adapters_do_not(self):
+        """TTSMediaPlayerAdapter.create_factory must be called with get_delivery_lock; other adapters must not receive it."""
+        hass = _make_hass()
+        repo = _make_config_repo()
+        vol_reg = _make_volume_registry()
+
+        # Collect create_factory call kwargs per adapter class
+        tts_call_kwargs: dict = {}
+        other_call_kwargs: list[dict] = []
+
+        def _patched_register_factory(factory):
+            pass
+
+        # Patch each adapter class's create_factory to capture kwargs
+        with (
+            patch.object(ChannelManager, "register_factory"),
+            patch.object(ChannelManager, "initialize_static_adapters"),
+            patch.object(
+                TTSMediaPlayerAdapter,
+                "create_factory",
+                side_effect=lambda **kw: (tts_call_kwargs.update(kw), MagicMock())[1],
+            ),
+        ):
+            # Patch all non-TTS adapters to capture their kwargs
+            non_tts_classes = [
+                c for c in _ALL_ADAPTER_CLASSES if c is not TTSMediaPlayerAdapter
+            ]
+
+            originals = {cls: cls.create_factory for cls in non_tts_classes}
+            for cls in non_tts_classes:
+
+                def _make_side_effect(c):
+                    def _se(**kw):
+                        other_call_kwargs.append({"cls": c, "kwargs": kw})
+                        return MagicMock()
+
+                    return _se
+
+                cls.create_factory = _make_side_effect(cls)
+
+            try:
+                _create_channel_manager(hass, repo, vol_reg)
+            finally:
+                for cls in non_tts_classes:
+                    cls.create_factory = originals[cls]
+
+        assert "get_delivery_lock" in tts_call_kwargs, (
+            "TTSMediaPlayerAdapter.create_factory should receive get_delivery_lock"
+        )
+        for item in other_call_kwargs:
+            assert "get_delivery_lock" not in item["kwargs"], (
+                f"{item['cls'].__name__}.create_factory should NOT receive get_delivery_lock"
+            )
 
 
 # ---------------------------------------------------------------------------

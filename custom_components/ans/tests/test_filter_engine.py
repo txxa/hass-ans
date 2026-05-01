@@ -205,6 +205,19 @@ class TestDNDFilter:
         assert "dnd_start" in decision.details
         assert "dnd_end" in decision.details
 
+    def test_naive_datetime_treated_as_utc(self):
+        """A naive datetime (tzinfo=None) is treated as UTC; DND evaluation proceeds correctly."""
+        dnd = make_dnd("22:00", "07:00")  # midnight-crossing; 23:00 is inside
+        task = make_task(
+            payload=make_payload(source="other"),
+            policy=make_policy(dnd=dnd),
+        )
+        naive_now = datetime(2026, 1, 1, 23, 0, 0)  # no tzinfo
+        decision = ENGINE.evaluate(task, naive_now)
+        # 23:00 UTC is within the 22:00–07:00 DND window — should be filtered
+        assert decision.decision == FilterDecisionType.FILTERED
+        assert decision.reason == FilterReason.DND_ACTIVE
+
 
 # ── 4. DND bypass rules ───────────────────────────────────────────────────────
 

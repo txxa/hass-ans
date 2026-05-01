@@ -14,6 +14,7 @@ from custom_components.ans.models import (
     RecipientNotificationPolicy,
     RecipientType,
 )
+from custom_components.ans.models.recipient import TTSSettings
 
 from .conftest import make_payload
 
@@ -297,3 +298,122 @@ class TestDeduplication:
         )
         await orch.handle_notification(make_payload())
         assert queue.enqueue.await_count == 2
+
+
+# ── Deduplication removes all channels ───────────────────────────────────────
+
+
+class TestDeduplicationAllFiltered:
+    """Verify orchestrator behaviour when deduplication removes every channel for a recipient."""
+
+    async def test_all_channels_deduplicated_registers_notification_no_tasks(self):
+        """When all channels are deduplicated the notification is still registered but no tasks are enqueued."""
+        dedup = MagicMock()
+        dedup.is_duplicate = AsyncMock(return_value=(True, "duplicate within window"))
+
+        orch, queue, reg = _make_orchestrator(
+            recipients=["rcpt-1"],
+            channels_per_recipient={"rcpt-1": ["notify.ch_a", "notify.ch_b"]},
+            dedup=dedup,
+        )
+        await orch.handle_notification(make_payload())
+        # No tasks enqueued because all channels were deduplicated
+        queue.enqueue.assert_not_awaited()
+        # But the notification is still registered because the recipient was resolved
+        reg.register_notification.assert_awaited_once()
+
+
+# ── Task creation error ───────────────────────────────────────────────────────
+
+
+class TestTaskCreationError:
+    """Verify that a ValueError from _create_task is recovered — error is logged and other channels' tasks are still enqueued."""
+
+    async def test_valueerror_skips_failing_channel_continues_others(self):
+        """When _create_task raises ValueError for one channel the orchestrator logs the error and still enqueues the remaining tasks."""
+        orch, queue, _ = _make_orchestrator(
+            recipients=["rcpt-1"],
+            channels_per_recipient={
+                "rcpt-1": ["notify.bad_channel", "notify.good_channel"]
+            },
+        )
+
+        # Make get_info return None for the bad channel (triggers ValueError in _create_task)
+        def _get_info_side_effect(channel_id: str):
+            if channel_id == "notify.bad_channel":
+                return None
+            return _make_channel_info(channel_id)
+
+        orch._channel_manager.get_info.side_effect = _get_info_side_effect
+        orch._channel_manager.get_all_infos.return_value = [
+            _make_channel_info("notify.good_channel")
+        ]
+
+        await orch.handle_notification(make_payload())
+        # Only the good-channel task should have been enqueued
+        assert queue.enqueue.await_count == 1
+
+
+# ── TTS recipient ─────────────────────────────────────────────────────────────
+
+
+class TestTTSRecipient:
+    """Verify that TTS settings are propagated correctly into delivery tasks."""
+
+    async def test_tts_recipient_with_settings_populates_task(self):
+        """A TTS recipient whose config includes tts_settings produces a task with those settings attached."""
+        tts_settings = TTSSettings.default()
+
+        snap = _make_snapshot(
+            recipients=["rcpt-tts"],
+            channels_per_recipient={"rcpt-tts": ["notify.tts_channel"]},
+        )
+        snap.recipients["rcpt-tts"] = MagicMock(type=RecipientType.TTS)
+        snap.recipient_configs["rcpt-tts"] = MagicMock(tts_settings=tts_settings)
+
+        orch, queue, _ = _make_orchestrator(snapshot=snap)
+        await orch.handle_notification(make_payload())
+
+        queue.enqueue.assert_awaited_once()
+        enqueued_task = queue.enqueue.call_args[0][0]
+        assert enqueued_task.tts_settings is tts_settings
+
+    async def test_tts_recipient_without_settings_creates_task_with_none(self):
+        """A TTS recipient with no tts_settings configured still produces a task; tts_settings is None and a warning is emitted."""
+        snap = _make_snapshot(
+            recipients=["rcpt-tts"],
+            channels_per_recipient={"rcpt-tts": ["notify.tts_channel"]},
+        )
+        snap.recipients["rcpt-tts"] = MagicMock(type=RecipientType.TTS)
+        snap.recipient_configs["rcpt-tts"] = MagicMock(tts_settings=None)
+
+        orch, queue, _ = _make_orchestrator(snapshot=snap)
+        await orch.handle_notification(make_payload())
+
+        queue.enqueue.assert_awaited_once()
+        enqueued_task = queue.enqueue.call_args[0][0]
+        assert enqueued_task.tts_settings is None
+
+
+# ── Non-TTS recipient on media_player channel ─────────────────────────────────
+
+
+class TestNonTTSOnMediaPlayerChannel:
+    """Verify that a misconfigured non-TTS recipient routed to a media_player.* channel still delivers but emits a warning."""
+
+    async def test_non_tts_recipient_on_media_player_warns_and_enqueues(self):
+        """A non-TTS recipient assigned a media_player.* channel enqueues a task but logs a configuration warning."""
+        snap = _make_snapshot(
+            recipients=["rcpt-user"],
+            channels_per_recipient={"rcpt-user": ["media_player.living_room"]},
+        )
+        snap.recipients["rcpt-user"] = MagicMock(type=RecipientType.HA_USER)
+        snap.recipient_configs["rcpt-user"] = MagicMock(tts_settings=None)
+
+        orch, queue, _ = _make_orchestrator(snapshot=snap)
+        await orch.handle_notification(make_payload())
+
+        queue.enqueue.assert_awaited_once()
+        enqueued_task = queue.enqueue.call_args[0][0]
+        # tts_settings should be None since the recipient is not TTS
+        assert enqueued_task.tts_settings is None

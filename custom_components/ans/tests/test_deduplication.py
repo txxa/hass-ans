@@ -105,6 +105,21 @@ class TestTTLExpiration:
             is_dup, _ = await svc.is_duplicate("nid-1", "notify.foo")
             assert is_dup is True
 
+    async def test_expiration_stat_incremented_on_stale_hit(self):
+        """When a previously-cached entry is found but has expired, the expirations counter is incremented and the entry is treated as a miss."""
+        svc = _service(window=60)
+
+        with patch(DEDUP_DATETIME_PATH) as mock_dt:
+            mock_dt.now.return_value = _dt(0)
+            await svc.is_duplicate("nid-1", "notify.foo")  # seed at t=0
+
+            # Advance past window
+            mock_dt.now.return_value = _dt(61)
+            is_dup, _ = await svc.is_duplicate("nid-1", "notify.foo")
+
+        assert is_dup is False
+        assert svc.get_stats()["expirations"] == 1
+
 
 # ── LRU cache size limit ──────────────────────────────────────────────────────
 
@@ -204,6 +219,36 @@ class TestStatistics:
         await svc.is_duplicate("nid-2", "notify.foo")
         stats = svc.get_stats()
         assert stats["evictions"] >= 1
+
+    async def test_hit_rate_zero_when_no_checks(self):
+        """get_stats() returns hit_rate=0.0 on a freshly created service with no checks yet."""
+        svc = _service()
+        stats = svc.get_stats()
+        assert stats["hit_rate"] == 0.0
+
+
+# ── Clear ─────────────────────────────────────────────────────────────────────
+
+
+class TestClear:
+    """Verify that clear() empties the cache and resets all statistics."""
+
+    async def test_clear_empties_cache_and_resets_stats(self):
+        """After clear() the cache is empty and every statistics counter is zero."""
+        svc = _service()
+        # Populate cache and statistics
+        await svc.is_duplicate("nid-1", "notify.foo")
+        await svc.is_duplicate("nid-1", "notify.foo")  # hit
+        assert len(svc._cache) > 0
+
+        await svc.clear()
+
+        assert len(svc._cache) == 0
+        stats = svc.get_stats()
+        assert stats["hits"] == 0
+        assert stats["misses"] == 0
+        assert stats["evictions"] == 0
+        assert stats["expirations"] == 0
 
 
 # ── Lifecycle ─────────────────────────────────────────────────────────────────

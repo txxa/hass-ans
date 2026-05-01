@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
+from homeassistant.exceptions import ServiceNotFound
+
 from custom_components.ans.delivery.processor import NotificationDeliveryProcessor
 from custom_components.ans.models import (
     ChannelInfo,
@@ -343,3 +345,133 @@ class TestContactInfoValidation:
         )
         await proc.process(task)
         adapter.deliver.assert_awaited()
+
+    async def test_recipient_channel_fails_when_missing_phone(self):
+        """RECIPIENT-scoped channel requiring phone blocks delivery permanently when phone is absent."""
+        adapter = _adapter()
+        adapter.get_requirements.return_value = {"requires_phone": True}
+        proc = _make_processor(adapter=adapter)
+        task = make_task(
+            channel_info=ChannelInfo(
+                id="notify.signal_user",
+                label="Signal",
+                scope=ChannelScope.RECIPIENT,
+            ),
+            contact_info=RecipientContactInfo(
+                email_address=None,
+                phone_number=None,  # missing phone
+            ),
+        )
+        await proc.process(task)
+        adapter.deliver.assert_not_awaited()
+
+
+# ── ServiceNotFound during delivery ──────────────────────────────────────────
+
+
+class TestServiceNotFoundDuringDelivery:
+    """Verify that HomeAssistant ServiceNotFound raised by an adapter is treated as a transient failure."""
+
+    async def test_service_not_found_treated_as_transient(self):
+        """ServiceNotFound from adapter.deliver() schedules a retry rather than permanently failing."""
+        adapter = _adapter()
+        adapter.deliver = AsyncMock(
+            side_effect=ServiceNotFound("notify", "send_message")
+        )
+        proc = _make_processor(adapter=adapter)
+        task = make_task()
+        await proc.process(task)
+        proc._retry_queue.schedule_retry.assert_awaited()
+
+    async def test_service_not_found_logs_attempt(self):
+        """ServiceNotFound still produces an attempt log entry."""
+        adapter = _adapter()
+        adapter.deliver = AsyncMock(
+            side_effect=ServiceNotFound("notify", "send_message")
+        )
+        proc = _make_processor(adapter=adapter)
+        task = make_task()
+        await proc.process(task)
+        proc._attempt_log.log_attempt.assert_awaited()
+
+
+# ── Unexpected exception from adapter ────────────────────────────────────────
+
+
+class TestAdapterRaisesUnexpectedException:
+    """Verify that an unexpected exception from adapter.deliver() is converted to a transient failure."""
+
+    async def test_unexpected_exception_treated_as_transient(self):
+        """A generic RuntimeError from adapter.deliver() is caught, result becomes TRANSIENT_FAIL, and a retry is scheduled."""
+        adapter = _adapter()
+        adapter.deliver = AsyncMock(side_effect=RuntimeError("unexpected boom"))
+        proc = _make_processor(adapter=adapter)
+        task = make_task()
+        await proc.process(task)
+        proc._retry_queue.schedule_retry.assert_awaited()
+
+    async def test_unexpected_exception_logs_attempt(self):
+        """An unexpected adapter exception still produces an attempt log entry."""
+        adapter = _adapter()
+        adapter.deliver = AsyncMock(side_effect=RuntimeError("unexpected boom"))
+        proc = _make_processor(adapter=adapter)
+        task = make_task()
+        await proc.process(task)
+        proc._attempt_log.log_attempt.assert_awaited()
+
+
+# ── Outer defensive exception handler ────────────────────────────────────────
+
+
+class TestProcessUnhandledDefensiveException:
+    """Verify that an unexpected exception raised inside _execute_delivery is caught by process()'s outer guard."""
+
+    async def test_outer_exception_triggers_transient_failure(self):
+        """When _execute_delivery raises unexpectedly, process() catches it and calls _handle_transient_failure."""
+        proc = _make_processor()
+        # Patch _execute_delivery to simulate an unhandled error
+        proc._execute_delivery = AsyncMock(side_effect=RuntimeError("internal crash"))
+        task = make_task()
+        await proc.process(task)
+        # _handle_transient_failure logs the attempt, so attempt_log should have been called
+        proc._attempt_log.log_attempt.assert_awaited()
+
+
+# ── _schedule_retry edge cases ────────────────────────────────────────────────
+
+
+class TestScheduleRetry:
+    """Verify the retry-scheduling logic inside the processor."""
+
+    async def test_max_retries_exceeded_no_retry(self):
+        """When attempt count already exceeds policy.retry_attempts, no retry is scheduled."""
+        proc = _make_processor(adapter=_adapter(status=DeliveryStatus.TRANSIENT_FAIL))
+        # count_attempts returns 4 which is > default policy retry_attempts (3)
+        proc._attempt_log.count_attempts = AsyncMock(return_value=4)
+        task = make_task()
+        await proc.process(task)
+        proc._retry_queue.schedule_retry.assert_not_awaited()
+
+    async def test_policy_returns_no_retry_no_schedule(self):
+        """When RetryPolicy.evaluate() returns should_retry=False, no retry is scheduled."""
+        proc = _make_processor(adapter=_adapter(status=DeliveryStatus.TRANSIENT_FAIL))
+        proc._attempt_log.count_attempts = AsyncMock(return_value=1)
+        # Override after construction so _make_processor's default doesn't apply
+        proc._retry_policy.evaluate = MagicMock(
+            return_value=MagicMock(should_retry=False, next_run_at=None)
+        )
+        task = make_task()
+        await proc.process(task)
+        proc._retry_queue.schedule_retry.assert_not_awaited()
+
+    async def test_policy_returns_none_next_run_no_schedule(self):
+        """When RetryPolicy.evaluate() returns should_retry=True but next_run_at=None, no retry is scheduled."""
+        proc = _make_processor(adapter=_adapter(status=DeliveryStatus.TRANSIENT_FAIL))
+        proc._attempt_log.count_attempts = AsyncMock(return_value=1)
+        # Override after construction so _make_processor's default doesn't apply
+        proc._retry_policy.evaluate = MagicMock(
+            return_value=MagicMock(should_retry=True, next_run_at=None)
+        )
+        task = make_task()
+        await proc.process(task)
+        proc._retry_queue.schedule_retry.assert_not_awaited()

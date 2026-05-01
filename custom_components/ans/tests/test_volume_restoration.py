@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from homeassistant.const import STATE_OFF, STATE_UNAVAILABLE
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
 
@@ -683,6 +684,35 @@ class TestHandleStateChange:
         # Clean up the created task
         registry._restore_tasks["media_player.test"].cancel()
 
+    async def test_idle_transition_cancels_existing_restore_task(self):
+        """A second playing→idle event cancels the previous (still-pending) restore task and creates a fresh one."""
+        registry = _make_registry()
+        registry._store = MagicMock()
+        registry._store.async_delay_save = MagicMock()
+
+        intent = _make_intent(override_volume=0.5)
+        registry._intents["media_player.test"] = intent
+
+        # Inject an already-pending restore task that is not yet done
+        async def _pending():
+            await asyncio.sleep(999)
+
+        old_task = asyncio.create_task(_pending())
+        registry._restore_tasks["media_player.test"] = old_task
+        registry._background_tasks.add(old_task)
+
+        event = self._make_event("media_player.test", "idle", "playing", volume=0.5)
+        registry._handle_state_change(event)
+
+        # Yield so cancellation propagates
+        await asyncio.sleep(0)
+        assert old_task.cancelled()
+        # A new task replaced the old one
+        new_task = registry._restore_tasks.get("media_player.test")
+        assert new_task is not None
+        assert new_task is not old_task
+        new_task.cancel()
+
     def test_idle_to_idle_does_not_schedule_restore(self):
         """An idle→idle transition does not schedule a restore task."""
         registry = _make_registry()
@@ -715,6 +745,29 @@ class TestHandleStateChange:
 
         # No complete_intent task should have been spawned
         assert len(registry._background_tasks) == initial_task_count
+
+    def test_ignores_missing_volume_level_in_new_state(self):
+        """_handle_state_change() returns early when new_state has no volume_level attribute."""
+        registry = _make_registry()
+        registry._intents["media_player.test"] = _make_intent(override_volume=0.5)
+
+        new_state = MagicMock()
+        new_state.state = "playing"
+        new_state.attributes = {}  # no volume_level
+
+        event = MagicMock()
+        event.data = {
+            "entity_id": "media_player.test",
+            "new_state": new_state,
+            "old_state": None,
+        }
+
+        initial_bg = len(registry._background_tasks)
+        registry._handle_state_change(event)
+
+        # No tasks spawned; no restore tasks created
+        assert len(registry._background_tasks) == initial_bg
+        assert "media_player.test" not in registry._restore_tasks
 
 
 # ===========================================================================
@@ -1021,3 +1074,267 @@ class TestOnBackgroundTaskDone:
             registry._on_background_task_done(task)
 
         assert any("explosion" in r.message for r in caplog.records)
+
+    async def test_does_not_log_when_task_cancelled(self, caplog):
+        """_on_background_task_done() does NOT log an error when the task was cancelled."""
+        registry = _make_registry()
+
+        async def _sleep():
+            """Block until cancelled."""
+            await asyncio.sleep(999)
+
+        task = asyncio.create_task(_sleep())
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+        with caplog.at_level(
+            logging.ERROR,
+            logger="custom_components.ans.persistence.volume_restoration",
+        ):
+            registry._on_background_task_done(task)
+
+        assert not any(r.levelno >= logging.ERROR for r in caplog.records)
+
+
+# ===========================================================================
+# _restore_pending_volumes
+# ===========================================================================
+
+
+class TestRestorePendingVolumes:
+    """Verify _restore_pending_volumes() restores available players, skips unavailable/off/missing ones, and cleans expired intents."""
+
+    async def test_restores_available_player_on_startup(self):
+        """An unexpired intent with an available media player triggers _do_restore on startup."""
+        registry = _make_registry()
+        registry._store = MagicMock()
+        registry._store.async_delay_save = MagicMock()
+
+        intent = _make_intent("media_player.living_room")
+        registry._intents["media_player.living_room"] = intent
+
+        state = MagicMock()
+        state.state = "paused"
+        registry._hass.states.get = MagicMock(return_value=state)
+
+        with patch.object(registry, "_do_restore", AsyncMock()) as mock_restore:
+            await registry._restore_pending_volumes()
+
+        mock_restore.assert_awaited_once()
+
+    async def test_skips_unavailable_player_on_startup(self):
+        """An intent for an unavailable media player is kept but _do_restore is not called."""
+        registry = _make_registry()
+        registry._store = MagicMock()
+        registry._store.async_delay_save = MagicMock()
+
+        intent = _make_intent("media_player.tv")
+        registry._intents["media_player.tv"] = intent
+
+        state = MagicMock()
+        state.state = STATE_UNAVAILABLE
+        registry._hass.states.get = MagicMock(return_value=state)
+
+        with patch.object(registry, "_do_restore", AsyncMock()) as mock_restore:
+            await registry._restore_pending_volumes()
+
+        mock_restore.assert_not_awaited()
+        # Intent should be kept for later retry
+        assert "media_player.tv" in registry._intents
+
+    async def test_skips_off_player_on_startup(self):
+        """An intent for an off media player is kept but _do_restore is not called."""
+        registry = _make_registry()
+        registry._store = MagicMock()
+        registry._store.async_delay_save = MagicMock()
+
+        intent = _make_intent("media_player.speaker")
+        registry._intents["media_player.speaker"] = intent
+
+        state = MagicMock()
+        state.state = STATE_OFF
+        registry._hass.states.get = MagicMock(return_value=state)
+
+        with patch.object(registry, "_do_restore", AsyncMock()) as mock_restore:
+            await registry._restore_pending_volumes()
+
+        mock_restore.assert_not_awaited()
+        assert "media_player.speaker" in registry._intents
+
+    async def test_skips_player_not_found_on_startup(self):
+        """When hass.states.get() returns None the intent is kept and _do_restore is not called."""
+        registry = _make_registry()
+        registry._store = MagicMock()
+        registry._store.async_delay_save = MagicMock()
+
+        intent = _make_intent("media_player.missing")
+        registry._intents["media_player.missing"] = intent
+        registry._hass.states.get = MagicMock(return_value=None)
+
+        with patch.object(registry, "_do_restore", AsyncMock()) as mock_restore:
+            await registry._restore_pending_volumes()
+
+        mock_restore.assert_not_awaited()
+        assert "media_player.missing" in registry._intents
+
+    async def test_removes_expired_intent_on_startup(self):
+        """An expired intent is removed via complete_intent() and _do_restore is not called."""
+        registry = _make_registry()
+        registry._store = MagicMock()
+        registry._store.async_delay_save = MagicMock()
+
+        expired = _make_intent("media_player.old", expired=True)
+        registry._intents["media_player.old"] = expired
+
+        state = MagicMock()
+        state.state = "paused"
+        registry._hass.states.get = MagicMock(return_value=state)
+
+        with patch.object(registry, "_do_restore", AsyncMock()) as mock_restore:
+            await registry._restore_pending_volumes()
+
+        mock_restore.assert_not_awaited()
+        assert "media_player.old" not in registry._intents
+
+    async def test_skips_if_intent_already_gone_when_lock_acquired(self):
+        """When _do_restore for one entity removes the intent of a second entity (via concurrent path), the second entity is skipped by the lock-acquired guard."""
+        registry = _make_registry()
+        registry._store = MagicMock()
+        registry._store.async_delay_save = MagicMock()
+
+        intent_a = _make_intent("media_player.a")
+        intent_b = _make_intent("media_player.b")
+        registry._intents["media_player.a"] = intent_a
+        registry._intents["media_player.b"] = intent_b
+
+        state = MagicMock()
+        state.state = "paused"
+        registry._hass.states.get = MagicMock(return_value=state)
+
+        async def _restore_and_clear(entity_id, intent):
+            # Simulate a concurrent path that also clears media_player.b
+            if entity_id == "media_player.a":
+                registry._intents.pop("media_player.b", None)
+
+        with patch.object(
+            registry, "_do_restore", side_effect=_restore_and_clear
+        ) as mock_restore:
+            await registry._restore_pending_volumes()
+
+        # _do_restore called for 'a', but 'b' was already gone when its lock was acquired
+        restore_calls = [call.args[0] for call in mock_restore.await_args_list]
+        assert "media_player.a" in restore_calls
+        assert "media_player.b" not in restore_calls
+
+
+# ===========================================================================
+# _do_cleanup
+# ===========================================================================
+
+
+class TestDoCleanup:
+    """Verify _do_cleanup() creates HA notifications for expired intents and ignores non-expired ones."""
+
+    async def test_cleanup_creates_notification_for_expired_intent(self):
+        """_do_cleanup() calls pn_async_create for an expired intent and removes it via complete_intent()."""
+        registry = _make_registry()
+        registry._store = MagicMock()
+        registry._store.async_delay_save = MagicMock()
+
+        expired = _make_intent("media_player.tv", expired=True)
+        registry._intents["media_player.tv"] = expired
+
+        pn_mock = MagicMock()
+        with patch.dict(
+            "sys.modules",
+            {
+                "homeassistant.components.persistent_notification": MagicMock(
+                    async_create=pn_mock
+                )
+            },
+        ):
+            await registry._do_cleanup()
+
+        # Intent must have been removed
+        assert "media_player.tv" not in registry._intents
+        # persistent_notification.async_create was called
+        pn_mock.assert_called_once()
+        call_kwargs = pn_mock.call_args
+        # entity_id should appear in the notification message
+        assert "media_player.tv" in call_kwargs[0][1]
+
+    async def test_cleanup_leaves_non_expired_intent_intact(self):
+        """_do_cleanup() does not touch intents that have not yet expired."""
+        registry = _make_registry()
+        registry._store = MagicMock()
+        registry._store.async_delay_save = MagicMock()
+
+        live_intent = _make_intent("media_player.speaker", expired=False)
+        registry._intents["media_player.speaker"] = live_intent
+
+        pn_mock = MagicMock()
+        with patch.dict(
+            "sys.modules",
+            {
+                "homeassistant.components.persistent_notification": MagicMock(
+                    async_create=pn_mock
+                )
+            },
+        ):
+            await registry._do_cleanup()
+
+        assert "media_player.speaker" in registry._intents
+        pn_mock.assert_not_called()
+
+    async def test_cleanup_handles_oserror_gracefully(self, caplog):
+        """_do_cleanup() catches OSError from complete_intent() and logs the error without re-raising."""
+        registry = _make_registry()
+        registry._store = MagicMock()
+        registry._store.async_delay_save = MagicMock()
+
+        expired = _make_intent("media_player.broken", expired=True)
+        registry._intents["media_player.broken"] = expired
+
+        pn_mock = MagicMock()
+
+        async def _raise_os(entity_id):
+            raise OSError("storage failure")
+
+        with (
+            patch.dict(
+                "sys.modules",
+                {
+                    "homeassistant.components.persistent_notification": MagicMock(
+                        async_create=pn_mock
+                    )
+                },
+            ),
+            patch.object(registry, "complete_intent", side_effect=_raise_os),
+            caplog.at_level(
+                logging.ERROR,
+                logger="custom_components.ans.persistence.volume_restoration",
+            ),
+        ):
+            # Must not raise
+            await registry._do_cleanup()
+
+        assert any("Error in periodic cleanup" in r.message for r in caplog.records)
+
+    async def test_periodic_cleanup_callback_schedules_cleanup_task(self):
+        """_periodic_cleanup_callback() creates a _do_cleanup background task and adds it to _background_tasks."""
+        registry = _make_registry()
+        registry._store = MagicMock()
+        registry._store.async_delay_save = MagicMock()
+
+        with patch.object(registry, "_do_cleanup", AsyncMock()) as mock_cleanup:
+            # Call the callback directly (simulating async_track_time_interval firing)
+            registry._periodic_cleanup_callback(_now_utc())
+
+            # A task should have been queued in _background_tasks
+            assert len(registry._background_tasks) == 1
+
+            # Let it run to completion
+            await asyncio.sleep(0)
+
+        mock_cleanup.assert_awaited_once()

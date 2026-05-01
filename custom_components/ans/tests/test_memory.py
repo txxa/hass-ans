@@ -107,6 +107,19 @@ class TestInMemoryDeliveryStateStore:
         await store.persist_rate_limited(job_id)
         assert job_id in store._created_at
 
+    async def test_persist_rate_limited_keeps_pending_retry(self):
+        """persist_rate_limited() does NOT remove a pending retry (non-terminal state)."""
+        store = InMemoryDeliveryStateStore()
+        job_id = uuid4()
+        run_at = _now() + timedelta(minutes=5)
+        await store.schedule_retry(job_id, run_at)
+        assert job_id in store._retries
+
+        await store.persist_rate_limited(job_id)
+
+        # Retry must still be present
+        assert job_id in store._retries
+
     # --- persist_success -----------------------------------------------------
 
     async def test_persist_success_sets_status_and_attempt_count(self):
@@ -139,6 +152,20 @@ class TestInMemoryDeliveryStateStore:
         state = await store.load(job_id)
         assert state.status == DeliveryStatus.TRANSIENT_FAIL
         assert state.last_error == "timeout"
+
+    async def test_persist_transient_failure_keeps_pending_retry(self):
+        """persist_transient_failure() does NOT remove a pending retry (non-terminal state)."""
+        store = InMemoryDeliveryStateStore()
+        job_id = uuid4()
+        run_at = _now() + timedelta(minutes=5)
+        await store.schedule_retry(job_id, run_at)
+        assert job_id in store._retries
+
+        attempt = _make_attempt(job_id, error="timeout")
+        await store.persist_transient_failure(job_id, attempt)
+
+        # Retry must still be present
+        assert job_id in store._retries
 
     # --- persist_permanent_failure -------------------------------------------
 

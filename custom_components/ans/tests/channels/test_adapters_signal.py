@@ -13,14 +13,14 @@ from homeassistant.exceptions import (
     ServiceValidationError,
 )
 
-from ..channels.signal import SignalDeliveryAdapter
-from ..models.delivery import DeliveryStatus
-from ..models.notification import (
+from ...channels.signal import SignalDeliveryAdapter
+from ...models.delivery import DeliveryStatus
+from ...models.notification import (
     NotificationCriticality,
     NotificationPayload,
     NotificationType,
 )
-from ..models.recipient import RecipientContactInfo
+from ...models.recipient import RecipientContactInfo
 
 
 def _make_payload(
@@ -376,14 +376,14 @@ class TestMaskPhone:
 
     def test_mask_phone_shows_last_four(self):
         """Numbers with 4+ digits show the last 4 digits after '****'."""
-        from ..channels.signal import _mask_phone  # noqa: PLC0415
+        from ...channels.signal import _mask_phone  # noqa: PLC0415
 
         assert _mask_phone("+49123456789") == "****6789"
         assert _mask_phone("1234") == "****1234"
 
     def test_mask_phone_short_number(self):
         """Numbers shorter than 4 digits return '****' with no digits shown."""
-        from ..channels.signal import _mask_phone  # noqa: PLC0415
+        from ...channels.signal import _mask_phone  # noqa: PLC0415
 
         assert _mask_phone("123") == "****"
         assert _mask_phone("") == "****"

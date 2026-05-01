@@ -15,7 +15,7 @@ from custom_components.ans.channels.persistent_notification import (
 )
 from custom_components.ans.models import DeliveryStatus, RecipientContactInfo
 
-from .conftest import make_payload
+from ..conftest import make_payload
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 

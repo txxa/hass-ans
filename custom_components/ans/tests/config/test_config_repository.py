@@ -6,9 +6,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ..config.repository import ConfigRepository
-from ..const import RCPT_CONFIG_ID_KEY
-from ..models import RecipientType, SystemConfig
+from ...config.repository import ConfigRepository
+from ...const import RCPT_CONFIG_ID_KEY
+from ...models import RecipientType, SystemConfig
 
 
 def _make_hass() -> MagicMock:

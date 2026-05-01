@@ -8,8 +8,8 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
-from ..models import Attempt
-from ..persistence.file import DeliveryAttemptLog, NotificationRegistry, RetryQueue
+from ...models import Attempt
+from ...persistence.file import DeliveryAttemptLog, NotificationRegistry, RetryQueue
 
 
 def _make_hass(storage_path: str = "/tmp/ans_test/.storage") -> MagicMock:  # noqa: S108

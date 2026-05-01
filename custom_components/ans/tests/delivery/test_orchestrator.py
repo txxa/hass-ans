@@ -16,7 +16,7 @@ from custom_components.ans.models import (
 )
 from custom_components.ans.models.recipient import TTSSettings
 
-from .conftest import make_payload
+from ..conftest import make_payload
 
 # ── Snapshot factory ──────────────────────────────────────────────────────────
 

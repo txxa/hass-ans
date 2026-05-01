@@ -28,7 +28,7 @@ from custom_components.ans.models import (
 )
 from custom_components.ans.models.recipient import TTSSettings
 
-from .conftest import make_channel_info, make_payload, make_policy, make_task
+from ..conftest import make_channel_info, make_payload, make_policy, make_task
 
 # ---------------------------------------------------------------------------
 # NotificationPayload

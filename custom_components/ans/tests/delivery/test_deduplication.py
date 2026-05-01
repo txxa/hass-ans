@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
-from ..delivery.deduplication import DeduplicationKey, DeduplicationService
+from ...delivery.deduplication import DeduplicationKey, DeduplicationService
 
 DEDUP_DATETIME_PATH = "ans.delivery.deduplication.datetime"
 

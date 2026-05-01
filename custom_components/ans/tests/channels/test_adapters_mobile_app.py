@@ -14,7 +14,7 @@ from homeassistant.exceptions import (
 from custom_components.ans.channels.mobile_app import MobileAppDeliveryAdapter
 from custom_components.ans.models import DeliveryStatus, RecipientContactInfo
 
-from .conftest import make_payload
+from ..conftest import make_payload
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 

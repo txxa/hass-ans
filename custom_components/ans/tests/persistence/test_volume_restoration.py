@@ -13,8 +13,8 @@ from homeassistant.const import STATE_OFF, STATE_UNAVAILABLE
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
 
-from ..exceptions import TTSVolumeControlError
-from ..persistence.volume_restoration import (
+from ...exceptions import TTSVolumeControlError
+from ...persistence.volume_restoration import (
     DEFAULT_TIMEOUT,
     VOLUME_CHANGE_THRESHOLD,
     VolumeIntent,

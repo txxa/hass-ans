@@ -8,7 +8,7 @@ import logging
 from datetime import UTC, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
-from ..persistence.housekeeping import HousekeepingScheduler
+from ...persistence.housekeeping import HousekeepingScheduler
 
 
 def _make_scheduler(

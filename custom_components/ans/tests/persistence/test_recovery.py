@@ -8,8 +8,8 @@ from uuid import uuid4
 
 import pytest
 
-from ..models import NotificationDeliveryTask
-from ..persistence.recovery import PersistenceRecovery, async_initialize_persistence
+from ...models import NotificationDeliveryTask
+from ...persistence.recovery import PersistenceRecovery, async_initialize_persistence
 
 # ---------------------------------------------------------------------------
 # Helpers

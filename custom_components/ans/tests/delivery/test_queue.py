@@ -14,7 +14,7 @@ from custom_components.ans.delivery.queue import (
     NotificationDeliveryTaskQueue,
 )
 
-from .conftest import make_task
+from ..conftest import make_task
 
 # ---------------------------------------------------------------------------
 # Helpers

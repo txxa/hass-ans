@@ -8,7 +8,7 @@ import pytest
 
 from custom_components.ans.delivery.rate_limiter import RateLimiter
 
-from .conftest import make_policy, make_task
+from ..conftest import make_policy, make_task
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 

@@ -19,7 +19,7 @@ from custom_components.ans.models import (
     RecipientContactInfo,
 )
 
-from .conftest import make_task
+from ..conftest import make_task
 
 # ── fixture helpers ───────────────────────────────────────────────────────────
 

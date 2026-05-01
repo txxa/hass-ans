@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
-from homeassistant.exceptions import HomeAssistantError, ServiceNotFound
+from homeassistant.exceptions import (
+    HomeAssistantError,
+    ServiceNotFound,
+    ServiceValidationError,
+)
 
 from custom_components.ans.channels.persistent_notification import (
     PersistentNotificationAdapter,
@@ -117,6 +121,20 @@ class TestPersistentNotificationErrors:
         result = await _deliver(adapter, make_payload())
         assert result.status == DeliveryStatus.TRANSIENT_FAIL
 
+    async def test_service_validation_error_returns_permanent_failure(self):
+        """ServiceValidationError must yield a permanent failure (bad service config)."""
+        adapter, hass = _make_adapter()
+        hass.services.async_call.side_effect = ServiceValidationError("bad field")
+        result = await _deliver(adapter, make_payload())
+        assert result.status == DeliveryStatus.PERMANENT_FAIL
+
+    async def test_unexpected_exception_returns_transient_failure(self):
+        """An unexpected runtime exception must yield a transient failure."""
+        adapter, hass = _make_adapter()
+        hass.services.async_call.side_effect = RuntimeError("something broke")
+        result = await _deliver(adapter, make_payload())
+        assert result.status == DeliveryStatus.TRANSIENT_FAIL
+
 
 # ── Class API ─────────────────────────────────────────────────────────────────
 
@@ -154,3 +172,12 @@ class TestPersistentNotificationClassAPI:
         )
         assert isinstance(label, str)
         assert len(label) > 0
+
+    def test_extract_variant_always_none(self):
+        """extract_variant always returns None — persistent_notification has no variants."""
+        assert (
+            PersistentNotificationAdapter.extract_variant(
+                "notify.persistent_notification"
+            )
+            is None
+        )

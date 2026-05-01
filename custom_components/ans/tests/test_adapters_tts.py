@@ -18,7 +18,9 @@ from homeassistant.exceptions import (
 from ..channels.tts_mediaplayer import (
     MAX_MESSAGE_LENGTH,
     TTSMediaPlayerAdapter,
+    _calculate_target_volume,
 )
+from ..exceptions import TTSVolumeControlError
 from ..models.delivery import DeliveryStatus
 from ..models.notification import (
     NotificationCriticality,
@@ -471,3 +473,264 @@ async def test_successful_delivery_with_ssml_enabled():
     hass.services.async_call.assert_called_once()
     sent_message = hass.services.async_call.call_args.kwargs["service_data"]["message"]
     assert sent_message == "<speak>Test &lt;msg&gt; &amp; more</speak>"
+
+
+# ---------------------------------------------------------------------------
+# _calculate_target_volume module-level function
+# ---------------------------------------------------------------------------
+
+
+class TestCalculateTargetVolume:
+    """Unit tests for the _calculate_target_volume standalone helper."""
+
+    def test_criticality_override_takes_priority(self):
+        """When criticality is in the override list the override level is used."""
+        settings = replace(
+            TTSSettings.default(),
+            volume_override_criticalities=[NotificationCriticality.HIGH.value],
+            volume_override_level=90,
+        )
+        result = _calculate_target_volume(NotificationCriticality.HIGH, settings)
+        assert abs(result - 0.90) < 0.001
+
+    def test_time_based_morning_volume(self):
+        """Hour 7 (morning) uses volume_morning."""
+        settings = replace(TTSSettings.default(), volume_morning=40, volume_daytime=60)
+        with patch(
+            "custom_components.ans.channels.tts_mediaplayer.dt_util.now"
+        ) as mock_now:
+            mock_now.return_value.hour = 7
+            result = _calculate_target_volume(NotificationCriticality.LOW, settings)
+        assert abs(result - 0.40) < 0.001
+
+    def test_time_based_evening_volume(self):
+        """Hour 20 (evening) uses volume_evening."""
+        settings = replace(TTSSettings.default(), volume_evening=25)
+        with patch(
+            "custom_components.ans.channels.tts_mediaplayer.dt_util.now"
+        ) as mock_now:
+            mock_now.return_value.hour = 20
+            result = _calculate_target_volume(NotificationCriticality.LOW, settings)
+        assert abs(result - 0.25) < 0.001
+
+    def test_time_based_night_volume(self):
+        """Hour 23 (night) uses volume_night."""
+        settings = replace(TTSSettings.default(), volume_night=15)
+        with patch(
+            "custom_components.ans.channels.tts_mediaplayer.dt_util.now"
+        ) as mock_now:
+            mock_now.return_value.hour = 23
+            result = _calculate_target_volume(NotificationCriticality.LOW, settings)
+        assert abs(result - 0.15) < 0.001
+
+    def test_no_tts_settings_falls_back_to_defaults(self):
+        """Passing tts_settings=None uses TTSSettings.default() values."""
+        with patch(
+            "custom_components.ans.channels.tts_mediaplayer.dt_util.now"
+        ) as mock_now:
+            mock_now.return_value.hour = 12  # daytime
+            result = _calculate_target_volume(NotificationCriticality.LOW, None)
+        assert 0.0 <= result <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# Additional class API coverage
+# ---------------------------------------------------------------------------
+
+
+def test_extract_variant_matching():
+    """extract_variant strips the 'media_player.' prefix and returns the entity name."""
+    assert TTSMediaPlayerAdapter.extract_variant("media_player.kitchen") == "kitchen"
+
+
+def test_extract_variant_non_matching():
+    """extract_variant returns None for non-media_player channel IDs."""
+    assert TTSMediaPlayerAdapter.extract_variant("notify.signal") is None
+    assert TTSMediaPlayerAdapter.extract_variant("notify.mobile_app_x") is None
+
+
+def test_create_factory_requires_deps():
+    """create_factory raises ValueError when deps is None."""
+    import pytest  # noqa: PLC0415
+
+    with pytest.raises(ValueError, match="requires deps"):
+        TTSMediaPlayerAdapter.create_factory(deps=None)
+
+
+# ---------------------------------------------------------------------------
+# Additional delivery error paths
+# ---------------------------------------------------------------------------
+
+
+async def test_unknown_message_format_returns_permanent_failure():
+    """An invalid message_format in TTSSettings yields a permanent delivery failure."""
+    adapter, hass, config_repo, _ = _make_adapter()
+    state = MagicMock()
+    state.state = "idle"
+    state.attributes = {"volume_level": 0.5}
+    hass.states.get.return_value = state
+
+    # Bypass TTSSettings.__post_init__ validation by patching _format_message directly
+    from ..exceptions import TTSDeliveryError  # noqa: PLC0415
+
+    original_format = adapter._format_message
+
+    def _bad_format(payload, tts_settings):
+        raise TTSDeliveryError("Unknown message_format: 'bogus'", is_permanent=True)
+
+    adapter._format_message = _bad_format
+
+    result = await adapter.deliver(
+        payload=_make_payload(),
+        contact_info=_make_contact(),
+        idempotency_key="key-fmt",
+        job_id="job-fmt",
+    )
+    assert result.status == DeliveryStatus.PERMANENT_FAIL
+    adapter._format_message = original_format
+
+
+async def test_tts_volume_control_error_returns_transient_failure():
+    """A TTSVolumeControlError from apply_volume yields a transient failure."""
+    adapter, hass, config_repo, volume_registry = _make_adapter()
+    state = MagicMock()
+    state.state = "idle"
+    state.attributes = {"volume_level": 0.1}  # far from default target → change needed
+    hass.states.get.return_value = state
+
+    volume_registry.apply_volume.side_effect = TTSVolumeControlError(
+        "set volume failed"
+    )
+
+    result = await adapter.deliver(
+        payload=_make_payload(),
+        contact_info=_make_contact(),
+        idempotency_key="key-vce",
+        job_id="job-vce",
+    )
+    assert result.status == DeliveryStatus.TRANSIENT_FAIL
+
+
+async def test_tts_speak_timeout_returns_transient_failure():
+    """TimeoutError raised by the TTS speak call yields a transient failure."""
+    adapter, hass, _, volume_registry = _make_adapter()
+    state = MagicMock()
+    state.state = "idle"
+    state.attributes = {"volume_level": 0.5}
+    hass.states.get.return_value = state
+    hass.services.async_call.side_effect = TimeoutError()
+
+    result = await adapter.deliver(
+        payload=_make_payload(),
+        contact_info=_make_contact(),
+        idempotency_key="key-to",
+        job_id="job-to",
+    )
+    assert result.status == DeliveryStatus.TRANSIENT_FAIL
+
+
+async def test_unexpected_tts_exception_returns_transient_failure():
+    """An unexpected exception during TTS delivery yields a transient failure."""
+    adapter, hass, _, volume_registry = _make_adapter()
+    state = MagicMock()
+    state.state = "idle"
+    state.attributes = {"volume_level": 0.5}
+    hass.states.get.return_value = state
+    hass.services.async_call.side_effect = RuntimeError("unexpected crash")
+
+    result = await adapter.deliver(
+        payload=_make_payload(),
+        contact_info=_make_contact(),
+        idempotency_key="key-ux",
+        job_id="job-ux",
+    )
+    assert result.status == DeliveryStatus.TRANSIENT_FAIL
+
+
+# ---------------------------------------------------------------------------
+# Volume management disabled / already-at-target paths
+# ---------------------------------------------------------------------------
+
+
+async def test_volume_management_disabled_skips_volume():
+    """volume_management_enabled=False means apply_volume is never called."""
+    adapter, hass, config_repo, volume_registry = _make_adapter()
+    state = MagicMock()
+    state.state = "idle"
+    state.attributes = {
+        "volume_level": 0.1
+    }  # far from target — would change if enabled
+    hass.states.get.return_value = state
+
+    settings = replace(TTSSettings.default(), volume_management_enabled=False)
+
+    from ..channels.base import TTSDeliveryOptions  # noqa: PLC0415
+
+    result = await adapter.deliver(
+        payload=_make_payload(),
+        contact_info=_make_contact(),
+        idempotency_key="key-vmd",
+        job_id="job-vmd",
+        options=TTSDeliveryOptions(tts_settings=settings),
+    )
+
+    assert result.status == DeliveryStatus.SUCCESS
+    volume_registry.apply_volume.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Post-speak IDLE scheduling and fallback task paths
+# ---------------------------------------------------------------------------
+
+
+async def test_post_speak_idle_schedules_idle_restore():
+    """When the player is IDLE after tts.speak, schedule_idle_restore is called."""
+    adapter, hass, _, volume_registry = _make_adapter()
+
+    # Pre-speak state: idle with volume far from target (so volume change is triggered)
+    pre_state = MagicMock()
+    pre_state.state = "idle"
+    pre_state.attributes = {"volume_level": 0.1}
+
+    # Post-speak state: still idle (tts.speak returned with player already idle)
+    post_state = MagicMock()
+    post_state.state = "idle"
+
+    volume_registry.has_active_intent.return_value = True
+    volume_registry.schedule_idle_restore = MagicMock()
+
+    # Return pre_state on first call, post_state on subsequent calls
+    hass.states.get.side_effect = [pre_state, post_state]
+
+    result = await adapter.deliver(
+        payload=_make_payload(),
+        contact_info=_make_contact(),
+        idempotency_key="key-idle",
+        job_id="job-idle",
+    )
+
+    assert result.status == DeliveryStatus.SUCCESS
+    volume_registry.schedule_idle_restore.assert_called_once_with(
+        "media_player.living_room"
+    )
+
+
+async def test_no_active_intent_skips_fallback_registration():
+    """When has_active_intent returns False, set_fallback_task is not called."""
+    adapter, hass, _, volume_registry = _make_adapter()
+    state = MagicMock()
+    state.state = "idle"
+    state.attributes = {"volume_level": 0.5}
+    hass.states.get.return_value = state
+
+    volume_registry.has_active_intent.return_value = False
+
+    result = await adapter.deliver(
+        payload=_make_payload(),
+        contact_info=_make_contact(),
+        idempotency_key="key-nai",
+        job_id="job-nai",
+    )
+
+    assert result.status == DeliveryStatus.SUCCESS
+    volume_registry.set_fallback_task.assert_not_called()

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt_module
+import logging
 from datetime import UTC, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
@@ -137,3 +138,38 @@ async def test_run_loop_triggers_cleanup():
     assert notification_registry.cleanup_old.call_count >= 1
     assert attempt_log.cleanup_old.call_count >= 1
     assert retry_queue.cleanup_old.call_count >= 1
+
+
+async def test_run_loop_logs_exception_and_continues(caplog):
+    """The background loop logs an exception from _cleanup() and keeps running (does not exit)."""
+
+    call_count = 0
+    original_cleanup = None
+
+    async def _cleanup_with_first_failure():
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise RuntimeError("housekeeping boom")
+        await original_cleanup()
+
+    scheduler, notification_registry, attempt_log, retry_queue = _make_scheduler(
+        interval=timedelta(seconds=0.01)
+    )
+    original_cleanup = scheduler._cleanup
+    scheduler._cleanup = _cleanup_with_first_failure
+
+    with caplog.at_level(
+        logging.ERROR, logger="custom_components.ans.persistence.housekeeping"
+    ):
+        await scheduler.start()
+        await asyncio.sleep(0.08)
+        await scheduler.stop()
+
+    # The exception should have been logged
+    assert any(
+        "housekeeping boom" in r.message or "housekeeping boom" in str(r.exc_info)
+        for r in caplog.records
+    )
+    # And the loop continued running — _cleanup was called more than once
+    assert call_count >= 2

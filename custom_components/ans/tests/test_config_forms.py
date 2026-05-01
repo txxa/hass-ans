@@ -12,6 +12,7 @@ from ..config.forms import (
     get_recipient_basic_settings_schema,
     get_recipient_criticality_channel_mapping_schema,
     get_recipient_definition_schema,
+    get_system_config_schema,
     get_system_options_schema,
 )
 from ..config.validator import ValidationContext
@@ -23,11 +24,14 @@ from ..const import (
     RCPT_CONFIG_NAME_KEY,
     RCPT_CONFIG_PHONE_KEY,
     RCPT_MAX_RETRY_ATTEMPTS,
+    SYS_CONFIG_ENABLE_AUDIT_LOGGING_KEY,
+    SYS_CONFIG_ENABLED_CHANNELS_KEY,
     SYS_CONFIG_GLOBAL_RATE_LIMIT_KEY,
     SYS_CONFIG_RETRY_BACKOFF_FACTOR_KEY,
     SYS_CONFIG_RETRY_BASE_DELAY_KEY,
     SYS_CONFIG_RETRY_MAX_DELAY_KEY,
     SYS_CONFIG_STORAGE_RETENTION_DAYS_KEY,
+    SYS_CONFIG_TTS_SERVICE_KEY,
     SYS_DEFAULT_GLOBAL_RATE_LIMIT,
     SYS_DEFAULT_RETRY_BACKOFF_FACTOR,
     SYS_DEFAULT_RETRY_BASE_DELAY_SECONDS,
@@ -295,3 +299,105 @@ def test_detect_tts_integrations_empty_when_no_entities():
         results = detect_tts_integrations(hass)
 
     assert results == []
+
+
+# ---------------------------------------------------------------------------
+# get_system_config_schema
+# ---------------------------------------------------------------------------
+
+
+class TestGetSystemConfigSchema:
+    """Tests for get_system_config_schema (system-wide config form schema builder)."""
+
+    def test_with_rate_limits_includes_global_rate_limit_key(self):
+        """When include_rate_limits=True the schema contains global_rate_limit."""
+        schema = get_system_config_schema(
+            defaults={}, values={}, include_rate_limits=True
+        )
+        assert SYS_CONFIG_GLOBAL_RATE_LIMIT_KEY in _schema_key_strings(schema)
+
+    def test_without_rate_limits_excludes_global_rate_limit_key(self):
+        """When include_rate_limits=False the schema omits global_rate_limit."""
+        schema = get_system_config_schema(
+            defaults={}, values={}, include_rate_limits=False
+        )
+        assert SYS_CONFIG_GLOBAL_RATE_LIMIT_KEY not in _schema_key_strings(schema)
+
+    def test_always_includes_enabled_channels_key(self):
+        """The enabled_channels key is always present regardless of other flags."""
+        for rate_limits in (True, False):
+            schema = get_system_config_schema(
+                defaults={}, values={}, include_rate_limits=rate_limits
+            )
+            assert SYS_CONFIG_ENABLED_CHANNELS_KEY in _schema_key_strings(schema)
+
+    def test_with_tts_services_adds_tts_service_key(self):
+        """When values contains 'tts_services', the tts_service selector is added."""
+        tts_service = [{"value": "tts.piper", "label": "Piper"}]
+        schema = get_system_config_schema(
+            defaults={},
+            values={"tts_services": tts_service},
+            include_rate_limits=False,
+        )
+        assert SYS_CONFIG_TTS_SERVICE_KEY in _schema_key_strings(schema)
+
+    def test_without_tts_services_omits_tts_service_key(self):
+        """When values has no 'tts_services' entry the tts_service key is absent."""
+        schema = get_system_config_schema(
+            defaults={}, values={}, include_rate_limits=False
+        )
+        assert SYS_CONFIG_TTS_SERVICE_KEY not in _schema_key_strings(schema)
+
+    def test_with_audit_logging_adds_enable_audit_logging_key(self):
+        """When include_audit_logging=True the schema contains enable_audit_logging."""
+        schema = get_system_config_schema(
+            defaults={},
+            values={},
+            include_rate_limits=False,
+            include_audit_logging=True,
+        )
+        assert SYS_CONFIG_ENABLE_AUDIT_LOGGING_KEY in _schema_key_strings(schema)
+
+    def test_without_audit_logging_omits_enable_audit_logging_key(self):
+        """When include_audit_logging=False (default) enable_audit_logging is absent."""
+        schema = get_system_config_schema(
+            defaults={},
+            values={},
+            include_rate_limits=False,
+            include_audit_logging=False,
+        )
+        assert SYS_CONFIG_ENABLE_AUDIT_LOGGING_KEY not in _schema_key_strings(schema)
+
+    def test_defaults_none_treated_as_empty_dict(self):
+        """Passing defaults=None does not raise and yields the same schema as defaults={}."""
+        schema_none = get_system_config_schema(
+            defaults=None, values=None, include_rate_limits=False
+        )
+        schema_empty = get_system_config_schema(
+            defaults={}, values={}, include_rate_limits=False
+        )
+        assert _schema_key_strings(schema_none) == _schema_key_strings(schema_empty)
+
+    def test_tts_service_selector_contains_disabled_option(self):
+        """When TTS services are present the '(Disabled)' sentinel option is included."""
+        tts_service = [{"value": "tts.piper", "label": "Piper"}]
+        schema = get_system_config_schema(
+            defaults={},
+            values={"tts_services": tts_service},
+            include_rate_limits=False,
+        )
+        for key, selector_obj in schema.schema.items():
+            if getattr(key, "schema", None) == SYS_CONFIG_TTS_SERVICE_KEY:
+                config = getattr(selector_obj, "config", {})
+                options = (
+                    config.get("options", [])
+                    if isinstance(config, dict)
+                    else getattr(config, "options", [])
+                )
+                option_values = [
+                    (o["value"] if isinstance(o, dict) else o.value) for o in options
+                ]
+                assert "None" in option_values
+                assert "tts.piper" in option_values
+                return
+        raise AssertionError(f"Key '{SYS_CONFIG_TTS_SERVICE_KEY}' not found in schema")

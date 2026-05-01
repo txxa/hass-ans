@@ -1250,3 +1250,253 @@ class TestSetupSystemRecipient:
 
         assert result["type"] == FlowResultType.FORM
         assert result["step_id"] == SUBENTRY_FLOW_STEP_RECIPIENT_BASIC_SETTINGS_KEY
+
+
+# ===========================================================================
+# Additional branch coverage — selection form header options
+# ===========================================================================
+
+
+class TestAsyncStepRecipientSelectionOptions:
+    """Tests for option rows added to the selection form under specific conditions."""
+
+    async def test_no_input_shows_ha_user_option_when_users_available(self):
+        """The HA_USER option appears in the schema when HA users are not yet configured."""
+        flow, main_entry = _make_flow()
+        ha_user = MagicMock()
+        ha_user.id = "user123"
+        ha_user.name = "Bob"
+        ha_user.credentials = []
+        flow.hass.auth.async_get_users = AsyncMock(return_value=[ha_user])
+        # main_entry has no subentries → user is not yet configured
+        main_entry.subentries = {}
+        _prime_with_meta(flow, main_entry)
+
+        with patch(_PATCH_GET_MAIN_ENTRY, return_value=main_entry):
+            result = await flow.async_step_recipient_selection(None)
+
+        assert result["type"] == FlowResultType.FORM
+        options = _selector_option_values(
+            dict(result["data_schema"].schema)[
+                next(
+                    k
+                    for k in result["data_schema"].schema
+                    if getattr(k, "schema", None) == RCPT_CONFIG_RECIPIENT_CHOICE_KEY
+                )
+            ]
+        )
+        assert RECIPIENT_CHOICE_HA_USER in options
+
+    async def test_no_input_shows_tts_option_when_tts_configured(self):
+        """The TTS option appears when system_config.tts_service is non-empty."""
+        flow, main_entry = _make_flow(tts_service="tts.piper")
+        flow._main_entry = main_entry
+        flow.system_config = SystemConfig.from_dict(
+            _sys_config_dict(tts_service="tts.piper")
+        )
+
+        with patch(_PATCH_GET_MAIN_ENTRY, return_value=main_entry):
+            result = await flow.async_step_recipient_selection(None)
+
+        assert result["type"] == FlowResultType.FORM
+        options = _selector_option_values(
+            dict(result["data_schema"].schema)[
+                next(
+                    k
+                    for k in result["data_schema"].schema
+                    if getattr(k, "schema", None) == RCPT_CONFIG_RECIPIENT_CHOICE_KEY
+                )
+            ]
+        )
+        assert RECIPIENT_CHOICE_TTS in options
+
+
+# ===========================================================================
+# HA_USER definition step with user_input
+# ===========================================================================
+
+
+class TestAsyncStepRecipientDefinitionHaUser:
+    """Tests for the HA_USER branch in async_step_recipient_definition."""
+
+    async def test_ha_user_valid_id_proceeds_to_basic_settings(self):
+        """Providing a valid HA user id stores the user name and proceeds."""
+        flow, main_entry = _make_flow()
+        _prime_with_meta(flow, main_entry, recipient_type=RecipientType.HA_USER)
+        ha_user = MagicMock()
+        ha_user.id = "user123"
+        ha_user.name = "Bob"
+        ha_user.credentials = []
+        flow.hass.auth.async_get_users = AsyncMock(return_value=[ha_user])
+        flow.hass.auth.async_get_user = AsyncMock(return_value=ha_user)
+
+        with (
+            patch(_PATCH_GET_MAIN_ENTRY, return_value=main_entry),
+            patch(_PATCH_CHECK_NAME, return_value=True),
+        ):
+            result = await flow.async_step_recipient_definition(
+                {RCPT_CONFIG_USER_KEY: "user123"}
+            )
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["step_id"] == SUBENTRY_FLOW_STEP_RECIPIENT_BASIC_SETTINGS_KEY
+
+    async def test_ha_user_empty_user_id_shows_error(self):
+        """Providing an empty user id shows an error on the definition form."""
+        flow, main_entry = _make_flow()
+        _prime_with_meta(flow, main_entry, recipient_type=RecipientType.HA_USER)
+        flow.hass.auth.async_get_users = AsyncMock(return_value=[])
+
+        with patch(_PATCH_GET_MAIN_ENTRY, return_value=main_entry):
+            result = await flow.async_step_recipient_definition(
+                {RCPT_CONFIG_USER_KEY: ""}
+            )
+
+        assert result["type"] == FlowResultType.FORM
+        assert RCPT_CONFIG_USER_KEY in result["errors"] or "base" in result["errors"]
+
+    async def test_ha_user_id_not_in_allowed_shows_error(self):
+        """A user id not in the allowed list shows an error on the definition form."""
+        flow, main_entry = _make_flow()
+        _prime_with_meta(flow, main_entry, recipient_type=RecipientType.HA_USER)
+        # Return empty so "ghost_id" is not an allowed id
+        flow.hass.auth.async_get_users = AsyncMock(return_value=[])
+
+        with patch(_PATCH_GET_MAIN_ENTRY, return_value=main_entry):
+            result = await flow.async_step_recipient_definition(
+                {RCPT_CONFIG_USER_KEY: "ghost_id"}
+            )
+
+        assert result["type"] == FlowResultType.FORM
+        assert RCPT_CONFIG_USER_KEY in result["errors"] or "base" in result["errors"]
+
+
+# ===========================================================================
+# async_step_recipient_basic_settings — no system_config branch
+# ===========================================================================
+
+
+class TestAsyncStepRecipientBasicSettingsNullSystemConfig:
+    """Tests for when system_config is None in async_step_recipient_basic_settings."""
+
+    async def test_no_system_config_uses_default_validation_context(self):
+        """Without system_config the form is still shown (default ValidationContext used)."""
+        flow, main_entry = _make_flow()
+        _prime_with_meta(flow, main_entry)
+        flow.system_config = None  # explicitly unset
+
+        result = await flow.async_step_recipient_basic_settings(None)
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["step_id"] == SUBENTRY_FLOW_STEP_RECIPIENT_BASIC_SETTINGS_KEY
+
+
+# ===========================================================================
+# _create_recipient_entry — additional abort / error paths
+# ===========================================================================
+
+
+class TestCreateRecipientEntryAdditional:
+    """Additional branch tests for _create_recipient_entry."""
+
+    async def test_no_main_entry_aborts_with_no_main_entry(self):
+        """When _main_entry is None the flow aborts with 'no_main_entry'."""
+        flow, _ = _make_flow()
+        flow._main_entry = None
+        flow._recipient_meta = {
+            RCPT_CONFIG_ID_KEY: "rcpt-uuid",
+            RCPT_CONFIG_TYPE_KEY: RecipientType.GENERIC.value,
+            RCPT_CONFIG_NAME_KEY: "Alice",
+            RCPT_CONFIG_EMAIL_KEY: None,
+            RCPT_CONFIG_PHONE_KEY: None,
+        }
+        flow._recipient_settings = _complete_settings()
+
+        result = await flow._create_recipient_entry()
+
+        assert result["type"] == FlowResultType.ABORT
+        assert result["reason"] == "no_main_entry"
+
+    async def test_async_update_and_abort_exception_returns_update_entry_failed(self):
+        """If async_update_and_abort raises, the flow aborts with 'update_entry_failed'."""
+        flow, main_entry = _make_flow()
+        flow._main_entry = main_entry
+        flow._reconfigure_entry = MagicMock()
+        flow._recipient_meta = {
+            RCPT_CONFIG_ID_KEY: "rcpt-uuid",
+            RCPT_CONFIG_TYPE_KEY: RecipientType.GENERIC.value,
+            RCPT_CONFIG_NAME_KEY: "Alice",
+            RCPT_CONFIG_EMAIL_KEY: None,
+            RCPT_CONFIG_PHONE_KEY: None,
+        }
+        flow._recipient_settings = _complete_settings()
+        flow.async_update_and_abort = MagicMock(side_effect=RuntimeError("boom"))
+
+        result = await flow._create_recipient_entry()
+
+        assert result["type"] == FlowResultType.ABORT
+        assert result["reason"] == "update_entry_failed"
+
+
+# ===========================================================================
+# _is_persistent_notification_enabled
+# ===========================================================================
+
+
+class TestIsPersistentNotificationEnabled:
+    """Tests for _is_persistent_notification_enabled."""
+
+    def test_returns_false_when_no_system_config(self):
+        """With no system_config the method returns False."""
+        flow, _ = _make_flow()
+        flow.system_config = None
+
+        assert flow._is_persistent_notification_enabled() is False
+
+    def test_returns_true_when_channel_present(self):
+        """Returns True when PERSISTENT_NOTIFICATION_CHANNEL is in enabled_channels."""
+        flow, _ = _make_flow()
+        flow.system_config = SystemConfig.from_dict(_sys_config_dict())
+        # _sys_config_dict already includes PERSISTENT_NOTIFICATION_CHANNEL
+        assert flow._is_persistent_notification_enabled() is True
+
+    def test_returns_false_when_channel_absent(self):
+        """Returns False when PERSISTENT_NOTIFICATION_CHANNEL is NOT in enabled_channels."""
+        flow, _ = _make_flow()
+        flow.system_config = SystemConfig.from_dict(_sys_config_dict())
+        # Remove the channel from the already-constructed object to bypass validation
+        flow.system_config.enabled_channels = []
+
+        assert flow._is_persistent_notification_enabled() is False
+
+
+# ===========================================================================
+# _get_available_channels — no-recipient-type branch (line 971)
+# ===========================================================================
+
+
+class TestGetAvailableChannelsNoRecipientType:
+    """Tests for _get_available_channels when recipient type is unknown."""
+
+    async def test_no_recipient_type_calls_get_channels_for_ui_without_arg(self):
+        """When _recipient_meta has no type, get_channels_for_ui is called without arg."""
+        flow, _ = _make_flow()
+        flow.system_config = SystemConfig.from_dict(_sys_config_dict())
+        # _recipient_meta without RCPT_CONFIG_TYPE_KEY
+        flow._recipient_meta = {}
+
+        pn_channel = ChannelInfo(
+            id=PERSISTENT_NOTIFICATION_CHANNEL,
+            label="Persistent",
+            scope=ChannelScope.SYSTEM,
+        )
+        config_repo = MagicMock()
+        config_repo.channel_manager.count_detected.return_value = 1
+        config_repo.get_channels_for_ui.return_value = [pn_channel]
+
+        with patch(_PATCH_GET_CONFIG_REPO, return_value=config_repo):
+            result = await flow._get_available_channels()
+
+        # Verify it was called without a RecipientType argument (the no-type branch)
+        config_repo.get_channels_for_ui.assert_called_once_with()
+        assert len(result) == 1

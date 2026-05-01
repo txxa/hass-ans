@@ -357,3 +357,69 @@ def test_snapshot_deep_copy_does_not_affect_repo():
 
     # The original repository must be unaffected
     assert "r1" in repo.recipients
+
+
+# ---------------------------------------------------------------------------
+# _load_main_entry (real method, not patched)
+# ---------------------------------------------------------------------------
+
+
+class TestLoadMainEntryDirect:
+    """Tests calling the real _load_main_entry (without patching it away)."""
+
+    def test_returns_false_when_get_main_entry_returns_none(self):
+        """_load_main_entry returns False when get_main_entry finds no entry."""
+        hass = _make_hass()
+        repo = ConfigRepository(hass)
+        with patch("ans.config.repository.get_main_entry", return_value=None):
+            result = repo._load_main_entry()
+        assert result is False
+        assert repo.system_config is None
+
+    def test_returns_true_and_loads_config_when_entry_has_no_options(self):
+        """_load_main_entry succeeds and loads system_config from data when options is empty."""
+        hass = _make_hass()
+        repo = ConfigRepository(hass)
+        entry = MagicMock()
+        entry.data = _make_system_config_dict()
+        entry.options = {}  # falsy — hits the else branch
+
+        with patch("ans.config.repository.get_main_entry", return_value=entry):
+            result = repo._load_main_entry()
+
+        assert result is True
+        assert repo.system_config is not None
+        assert repo.system_config.global_rate_limit == 100
+
+    def test_returns_true_and_merges_options_over_data(self):
+        """When options is non-empty it overrides the corresponding data values."""
+        hass = _make_hass()
+        repo = ConfigRepository(hass)
+        entry = MagicMock()
+        entry.data = _make_system_config_dict()
+        entry.options = {"global_rate_limit": 999}  # override
+
+        with patch("ans.config.repository.get_main_entry", return_value=entry):
+            result = repo._load_main_entry()
+
+        assert result is True
+        assert repo.system_config.global_rate_limit == 999
+
+
+# ---------------------------------------------------------------------------
+# _unload_subentries — exception path
+# ---------------------------------------------------------------------------
+
+
+def test_unload_subentries_exception_returns_false():
+    """_unload_subentries returns False when recipients.clear() raises unexpectedly."""
+    hass = _make_hass()
+    repo = ConfigRepository(hass)
+
+    broken_dict = MagicMock()
+    broken_dict.clear.side_effect = RuntimeError("storage failure")
+    repo.recipients = broken_dict
+
+    result = repo._unload_subentries()
+
+    assert result is False

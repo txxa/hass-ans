@@ -1295,3 +1295,313 @@ def test_field_validation_error_placeholders_accessible():
     assert err.placeholders == {"min": "0", "max": "100"}
     assert err.field == "my_field"
     assert err.message == "Out of range"
+
+
+# ---------------------------------------------------------------------------
+# __time_to_sec — private helper (via name-mangling)
+# ---------------------------------------------------------------------------
+
+# The private helper is tested directly via Python name-mangling to cover branches
+# that can never be reached through the public validators (because those first apply
+# _validate_time_format which only passes valid HH:MM / HH:MM:SS strings).
+
+_time_to_sec = ConfigValidator._ConfigValidator__time_to_sec  # type: ignore[attr-defined]
+
+
+def test_time_to_sec_hh_mm_ss_format_covered():
+    """HH:MM:SS format (3 parts) is parsed correctly."""
+    assert _time_to_sec("22:00:00") == 22 * 3600
+
+
+def test_time_to_sec_invalid_parts_count_raises():
+    """A time string with neither 2 nor 3 colon-separated parts raises ValueError."""
+    with pytest.raises(ValueError, match="Invalid time format"):
+        _time_to_sec("22")  # zero colons → 1 part
+
+
+def test_time_to_sec_non_integer_component_raises():
+    """Non-numeric time components cause ValueError about integer conversion."""
+    with pytest.raises(ValueError, match="integers"):
+        _time_to_sec("22:xx")
+
+
+def test_time_to_sec_out_of_range_raises():
+    """Hour value outside [0, 23] raises ValueError about range."""
+    with pytest.raises(ValueError, match="out of range"):
+        _time_to_sec("25:00:00")  # 3 parts, hour=25 out of [0,23]
+
+
+# ---------------------------------------------------------------------------
+# Type-error branches in format validators
+# ---------------------------------------------------------------------------
+
+
+def test_validate_time_format_non_string_raises_type_error():
+    """_validate_time_format(42) raises TypeError containing 'string'."""
+    with pytest.raises(TypeError, match="string"):
+        ConfigValidator._validate_time_format(42)
+
+
+def test_validate_email_format_non_string_raises_type_error():
+    """_validate_email_format(42) raises TypeError containing 'string'."""
+    with pytest.raises(TypeError, match="string"):
+        ConfigValidator._validate_email_format(42)
+
+
+def test_validate_phone_format_non_string_raises_type_error():
+    """_validate_phone_format(42) raises TypeError containing 'string'."""
+    with pytest.raises(TypeError, match="string"):
+        ConfigValidator._validate_phone_format(42)
+
+
+def test_validate_regex_pattern_non_string_raises_type_error():
+    """_validate_regex_pattern(42) raises TypeError containing 'string'."""
+    with pytest.raises(TypeError, match="string"):
+        ConfigValidator._validate_regex_pattern(42)
+
+
+# ---------------------------------------------------------------------------
+# _validate_recipient_basic_settings — TypeError paths
+# ---------------------------------------------------------------------------
+
+
+def test_recipient_basic_settings_non_int_rate_limit_raises_field_error():
+    """A non-integer rate_limit raises FieldValidationError on field 'rate_limit'."""
+    with pytest.raises(FieldValidationError) as exc_info:
+        ConfigValidator._validate_recipient_basic_settings(
+            retry_attempts=0,
+            rate_limit="high",  # type: ignore[arg-type]
+            notification_types=[NotificationType.INFO],
+            blocked_sources_pattern=None,
+        )
+    assert exc_info.value.field == "rate_limit"
+
+
+def test_recipient_basic_settings_non_string_blocked_sources_raises_field_error():
+    """A non-string truthy blocked_sources_pattern raises FieldValidationError."""
+    with pytest.raises(FieldValidationError) as exc_info:
+        ConfigValidator._validate_recipient_basic_settings(
+            retry_attempts=0,
+            rate_limit=0,
+            notification_types=[NotificationType.INFO],
+            blocked_sources_pattern=42,  # type: ignore[arg-type]
+        )
+    assert "blocked_sources" in exc_info.value.field
+
+
+# ---------------------------------------------------------------------------
+# _validate_recipient_channel_mapping — TypeError path
+# ---------------------------------------------------------------------------
+
+
+def test_channel_mapping_non_string_channel_item_raises():
+    """A list with a non-string channel item raises FieldValidationError."""
+    with pytest.raises(FieldValidationError):
+        ConfigValidator._validate_recipient_channel_mapping(
+            channels_low=[42],  # type: ignore[list-item]
+            channels_medium=None,
+            channels_high=None,
+            channels_critical=None,
+            recipient_type=None,
+        )
+
+
+# ---------------------------------------------------------------------------
+# _validate_recipient_dnd_settings — DND time error paths
+# ---------------------------------------------------------------------------
+
+
+def test_dnd_invalid_start_time_format_raises():
+    """An invalid dnd_start time string triggers ValueError and maps to RCPT_CONFIG_DND_START_KEY."""
+    with pytest.raises(FieldValidationError) as exc_info:
+        ConfigValidator._validate_recipient_dnd_settings(
+            dnd_enabled=False,
+            dnd_start="25:99",  # invalid format
+            dnd_end=None,
+            dnd_allowed_sources_pattern=None,
+        )
+    assert exc_info.value.field == "dnd_start"
+
+
+def test_dnd_non_string_start_raises_type_error_field():
+    """A non-string dnd_start triggers TypeError and maps to RCPT_CONFIG_DND_START_KEY."""
+    with pytest.raises(FieldValidationError) as exc_info:
+        ConfigValidator._validate_recipient_dnd_settings(
+            dnd_enabled=False,
+            dnd_start=42,  # type: ignore[arg-type]
+            dnd_end=None,
+            dnd_allowed_sources_pattern=None,
+        )
+    assert exc_info.value.field == "dnd_start"
+
+
+def test_dnd_invalid_end_time_format_raises():
+    """An invalid dnd_end time string triggers ValueError and maps to RCPT_CONFIG_DND_END_KEY."""
+    with pytest.raises(FieldValidationError) as exc_info:
+        ConfigValidator._validate_recipient_dnd_settings(
+            dnd_enabled=False,
+            dnd_start=None,
+            dnd_end="25:99",  # invalid format
+            dnd_allowed_sources_pattern=None,
+        )
+    assert exc_info.value.field == "dnd_end"
+
+
+def test_dnd_non_string_end_raises_type_error_field():
+    """A non-string dnd_end triggers TypeError and maps to RCPT_CONFIG_DND_END_KEY."""
+    with pytest.raises(FieldValidationError) as exc_info:
+        ConfigValidator._validate_recipient_dnd_settings(
+            dnd_enabled=False,
+            dnd_start=None,
+            dnd_end=42,  # type: ignore[arg-type]
+            dnd_allowed_sources_pattern=None,
+        )
+    assert exc_info.value.field == "dnd_end"
+
+
+def test_dnd_valid_sources_pattern_accepted():
+    """A valid regex dnd_allowed_sources_pattern does not raise."""
+    ConfigValidator._validate_recipient_dnd_settings(
+        dnd_enabled=False,
+        dnd_start=None,
+        dnd_end=None,
+        dnd_allowed_sources_pattern="^home\\..*$",
+    )  # must not raise
+
+
+def test_dnd_invalid_sources_pattern_raises():
+    """An invalid regex in dnd_allowed_sources_pattern raises FieldValidationError."""
+    with pytest.raises(FieldValidationError) as exc_info:
+        ConfigValidator._validate_recipient_dnd_settings(
+            dnd_enabled=False,
+            dnd_start=None,
+            dnd_end=None,
+            dnd_allowed_sources_pattern="[unclosed",
+        )
+    assert exc_info.value.field == "dnd_allowed_sources_regex"
+
+
+def test_dnd_non_string_sources_pattern_raises():
+    """A non-string dnd_allowed_sources_pattern raises FieldValidationError (TypeError)."""
+    with pytest.raises(FieldValidationError) as exc_info:
+        ConfigValidator._validate_recipient_dnd_settings(
+            dnd_enabled=False,
+            dnd_start=None,
+            dnd_end=None,
+            dnd_allowed_sources_pattern=42,  # type: ignore[arg-type]
+        )
+    assert exc_info.value.field == "dnd_allowed_sources_regex"
+
+
+def test_dnd_allowed_criticalities_non_string_item_raises():
+    """A list with a non-string criticality item raises FieldValidationError."""
+    with pytest.raises(FieldValidationError) as exc_info:
+        ConfigValidator._validate_recipient_dnd_settings(
+            dnd_enabled=False,
+            dnd_start=None,
+            dnd_end=None,
+            dnd_allowed_sources_pattern=None,
+            dnd_allowed_criticalities=[42],  # type: ignore[list-item]
+        )
+    assert exc_info.value.field == "dnd_allowed_criticalities"
+
+
+def test_dnd_allowed_types_non_string_item_raises():
+    """A list with a non-string type item raises FieldValidationError."""
+    with pytest.raises(FieldValidationError) as exc_info:
+        ConfigValidator._validate_recipient_dnd_settings(
+            dnd_enabled=False,
+            dnd_start=None,
+            dnd_end=None,
+            dnd_allowed_sources_pattern=None,
+            dnd_allowed_types=[42],  # type: ignore[list-item]
+        )
+    assert exc_info.value.field == "dnd_allowed_types"
+
+
+# ---------------------------------------------------------------------------
+# validate_recipient — missing TypeError / edge branches
+# ---------------------------------------------------------------------------
+
+
+def test_validate_recipient_non_string_id_raises():
+    """A truthy but non-string recipient.id raises FieldValidationError on field 'id'."""
+    with pytest.raises(FieldValidationError) as exc_info:
+        ConfigValidator.validate_recipient(_raw_recipient(id=42))  # type: ignore[arg-type]
+    assert exc_info.value.field == "id"
+
+
+def test_validate_recipient_invalid_type_not_enum_raises():
+    """A non-RecipientType recipient.type raises FieldValidationError on field 'type'."""
+    with pytest.raises(FieldValidationError) as exc_info:
+        ConfigValidator.validate_recipient(_raw_recipient(type="generic"))  # type: ignore[arg-type]
+    assert exc_info.value.field == "type"
+
+
+def test_validate_recipient_non_string_name_raises():
+    """A truthy but non-string recipient.name raises FieldValidationError on field 'name'."""
+    with pytest.raises(FieldValidationError) as exc_info:
+        ConfigValidator.validate_recipient(_raw_recipient(name=42))  # type: ignore[arg-type]
+    assert exc_info.value.field == "name"
+
+
+def test_validate_recipient_non_string_email_raises():
+    """A truthy but non-string recipient.email raises FieldValidationError on field 'email'."""
+    with pytest.raises(FieldValidationError) as exc_info:
+        ConfigValidator.validate_recipient(_raw_recipient(email=42))  # type: ignore[arg-type]
+    assert exc_info.value.field == "email"
+
+
+def test_validate_recipient_non_string_phone_raises():
+    """A truthy but non-string recipient.phone raises FieldValidationError on field 'phone'."""
+    with pytest.raises(FieldValidationError) as exc_info:
+        ConfigValidator.validate_recipient(_raw_recipient(phone=42))  # type: ignore[arg-type]
+    assert exc_info.value.field == "phone"
+
+
+# ---------------------------------------------------------------------------
+# validate_system_config — TypeError paths
+# ---------------------------------------------------------------------------
+
+
+def test_validate_system_config_non_int_rate_limit_raises():
+    """A non-integer global_rate_limit raises FieldValidationError on field 'global_rate_limit'."""
+    with pytest.raises(FieldValidationError) as exc_info:
+        ConfigValidator.validate_system_config(
+            _raw_sys_config(global_rate_limit="high")  # type: ignore[arg-type]
+        )
+    assert exc_info.value.field == "global_rate_limit"
+
+
+def test_validate_system_config_non_string_channel_raises():
+    """A non-string item in enabled_channels raises FieldValidationError on field 'enabled_channels'."""
+    with pytest.raises(FieldValidationError) as exc_info:
+        ConfigValidator.validate_system_config(
+            _raw_sys_config(
+                enabled_channels=[42],  # type: ignore[list-item]
+                persistent_notifications_enabled=False,
+            )
+        )
+    assert exc_info.value.field == "enabled_channels"
+
+
+# ---------------------------------------------------------------------------
+# _validate_recipient_dnd_settings — HH:MM:SS time path (covers elif branch)
+# ---------------------------------------------------------------------------
+
+
+def test_dnd_hhmmss_start_and_end_times_accepted():
+    """DND enabled with HH:MM:SS formatted start/end times does not raise."""
+    ConfigValidator._validate_recipient_dnd_settings(
+        dnd_enabled=True,
+        dnd_start="22:00:00",  # 3-part format → exercises elif len(parts)==3
+        dnd_end="08:30:00",
+        dnd_allowed_sources_pattern=None,
+    )  # must not raise
+
+
+def test_dnd_settings_schema_invalid_sources_pattern_raises():
+    """An invalid regex in dnd_allowed_sources_pattern raises vol.Invalid via schema validation."""
+    data = _valid_dnd_data(dnd_allowed_sources_pattern="[unclosed")
+    with pytest.raises(vol.Invalid):
+        ConfigValidator.validate_recipient_dnd_settings_schema(data)

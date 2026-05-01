@@ -168,3 +168,45 @@ class TestMobileAppClassAPI:
         hass = MagicMock()
         with pytest.raises(ValueError):
             MobileAppDeliveryAdapter(hass=hass, device_id="")
+
+    def test_extract_variant_returns_device_id(self):
+        """extract_variant strips the prefix and returns the device_id suffix."""
+        variant = MobileAppDeliveryAdapter.extract_variant("notify.mobile_app_sm_x")
+        assert variant == "sm_x"
+
+    def test_extract_variant_non_matching_returns_none(self):
+        """extract_variant returns None for channel IDs that don't start with the prefix."""
+        assert MobileAppDeliveryAdapter.extract_variant("notify.signal") is None
+        assert MobileAppDeliveryAdapter.extract_variant("notify.mobile_app") is None
+
+    def test_channel_property_returns_full_id(self):
+        """The channel property returns the full 'notify.mobile_app_<device_id>' string."""
+        adapter, _ = _make_adapter(device_id="my_phone")
+        assert adapter.channel == "notify.mobile_app_my_phone"
+
+    def test_service_name_strips_notify_prefix(self):
+        """service_name returns the channel ID with the 'notify.' prefix removed."""
+        adapter, _ = _make_adapter(device_id="my_phone")
+        assert adapter.service_name == "mobile_app_my_phone"
+
+
+# ── Factory ───────────────────────────────────────────────────────────────────
+
+
+class TestMobileAppFactory:
+    """Verify create_factory and the inner _device_factory function."""
+
+    def test_create_factory_empty_device_id_raises(self):
+        """The inner _device_factory raises ValueError when device_id is empty."""
+        hass = MagicMock()
+        factory = MobileAppDeliveryAdapter.create_factory()
+        with pytest.raises(ValueError, match="device_id is required"):
+            factory.factory_fn(hass, "")
+
+    def test_create_factory_produces_adapter(self):
+        """The inner _device_factory creates a MobileAppDeliveryAdapter for a valid device_id."""
+        hass = MagicMock()
+        factory = MobileAppDeliveryAdapter.create_factory()
+        adapter = factory.factory_fn(hass, "test_device")
+        assert isinstance(adapter, MobileAppDeliveryAdapter)
+        assert adapter.device_id == "test_device"

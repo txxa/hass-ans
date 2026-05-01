@@ -11,6 +11,7 @@ from custom_components.ans.config.validator import FieldValidationError
 from custom_components.ans.models import (
     ChannelInfo,
     ChannelScope,
+    ConfigSnapshot,
     DoNotDisturbConfig,
     FilterDecision,
     FilterDecisionType,
@@ -19,6 +20,7 @@ from custom_components.ans.models import (
     NotificationDeliveryTask,
     NotificationPayload,
     NotificationType,
+    RecipientConfig,
     RecipientContactInfo,
     RecipientData,
     RecipientType,
@@ -356,6 +358,34 @@ class TestTTSSettings:
         restored = TTSSettings.from_dict(s.to_dict())
         assert restored.ssml_enabled is False
 
+    def test_ssml_enabled_non_bool_raises(self):
+        """A non-bool value for ssml_enabled raises TypeError."""
+        with pytest.raises(TypeError):
+            TTSSettings(
+                volume_morning=40,
+                volume_daytime=50,
+                volume_evening=40,
+                volume_night=20,
+                volume_override_criticalities=[],
+                volume_override_level=80,
+                message_format="message_only",
+                ssml_enabled=1,
+            )
+
+    def test_volume_management_non_bool_raises(self):
+        """A non-bool value for volume_management_enabled raises TypeError."""
+        with pytest.raises(TypeError):
+            TTSSettings(
+                volume_morning=40,
+                volume_daytime=50,
+                volume_evening=40,
+                volume_night=20,
+                volume_override_criticalities=[],
+                volume_override_level=80,
+                message_format="message_only",
+                volume_management_enabled=0,
+            )
+
 
 # ---------------------------------------------------------------------------
 # RecipientContactInfo
@@ -444,6 +474,13 @@ class TestRecipientData:
         with pytest.raises(FieldValidationError):
             self._valid(phone="555-1234")  # Not E.164
 
+    def test_to_dict_non_enum_type_stored_as_is(self):
+        """to_dict() stores the type field as-is when it is a plain string rather than a RecipientType enum."""
+        r = self._valid()
+        r.type = "HA_USER"  # plain string, not an Enum instance
+        d = r.to_dict()
+        assert d["type"] == "HA_USER"
+
 
 # ---------------------------------------------------------------------------
 # SystemConfig
@@ -510,3 +547,199 @@ class TestSystemConfig:
         """A retry_backoff_factor below 1.0 raises an exception during construction."""
         with pytest.raises(FieldValidationError):
             self._valid(retry_backoff_factor=0.5)
+
+    def test_from_dict_defaults_for_missing_keys(self):
+        """SystemConfig.from_dict() uses default values when optional keys are absent."""
+        d = {
+            "enabled_channels": ["notify.persistent_notification"],
+            "global_rate_limit": 50,
+        }
+        s = SystemConfig.from_dict(d)
+        assert s.global_rate_limit == 50
+        assert s.tts_service is None
+        assert s.retry_base_delay == 60  # SYS_DEFAULT_RETRY_BASE_DELAY_SECONDS
+
+    def test_tts_service_stored_and_retrieved(self):
+        """tts_service field is preserved through to_dict() → from_dict() round-trip."""
+        s = self._valid(tts_service="tts.google_translate_say")
+        d = s.to_dict()
+        restored = SystemConfig.from_dict(d)
+        assert restored.tts_service == "tts.google_translate_say"
+
+
+# ---------------------------------------------------------------------------
+# RecipientConfig
+# ---------------------------------------------------------------------------
+
+
+class TestRecipientConfig:
+    """Verify RecipientConfig factory methods and to_dict/from_dict serialisation."""
+
+    def test_default_creates_valid_config(self):
+        """RecipientConfig.default() returns a config with recipient_id=None and dnd_enabled=False."""
+        cfg = RecipientConfig.default()
+        assert cfg.recipient_id is None
+        assert cfg.dnd_enabled is False
+        assert cfg.retry_attempts >= 0
+
+    def test_system_default_has_persistent_notification(self):
+        """RecipientConfig.system_default() includes persistent_notification in all channel lists."""
+        cfg = RecipientConfig.system_default()
+        assert "notify.persistent_notification" in cfg.channels_low
+        assert "notify.persistent_notification" in cfg.channels_critical
+
+    def test_to_dict_from_dict_round_trip(self):
+        """RecipientConfig.to_dict() / from_dict() preserves retry_attempts and dnd_enabled."""
+        cfg = RecipientConfig.default()
+        d = cfg.to_dict()
+        restored = RecipientConfig.from_dict(d)
+        assert restored.retry_attempts == cfg.retry_attempts
+        assert restored.dnd_enabled == cfg.dnd_enabled
+
+    def test_to_dict_with_non_none_recipient_id(self):
+        """to_dict() serialises a non-None recipient_id as a string value."""
+        cfg = RecipientConfig.default()
+        cfg.recipient_id = "rcpt-42"
+        d = cfg.to_dict()
+        assert d["recipient_id"] == "rcpt-42"
+
+    def test_to_dict_from_dict_round_trip_with_tts_settings(self):
+        """RecipientConfig.to_dict() / from_dict() preserves TTS settings when present."""
+        cfg = RecipientConfig.default()
+        cfg.tts_settings = TTSSettings.default()
+        d = cfg.to_dict()
+        restored = RecipientConfig.from_dict(d)
+        assert restored.tts_settings is not None
+        assert restored.tts_settings.volume_morning == cfg.tts_settings.volume_morning
+
+    def test_non_none_recipient_id_normalised_at_construction(self):
+        """__post_init__ normalises a non-None recipient_id to its string representation."""
+        cfg = RecipientConfig(
+            recipient_id="rcpt-99",
+            retry_attempts=3,
+            rate_limit=20,
+            notification_types=list(NotificationType),
+            blocked_sources_regex=None,
+            channels_low=[],
+            channels_medium=[],
+            channels_high=[],
+            channels_critical=[],
+            dnd_enabled=False,
+            dnd_start="22:00:00",
+            dnd_end="06:00:00",
+            dnd_allowed_sources_regex=None,
+        )
+        assert cfg.recipient_id == "rcpt-99"
+        assert isinstance(cfg.recipient_id, str)
+
+
+# ---------------------------------------------------------------------------
+# ConfigSnapshot
+# ---------------------------------------------------------------------------
+
+
+class TestConfigSnapshot:
+    """Verify ConfigSnapshot.getRecipients, getRecipientChannels, getRecipientNotificationPolicy, and getRecipientContactInfo."""
+
+    def _make_system_config(self) -> SystemConfig:
+        return SystemConfig(
+            global_rate_limit=100,
+            rate_limit_window=60,
+            enabled_channels=["notify.persistent_notification"],
+        )
+
+    def _make_snapshot(
+        self, rcpt_id: str = "rcpt-1", **cfg_overrides
+    ) -> ConfigSnapshot:
+        recipient = RecipientData(
+            id=rcpt_id, type=RecipientType.HA_USER, name="Alice", email=None, phone=None
+        )
+        cfg = RecipientConfig.default()
+        for key, val in cfg_overrides.items():
+            setattr(cfg, key, val)
+        return ConfigSnapshot(
+            snapshot_id="snap-1",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            recipients={rcpt_id: recipient},
+            recipient_configs={rcpt_id: cfg},
+            system_config=self._make_system_config(),
+        )
+
+    def test_get_recipients_returns_list(self):
+        """getRecipients() returns a list containing the configured recipient ID."""
+        snap = self._make_snapshot()
+        assert snap.getRecipients() == ["rcpt-1"]
+
+    def test_get_recipient_channels_low(self):
+        """getRecipientChannels() for LOW criticality returns the channels_low set."""
+        snap = self._make_snapshot(channels_low=["notify.mobile_app"])
+        result = snap.getRecipientChannels("rcpt-1", NotificationCriticality.LOW)
+        assert result == {"notify.mobile_app"}
+
+    def test_get_recipient_channels_medium(self):
+        """getRecipientChannels() for MEDIUM criticality returns the channels_medium set."""
+        snap = self._make_snapshot(channels_medium=["notify.signal"])
+        result = snap.getRecipientChannels("rcpt-1", NotificationCriticality.MEDIUM)
+        assert result == {"notify.signal"}
+
+    def test_get_recipient_channels_high(self):
+        """getRecipientChannels() for HIGH criticality returns the channels_high set."""
+        snap = self._make_snapshot(channels_high=["notify.email"])
+        result = snap.getRecipientChannels("rcpt-1", NotificationCriticality.HIGH)
+        assert result == {"notify.email"}
+
+    def test_get_recipient_channels_critical(self):
+        """getRecipientChannels() for CRITICAL criticality returns the channels_critical set."""
+        snap = self._make_snapshot(
+            channels_critical=["notify.sms", "notify.mobile_app"]
+        )
+        result = snap.getRecipientChannels("rcpt-1", NotificationCriticality.CRITICAL)
+        assert result == {"notify.sms", "notify.mobile_app"}
+
+    def test_get_recipient_policy_dnd_disabled(self):
+        """getRecipientNotificationPolicy() returns dnd=None when dnd_enabled is False."""
+        snap = self._make_snapshot()  # RecipientConfig.default() has dnd_enabled=False
+        policy = snap.getRecipientNotificationPolicy("rcpt-1")
+        assert policy.dnd is None
+
+    def test_get_recipient_policy_dnd_enabled(self):
+        """getRecipientNotificationPolicy() builds a DoNotDisturbConfig when dnd_enabled=True with valid times."""
+        # RecipientConfig.default() already has dnd_start="22:00:00" / dnd_end="06:00:00"
+        snap = self._make_snapshot(dnd_enabled=True)
+        policy = snap.getRecipientNotificationPolicy("rcpt-1")
+        assert policy.dnd is not None
+        assert policy.dnd.start is not None
+        assert policy.dnd.end is not None
+
+    def test_get_recipient_policy_dnd_enabled_no_times_produces_none(self):
+        """getRecipientNotificationPolicy() returns dnd=None when dnd_enabled=True but start/end are None."""
+        snap = self._make_snapshot(dnd_enabled=True, dnd_start=None, dnd_end=None)
+        policy = snap.getRecipientNotificationPolicy("rcpt-1")
+        assert policy.dnd is None
+
+    def test_get_recipient_channels_unknown_criticality_returns_empty_set(self):
+        """getRecipientChannels() returns an empty set for an unrecognised criticality value."""
+        snap = self._make_snapshot()
+        result = snap.getRecipientChannels("rcpt-1", "UNKNOWN")  # type: ignore[arg-type]
+        assert result == set()
+
+    def test_get_recipient_contact_info(self):
+        """getRecipientContactInfo() maps recipient email and phone to a RecipientContactInfo."""
+        recipient = RecipientData(
+            id="rcpt-1",
+            type=RecipientType.HA_USER,
+            name="Bob",
+            email="bob@example.com",
+            phone=None,
+        )
+        cfg = RecipientConfig.default()
+        snap = ConfigSnapshot(
+            snapshot_id="snap-1",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            recipients={"rcpt-1": recipient},
+            recipient_configs={"rcpt-1": cfg},
+            system_config=self._make_system_config(),
+        )
+        contact = snap.getRecipientContactInfo("rcpt-1")
+        assert contact.email_address == "bob@example.com"
+        assert contact.phone_number is None

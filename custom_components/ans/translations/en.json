@@ -280,6 +280,7 @@
                 "invalid_mapping": "Invalid channel mapping. Please check your input.",
                 "invalid_dnd_settings": "Invalid DND settings. Please check your input.",
                 "name_already_exists": "A recipient with this name already exists. Please choose a different name.",
+                "ha_user_name_conflict": "The selected Home Assistant user's name is already used by an existing recipient. Rename the existing recipient first.",
                 "user": "Invalid user.",
                 "name": "Invalid or duplicate name.",
                 "email": "Invalid email address.",

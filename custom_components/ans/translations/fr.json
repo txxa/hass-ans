@@ -280,6 +280,7 @@
                 "invalid_mapping": "Mappage des canaux invalide. Veuillez vérifier votre saisie.",
                 "invalid_dnd_settings": "Paramètres NPD invalides. Veuillez vérifier votre saisie.",
                 "name_already_exists": "Un destinataire portant ce nom existe déjà. Veuillez choisir un autre nom.",
+                "ha_user_name_conflict": "Le nom de l'utilisateur Home Assistant sélectionné est déjà utilisé par un destinataire existant. Renommez d'abord le destinataire existant.",
                 "user": "Utilisateur Home Assistant invalide.",
                 "name": "Nom invalide ou existant.",
                 "email": "Adresse e-mail invalide.",

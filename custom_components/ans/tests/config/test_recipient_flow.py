@@ -418,7 +418,7 @@ class TestAsyncStepRecipientDefinition:
             )
 
         assert result["type"] == FlowResultType.FORM
-        assert RCPT_CONFIG_NAME_KEY in result["errors"]
+        assert result["errors"].get(RCPT_CONFIG_NAME_KEY) == "name_already_exists"
 
     async def test_invalid_email_format_re_shows_form_with_error(self):
         """An invalid email triggers vol.Invalid and re-shows the form with errors."""
@@ -1369,6 +1369,119 @@ class TestAsyncStepRecipientDefinitionHaUser:
 
         assert result["type"] == FlowResultType.FORM
         assert RCPT_CONFIG_USER_KEY in result["errors"] or "base" in result["errors"]
+
+
+# ===========================================================================
+# Name-collision edge cases across all recipient types
+# ===========================================================================
+
+
+class TestRecipientNameCollision:
+    """Name-collision error handling for GENERIC, TTS, and HA_USER recipients."""
+
+    async def test_generic_name_collision_shows_error_on_name_field(self):
+        """When a GENERIC recipient name is already taken the form re-shows with the error keyed to RCPT_CONFIG_NAME_KEY and the translation key 'name_already_exists'."""
+        flow, main_entry = _make_flow()
+        _prime_with_meta(flow, main_entry, recipient_type=RecipientType.GENERIC)
+
+        with patch(_PATCH_CHECK_NAME, return_value=False):
+            result = await flow.async_step_recipient_definition(
+                {RCPT_CONFIG_NAME_KEY: "Alice"}
+            )
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["step_id"] == SUBENTRY_FLOW_STEP_RECIPIENT_DEFINITION_KEY
+        assert result["errors"].get(RCPT_CONFIG_NAME_KEY) == "name_already_exists"
+
+    async def test_tts_name_collision_shows_error_on_name_field(self):
+        """When a TTS recipient name is already taken the form re-shows with the error keyed to RCPT_CONFIG_NAME_KEY and the translation key 'name_already_exists'."""
+        flow, main_entry = _make_flow()
+        _prime_with_meta(flow, main_entry, recipient_type=RecipientType.TTS)
+
+        with patch(_PATCH_CHECK_NAME, return_value=False):
+            result = await flow.async_step_recipient_definition(
+                {RCPT_CONFIG_NAME_KEY: "My Speaker"}
+            )
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["step_id"] == SUBENTRY_FLOW_STEP_RECIPIENT_DEFINITION_KEY
+        assert result["errors"].get(RCPT_CONFIG_NAME_KEY) == "name_already_exists"
+
+    async def test_ha_user_name_conflict_shows_error_on_user_dropdown(self):
+        """When the HA user's name collides with an existing recipient the form re-shows with the error keyed to RCPT_CONFIG_USER_KEY so the user sees it on the dropdown (the name field is hidden / auto-populated)."""
+        flow, main_entry = _make_flow()
+        _prime_with_meta(flow, main_entry, recipient_type=RecipientType.HA_USER)
+        ha_user = MagicMock()
+        ha_user.id = "user-abc"
+        ha_user.name = "Alice"
+        ha_user.credentials = []
+        flow.hass.auth.async_get_users = AsyncMock(return_value=[ha_user])
+
+        with (
+            patch(_PATCH_GET_MAIN_ENTRY, return_value=main_entry),
+            # Name "Alice" is already taken by a generic recipient
+            patch(_PATCH_CHECK_NAME, return_value=False),
+        ):
+            result = await flow.async_step_recipient_definition(
+                {RCPT_CONFIG_USER_KEY: "user-abc"}
+            )
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["step_id"] == SUBENTRY_FLOW_STEP_RECIPIENT_DEFINITION_KEY
+        # Error must be on the user dropdown, NOT on the invisible name field
+        assert result["errors"].get(RCPT_CONFIG_USER_KEY) == "ha_user_name_conflict"
+        assert RCPT_CONFIG_NAME_KEY not in result["errors"]
+
+    async def test_ha_user_unique_name_proceeds_to_basic_settings(self):
+        """An HA user whose name is not yet taken by any recipient proceeds to the basic settings step without errors."""
+        flow, main_entry = _make_flow()
+        _prime_with_meta(flow, main_entry, recipient_type=RecipientType.HA_USER)
+        ha_user = MagicMock()
+        ha_user.id = "user-xyz"
+        ha_user.name = "UniqueUser"
+        ha_user.credentials = []
+        flow.hass.auth.async_get_users = AsyncMock(return_value=[ha_user])
+
+        with (
+            patch(_PATCH_GET_MAIN_ENTRY, return_value=main_entry),
+            patch(_PATCH_CHECK_NAME, return_value=True),
+        ):
+            result = await flow.async_step_recipient_definition(
+                {RCPT_CONFIG_USER_KEY: "user-xyz"}
+            )
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["step_id"] == SUBENTRY_FLOW_STEP_RECIPIENT_BASIC_SETTINGS_KEY
+        assert result["errors"] == {}
+
+    async def test_reconfigure_ha_user_keeping_same_name_proceeds(self):
+        """During reconfiguration of an HA_USER recipient keeping the same name must not trigger the name-collision guard."""
+        flow, main_entry = _make_flow()
+        _prime_with_meta(flow, main_entry, recipient_type=RecipientType.HA_USER)
+        # Simulate an existing reconfigure entry
+        flow._reconfigure_entry = MagicMock()
+        flow._recipient_meta[RCPT_CONFIG_NAME_KEY] = "Alice"
+        flow._recipient_meta[RCPT_CONFIG_ID_KEY] = "user-abc"
+
+        ha_user = MagicMock()
+        ha_user.id = "user-abc"
+        ha_user.name = "Alice"
+        ha_user.credentials = []
+        flow.hass.auth.async_get_users = AsyncMock(return_value=[ha_user])
+
+        # check_recipient_name_availability would return False (name IS taken by self)
+        # but since name == current_name the guard must be skipped entirely.
+        with (
+            patch(_PATCH_GET_MAIN_ENTRY, return_value=main_entry),
+            patch(_PATCH_CHECK_NAME, return_value=False),
+        ):
+            result = await flow.async_step_recipient_definition(
+                {RCPT_CONFIG_USER_KEY: "user-abc"}
+            )
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["step_id"] == SUBENTRY_FLOW_STEP_RECIPIENT_BASIC_SETTINGS_KEY
+        assert result["errors"] == {}
 
 
 # ===========================================================================

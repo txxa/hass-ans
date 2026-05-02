@@ -280,6 +280,7 @@
                 "invalid_mapping": "Ungültige Kanalzuordnung. Bitte überprüfen Sie Ihre Eingabe.",
                 "invalid_dnd_settings": "Ungültige Nicht-stören-Einstellungen. Bitte überprüfen Sie Ihre Eingabe.",
                 "name_already_exists": "Ein Empfänger mit diesem Namen existiert bereits. Bitte wählen Sie einen anderen Namen.",
+                "ha_user_name_conflict": "Der Name des ausgewählten Home-Assistant-Benutzers wird bereits von einem bestehenden Empfänger verwendet. Bitte benennen Sie den bestehenden Empfänger zuerst um.",
                 "user": "Ungültiger Benutzer.",
                 "name": "Ungültiger oder existierender Name.",
                 "email": "Ungültige E-Mail-Adresse.",

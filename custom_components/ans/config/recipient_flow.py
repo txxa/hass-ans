@@ -280,17 +280,19 @@ class RecipientConfigFlow(ConfigSubentryFlow):
                 if name != current_name and not check_recipient_name_availability(
                     self.hass, name
                 ):
-                    # errors[ID_CONFIG_NAME_KEY] = "name_already_exists"
-                    raise vol.Invalid(
-                        message=f"Name '{name}' is already used.",
-                        path=[RCPT_CONFIG_NAME_KEY],
-                    )
-
-                # Store recipient definition
-                self._recipient_meta.update(validated)
-
-                # Proceed to settings
-                return await self.async_step_recipient_basic_settings(None)
+                    # Surface the error on the field that is actually visible in the
+                    # form for the given recipient type:
+                    # - HA_USER: the name field is hidden and auto-populated from HA
+                    #   auth, so attach the error to the user dropdown instead.
+                    # - GENERIC / TTS: the name field is editable, attach directly.
+                    if recipient_type == RecipientType.HA_USER:
+                        errors[RCPT_CONFIG_USER_KEY] = "ha_user_name_conflict"
+                    else:
+                        errors[RCPT_CONFIG_NAME_KEY] = "name_already_exists"
+                else:
+                    # Store recipient definition and proceed to next step
+                    self._recipient_meta.update(validated)
+                    return await self.async_step_recipient_basic_settings(None)
 
             except vol.Invalid as e:
                 _LOGGER.debug("Recipient definition validation failed: %s", e)

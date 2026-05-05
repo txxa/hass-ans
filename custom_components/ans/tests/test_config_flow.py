@@ -326,9 +326,9 @@ class TestAsyncStepSystemSettingsErrors:
         assert SYS_CONFIG_TTS_SERVICE_KEY in result.get("errors", {})
 
     async def test_field_validation_error_populates_errors(self):
-        """FieldValidationError maps field name and key to the errors dict."""
+        """FieldValidationError maps field name to errors dict using translation_key."""
         flow = _make_flow()
-        err = FieldValidationError("enabled_channels", "no_channels_selected")
+        err = FieldValidationError("enabled_channels", "No channels selected.")
 
         with (
             patch(_PATCH_VALIDATE_TTS, new=AsyncMock(return_value=None)),
@@ -347,7 +347,7 @@ class TestAsyncStepSystemSettingsErrors:
             )
 
         assert result["type"] == FlowResultType.FORM
-        assert result["errors"].get("enabled_channels") == "no_channels_selected"
+        assert result["errors"].get("enabled_channels") == "enabled_channels"
 
     async def test_vol_invalid_with_empty_path_uses_base_key(self):
         """vol.Invalid with empty path must not raise IndexError."""
@@ -396,7 +396,7 @@ class TestAsyncStepSystemSettingsErrors:
 
         errors = result.get("errors", {})
         assert "global_rate_limit" in errors
-        assert errors["global_rate_limit"] == "too_large"
+        assert errors["global_rate_limit"] == "global_rate_limit"
 
     async def test_unknown_exception_returns_base_error(self):
         """An unexpected exception maps to the generic 'base' error key."""

@@ -235,13 +235,13 @@ class ANSConfigFlow(ConfigFlow, domain=DOMAIN):
 
             except FieldValidationError as e:
                 _LOGGER.debug("Field validation error: %s - %s", e.field, e.message)
-                errors[e.field] = e.message
+                errors[e.field] = e.translation_key
             except vol.Invalid as e:
                 _LOGGER.debug("Voluptuous validation error: %s", e)
-                path = e.path
-                field_key = str(path[0]) if path else "base"
-                error_msg = str(path[-1]) if len(path) > 1 else str(e)
-                errors[field_key] = error_msg
+                if e.path:
+                    errors[str(e.path[0])] = str(e.path[0])
+                else:
+                    errors["base"] = CONFIG_FLOW_ERROR_INVALID_SYSTEM_SETTINGS_KEY
             except Exception:
                 _LOGGER.exception("System config validation failed")
                 errors["base"] = CONFIG_FLOW_ERROR_INVALID_SYSTEM_SETTINGS_KEY

@@ -68,19 +68,33 @@ class FieldValidationError(Exception):
     """Custom exception for field validation errors."""
 
     def __init__(
-        self, field: str, message: str, placeholders: dict[str, str] | None = None
+        self,
+        field: str,
+        message: str,
+        placeholders: dict[str, str] | None = None,
+        translation_key: str | None = None,
     ):
-        """Initialize with field name and error message."""
+        """Initialize with field name and error message.
+
+        Args:
+            field: The name of the form field that failed validation.
+            message: Human-readable description of the error (used for logging).
+            placeholders: Optional placeholder values for the translation string.
+            translation_key: The HA translation key for the errors dict value.
+                Defaults to the field name when not set, which matches the HA
+                convention where the field name equals the translation key.
+                Set explicitly only when they differ (e.g. field='base' but
+                translation key='dnd_start_end_equals').
+
+        """
         self.field = field
         self.message = message
         self.placeholders = placeholders
+        self.translation_key = translation_key if translation_key is not None else field
 
     def __str__(self):
         """Format error message."""
         return f"{self.field}: {self.message}"
-        # if self.field:
-        #     return f"{self.field}: {self.message}"
-        # return self.message
 
 
 @dataclass
@@ -777,14 +791,14 @@ class ConfigValidator:
 
         if validated_schema.get(RCPT_CONFIG_DND_ENABLED_KEY):
             if not validated_schema.get(RCPT_CONFIG_DND_START_KEY):
-                raise vol.Invalid(
-                    message="Start time must be set when DND is enabled.",
-                    path=[RCPT_CONFIG_DND_START_MISSING_KEY],
+                raise FieldValidationError(
+                    RCPT_CONFIG_DND_START_MISSING_KEY,
+                    "Start time must be set when DND is enabled.",
                 )
             if not validated_schema.get(RCPT_CONFIG_DND_END_KEY):
-                raise vol.Invalid(
-                    message="End time must be set when DND is enabled.",
-                    path=[RCPT_CONFIG_DND_END_MISSING_KEY],
+                raise FieldValidationError(
+                    RCPT_CONFIG_DND_END_MISSING_KEY,
+                    "End time must be set when DND is enabled.",
                 )
         dnd_start = validated_schema.get(RCPT_CONFIG_DND_START_KEY)
         dnd_end = validated_schema.get(RCPT_CONFIG_DND_END_KEY)
@@ -792,9 +806,10 @@ class ConfigValidator:
             if ConfigValidator.__time_to_sec(
                 dnd_start
             ) == ConfigValidator.__time_to_sec(dnd_end):
-                raise vol.Invalid(
-                    message="Start and end times cannot be the same.",
-                    path=["base", RCPT_CONFIG_DND_START_END_EQUALS_KEY],
+                raise FieldValidationError(
+                    "base",
+                    "Start and end times cannot be the same.",
+                    translation_key=RCPT_CONFIG_DND_START_END_EQUALS_KEY,
                 )
 
         return validated_schema

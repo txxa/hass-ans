@@ -434,7 +434,7 @@ class TestAsyncStepRecipientDefinition:
             )
 
         assert result["type"] == FlowResultType.FORM
-        assert result["errors"] != {}
+        assert result["errors"].get("email") == "email"
 
     async def test_unexpected_exception_sets_base_error(self):
         """An unhandled exception (e.g. auth unavailable) shows the base error."""
@@ -510,7 +510,7 @@ class TestAsyncStepRecipientBasicSettings:
         )
 
         assert result["type"] == FlowResultType.FORM
-        assert result["errors"] != {}
+        assert result["errors"].get("rate_limit") == "rate_limit"
 
     async def test_unexpected_exception_sets_base_error(self):
         """An unhandled exception shows the form with the invalid_settings base error."""
@@ -585,7 +585,7 @@ class TestAsyncStepRecipientTtsSettings:
         )
 
         assert result["type"] == FlowResultType.FORM
-        assert result["errors"] != {}
+        assert result["errors"].get("message_format") == "message_format"
 
     async def test_unexpected_exception_sets_base_error(self):
         """An unhandled exception shows the form with the invalid_settings base error."""
@@ -735,7 +735,7 @@ class TestAsyncStepRecipientDndSettings:
         )
 
         assert result["type"] == FlowResultType.FORM
-        assert result["errors"] != {}
+        assert result["errors"].get("dnd_start_missing") == "dnd_start_missing"
 
     async def test_valid_dnd_enabled_with_times_creates_entry(self):
         """DND enabled with valid start/end times produces CREATE_ENTRY."""
@@ -1353,7 +1353,7 @@ class TestAsyncStepRecipientDefinitionHaUser:
             )
 
         assert result["type"] == FlowResultType.FORM
-        assert RCPT_CONFIG_USER_KEY in result["errors"] or "base" in result["errors"]
+        assert result["errors"].get(RCPT_CONFIG_USER_KEY) == "user"
 
     async def test_ha_user_id_not_in_allowed_shows_error(self):
         """A user id not in the allowed list shows an error on the definition form."""
@@ -1368,7 +1368,7 @@ class TestAsyncStepRecipientDefinitionHaUser:
             )
 
         assert result["type"] == FlowResultType.FORM
-        assert RCPT_CONFIG_USER_KEY in result["errors"] or "base" in result["errors"]
+        assert result["errors"].get(RCPT_CONFIG_USER_KEY) == "user"
 
 
 # ===========================================================================

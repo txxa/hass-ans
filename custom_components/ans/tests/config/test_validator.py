@@ -903,24 +903,24 @@ def test_dnd_settings_schema_valid_passes():
 
 
 def test_dnd_settings_schema_enabled_no_start_raises():
-    """DND enabled without dnd_start raises vol.Invalid."""
+    """DND enabled without dnd_start raises FieldValidationError."""
     data = _valid_dnd_data()
     del data["dnd_start"]
-    with pytest.raises(vol.Invalid):
+    with pytest.raises(FieldValidationError):
         ConfigValidator.validate_recipient_dnd_settings_schema(data)
 
 
 def test_dnd_settings_schema_enabled_no_end_raises():
-    """DND enabled without dnd_end raises vol.Invalid."""
+    """DND enabled without dnd_end raises FieldValidationError."""
     data = _valid_dnd_data()
     del data["dnd_end"]
-    with pytest.raises(vol.Invalid):
+    with pytest.raises(FieldValidationError):
         ConfigValidator.validate_recipient_dnd_settings_schema(data)
 
 
 def test_dnd_settings_schema_same_start_end_raises():
-    """Equal dnd_start and dnd_end values raise vol.Invalid."""
-    with pytest.raises(vol.Invalid):
+    """Equal dnd_start and dnd_end values raise FieldValidationError."""
+    with pytest.raises(FieldValidationError):
         ConfigValidator.validate_recipient_dnd_settings_schema(
             _valid_dnd_data(dnd_start="22:00", dnd_end="22:00")
         )

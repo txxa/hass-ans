@@ -154,9 +154,15 @@ class RecipientConfigFlow(ConfigSubentryFlow):
                 else:
                     errors[RCPT_CONFIG_RECIPIENT_CHOICE_KEY] = "invalid_selection"
 
+            except FieldValidationError as fve:
+                _LOGGER.debug("Recipient selection field validation error: %s", fve)
+                errors[fve.field] = fve.translation_key
             except vol.Invalid as e:
                 _LOGGER.debug("Recipient selection validation failed: %s", e)
-                errors[str(e.path[0])] = str(e.path[len(e.path) - 1])
+                if e.path:
+                    errors[str(e.path[0])] = str(e.path[0])
+                else:
+                    errors["base"] = SUBENTRY_FLOW_ERROR_INVALID_RECIPIENT_SELECTION_KEY
             except Exception:
                 _LOGGER.exception("Unexpected error during recipient selection")
                 errors["base"] = SUBENTRY_FLOW_ERROR_INVALID_RECIPIENT_SELECTION_KEY
@@ -231,80 +237,76 @@ class RecipientConfigFlow(ConfigSubentryFlow):
                 if recipient_type == RecipientType.HA_USER:
                     user_id = user_input.get(RCPT_CONFIG_USER_KEY)
                     if not user_id:
-                        raise vol.Invalid(
-                            message="Invalid HA user selection",
-                            path=[RCPT_CONFIG_USER_KEY],
-                        )
-
-                    # Validate user_id against the allowed set to prevent
-                    # ghost recipients from tampered/invalid submissions.
-                    self._not_configured_ha_users = (
-                        await self._get_not_configured_ha_users()
-                    )
-                    allowed_ids = {u["value"] for u in self._not_configured_ha_users}
-                    # For reconfigure, the recipient's own existing user ID
-                    # must also remain accepted.
-                    existing_id = self._recipient_meta.get(RCPT_CONFIG_ID_KEY)
-                    if self._reconfigure_entry and existing_id:
-                        allowed_ids.add(existing_id)
-
-                    if user_id not in allowed_ids:
-                        raise vol.Invalid(
-                            message="Selected user does not exist or is already configured",
-                            path=[RCPT_CONFIG_USER_KEY],
-                        )
-
-                    user_data = await self._get_ha_user_data(user_id)
-                    user_input[RCPT_CONFIG_NAME_KEY] = user_data.get("name", user_id)
-                    # user_input.pop(
-                    #     RCPT_CONFIG_RECIPIENT_CHOICE_KEY
-                    # )  # Remove choice from input before validation
-                    self._recipient_meta[RCPT_CONFIG_ID_KEY] = user_id
-
-                # Validate definition
-                validated = ConfigValidator.validate_recipient_definition_schema(
-                    user_input
-                )
-
-                # Check name availability
-                name = validated[RCPT_CONFIG_NAME_KEY]
-
-                # During reconfiguration, allow keeping the same name
-                current_name = (
-                    self._recipient_meta.get(RCPT_CONFIG_NAME_KEY)
-                    if self._reconfigure_entry
-                    else None
-                )
-
-                # Only check availability if the name has changed (or for new recipients)
-                if name != current_name and not check_recipient_name_availability(
-                    self.hass, name
-                ):
-                    # Surface the error on the field that is actually visible in the
-                    # form for the given recipient type:
-                    # - HA_USER: the name field is hidden and auto-populated from HA
-                    #   auth, so attach the error to the user dropdown instead.
-                    # - GENERIC / TTS: the name field is editable, attach directly.
-                    if recipient_type == RecipientType.HA_USER:
-                        errors[RCPT_CONFIG_USER_KEY] = "ha_user_name_conflict"
+                        errors[RCPT_CONFIG_USER_KEY] = "user"
                     else:
-                        errors[RCPT_CONFIG_NAME_KEY] = "name_already_exists"
-                else:
-                    # Store recipient definition and proceed to next step
-                    self._recipient_meta.update(validated)
-                    return await self.async_step_recipient_basic_settings(None)
+                        # Validate user_id against the allowed set to prevent
+                        # ghost recipients from tampered/invalid submissions.
+                        self._not_configured_ha_users = (
+                            await self._get_not_configured_ha_users()
+                        )
+                        allowed_ids = {
+                            u["value"] for u in self._not_configured_ha_users
+                        }
+                        # For reconfigure, the recipient's own existing user ID
+                        # must also remain accepted.
+                        existing_id = self._recipient_meta.get(RCPT_CONFIG_ID_KEY)
+                        if self._reconfigure_entry and existing_id:
+                            allowed_ids.add(existing_id)
 
+                        if user_id not in allowed_ids:
+                            errors[RCPT_CONFIG_USER_KEY] = "user"
+                        else:
+                            user_data = await self._get_ha_user_data(user_id)
+                            user_input[RCPT_CONFIG_NAME_KEY] = user_data.get(
+                                "name", user_id
+                            )
+                            self._recipient_meta[RCPT_CONFIG_ID_KEY] = user_id
+
+                if not errors:
+                    # Validate definition
+                    validated = ConfigValidator.validate_recipient_definition_schema(
+                        user_input
+                    )
+
+                    # Check name availability
+                    name = validated[RCPT_CONFIG_NAME_KEY]
+
+                    # During reconfiguration, allow keeping the same name
+                    current_name = (
+                        self._recipient_meta.get(RCPT_CONFIG_NAME_KEY)
+                        if self._reconfigure_entry
+                        else None
+                    )
+
+                    # Only check availability if the name has changed (or for new recipients)
+                    if name != current_name and not check_recipient_name_availability(
+                        self.hass, name
+                    ):
+                        # Surface the error on the field that is actually visible in the
+                        # form for the given recipient type:
+                        # - HA_USER: the name field is hidden and auto-populated from HA
+                        #   auth, so attach the error to the user dropdown instead.
+                        # - GENERIC / TTS: the name field is editable, attach directly.
+                        if recipient_type == RecipientType.HA_USER:
+                            errors[RCPT_CONFIG_USER_KEY] = "ha_user_name_conflict"
+                        else:
+                            errors[RCPT_CONFIG_NAME_KEY] = "name_already_exists"
+                    else:
+                        # Store recipient definition and proceed to next step
+                        self._recipient_meta.update(validated)
+                        return await self.async_step_recipient_basic_settings(None)
+
+            except FieldValidationError as fve:
+                _LOGGER.debug("Recipient definition field validation error: %s", fve)
+                errors[fve.field] = fve.translation_key
             except vol.Invalid as e:
                 _LOGGER.debug("Recipient definition validation failed: %s", e)
-                errors[str(e.path[0])] = str(e.path[len(e.path) - 1])
-                # if e.path and len(e.path) > 0:
-                #     if e.path[0] == "email_or_phone_required":
-                #         errors["base"] = "email_or_phone_required"
-                #     else:
-                # else:
-                #     errors["base"] = (
-                #         SUBENTRY_FLOW_ERROR_INVALID_RECIPIENT_DEFINITION_KEY
-                #     )
+                if e.path:
+                    errors[str(e.path[0])] = str(e.path[0])
+                else:
+                    errors["base"] = (
+                        SUBENTRY_FLOW_ERROR_INVALID_RECIPIENT_DEFINITION_KEY
+                    )
             except Exception:
                 _LOGGER.exception("Unexpected error during recipient definition")
                 errors["base"] = SUBENTRY_FLOW_ERROR_INVALID_RECIPIENT_DEFINITION_KEY
@@ -416,9 +418,17 @@ class RecipientConfigFlow(ConfigSubentryFlow):
                 # Other recipients go directly to channel mapping
                 return await self.async_step_recipient_channel_mapping(None)
 
+            except FieldValidationError as fve:
+                _LOGGER.debug(
+                    "Recipient basic settings field validation error: %s", fve
+                )
+                errors[fve.field] = fve.translation_key
             except vol.Invalid as e:
                 _LOGGER.debug("Recipient basic settings validation failed: %s", e)
-                errors[str(e.path[0])] = str(e.path[len(e.path) - 1])
+                if e.path:
+                    errors[str(e.path[0])] = str(e.path[0])
+                else:
+                    errors["base"] = SUBENTRY_FLOW_ERROR_INVALID_RECIPIENT_SETTINGS_KEY
             except Exception:
                 _LOGGER.exception(
                     "Unexpected error during recipient basic settings definition"
@@ -474,9 +484,15 @@ class RecipientConfigFlow(ConfigSubentryFlow):
                 # Proceed to channel mapping
                 return await self.async_step_recipient_channel_mapping(None)
 
+            except FieldValidationError as fve:
+                _LOGGER.debug("Recipient TTS settings field validation error: %s", fve)
+                errors[fve.field] = fve.translation_key
             except vol.Invalid as e:
                 _LOGGER.debug("Recipient TTS settings validation failed: %s", e)
-                errors[str(e.path[0])] = str(e.path[len(e.path) - 1])
+                if e.path:
+                    errors[str(e.path[0])] = str(e.path[0])
+                else:
+                    errors["base"] = SUBENTRY_FLOW_ERROR_INVALID_RECIPIENT_SETTINGS_KEY
             except Exception:
                 _LOGGER.exception(
                     "Unexpected error during recipient TTS settings configuration"
@@ -544,9 +560,17 @@ class RecipientConfigFlow(ConfigSubentryFlow):
                 # Proceed to DND settings
                 return await self.async_step_recipient_dnd_settings(None)
 
+            except FieldValidationError as fve:
+                _LOGGER.debug(
+                    "Recipient channel mapping field validation error: %s", fve
+                )
+                errors[fve.field] = fve.translation_key
             except vol.Invalid as e:
                 _LOGGER.debug("Recipient channel mapping validation failed: %s", e)
-                errors[str(e.path[0])] = str(e.path[len(e.path) - 1])
+                if e.path:
+                    errors[str(e.path[0])] = str(e.path[0])
+                else:
+                    errors["base"] = SUBENTRY_FLOW_ERROR_INVALID_CHANNEL_MAPPING_KEY
             except ValueError as e:
                 _LOGGER.debug("Recipient channel mapping validation failed: %s", e)
                 errors["base"] = SUBENTRY_FLOW_ERROR_INVALID_CHANNEL_MAPPING_KEY
@@ -641,9 +665,15 @@ class RecipientConfigFlow(ConfigSubentryFlow):
                 # Create the recipient sub-entry
                 return await self._create_recipient_entry()
 
+            except FieldValidationError as fve:
+                _LOGGER.debug("Recipient DND settings field validation error: %s", fve)
+                errors[fve.field] = fve.translation_key
             except vol.Invalid as e:
                 _LOGGER.debug("Recipient DND settings validation failed: %s", e)
-                errors[str(e.path[0])] = str(e.path[len(e.path) - 1])
+                if e.path:
+                    errors[str(e.path[0])] = str(e.path[0])
+                else:
+                    errors["base"] = SUBENTRY_FLOW_ERROR_INVALID_DND_SETTINGS_KEY
             except Exception:
                 _LOGGER.exception(
                     "Unexpected error during recipient DND settings definition"
@@ -836,7 +866,7 @@ class RecipientConfigFlow(ConfigSubentryFlow):
                 data=data,
             )
         except FieldValidationError as fv:
-            errors = {fv.field or "base": fv.message}
+            errors = {fv.field or "base": fv.translation_key}
             _LOGGER.debug("Field validation error on final create: %s", fv)
             return self.async_show_form(
                 step_id="confirm", data_schema=vol.Schema({}), errors=errors

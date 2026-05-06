@@ -7,6 +7,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 from homeassistant.exceptions import ServiceNotFound
 
+from custom_components.ans.const import (
+    EVENT_NOTIFICATION_DELIVERED,
+    EVENT_NOTIFICATION_FAILED,
+    EVENT_NOTIFICATION_FILTERED,
+    EVENT_NOTIFICATION_RATE_LIMITED,
+)
 from custom_components.ans.delivery.processor import NotificationDeliveryProcessor
 from custom_components.ans.models import (
     ChannelInfo,
@@ -475,3 +481,148 @@ class TestScheduleRetry:
         task = make_task()
         await proc.process(task)
         proc._retry_queue.schedule_retry.assert_not_awaited()
+
+
+# ── Delivery outcome events ───────────────────────────────────────────────────
+
+
+def _make_hass_with_bus() -> MagicMock:
+    """Return a mock hass whose bus.async_fire is a regular MagicMock."""
+    hass = MagicMock()
+    hass.bus = MagicMock()
+    hass.bus.async_fire = MagicMock()
+    return hass
+
+
+class TestDeliveryOutcomeEvents:
+    """Verify that hass bus events are fired at each delivery outcome."""
+
+    async def test_delivered_event_fires_on_success(self):
+        """ans_notification_delivered is fired exactly once on a successful delivery."""
+        hass = _make_hass_with_bus()
+        proc = _make_processor(
+            hass=hass, adapter=_adapter(status=DeliveryStatus.SUCCESS)
+        )
+        task = make_task()
+        await proc.process(task)
+        hass.bus.async_fire.assert_called_once()
+        event_name, payload = hass.bus.async_fire.call_args[0]
+        assert event_name == EVENT_NOTIFICATION_DELIVERED
+        assert payload["notification_id"] == str(task.payload.notification_id)
+        assert payload["recipient_id"] == task.recipient_id
+        assert payload["channel_id"] == task.channel_info.id
+        assert payload["source"] == task.payload.source
+        assert payload["type"] == task.payload.type.value
+        assert "attempt_number" in payload
+        assert "remote_id" in payload
+
+    async def test_filtered_event_fires_on_filter(self):
+        """ans_notification_filtered is fired exactly once when the filter engine blocks a notification."""
+        hass = _make_hass_with_bus()
+        proc = _make_processor(
+            hass=hass, filter_engine=_filter_blocked(FilterReason.DND_ACTIVE)
+        )
+        task = make_task()
+        await proc.process(task)
+        hass.bus.async_fire.assert_called_once()
+        event_name, payload = hass.bus.async_fire.call_args[0]
+        assert event_name == EVENT_NOTIFICATION_FILTERED
+        assert payload["filter_reason"] == FilterReason.DND_ACTIVE.value
+        assert payload["notification_id"] == str(task.payload.notification_id)
+
+    async def test_failed_event_fires_on_permanent_fail(self):
+        """ans_notification_failed is fired exactly once when the adapter returns PERMANENT_FAIL."""
+        hass = _make_hass_with_bus()
+        proc = _make_processor(
+            hass=hass, adapter=_adapter(status=DeliveryStatus.PERMANENT_FAIL)
+        )
+        task = make_task()
+        await proc.process(task)
+        hass.bus.async_fire.assert_called_once()
+        event_name, payload = hass.bus.async_fire.call_args[0]
+        assert event_name == EVENT_NOTIFICATION_FAILED
+        assert payload["notification_id"] == str(task.payload.notification_id)
+        assert "error" in payload
+        assert "attempt_number" in payload
+
+    async def test_failed_event_fires_on_missing_contact_info(self):
+        """ans_notification_failed is fired when contact info validation fails (via _handle_permanent_failure)."""
+        hass = _make_hass_with_bus()
+        adapter = MagicMock()
+        adapter.get_requirements.return_value = {"requires_email": True}
+        adapter.deliver = AsyncMock(
+            return_value=DeliveryResult(status=DeliveryStatus.SUCCESS, error=None)
+        )
+        cm = MagicMock()
+        cm.get_adapter = MagicMock(return_value=adapter)
+        # Task with RECIPIENT scope and no email in contact_info
+        task = make_task(
+            channel_info=ChannelInfo(
+                id="notify.signal",
+                label="Signal",
+                integration="signal",
+                scope=ChannelScope.RECIPIENT,
+            ),
+            contact_info=RecipientContactInfo(
+                email_address=None,
+                phone_number=None,
+                mobile_device_id=None,
+            ),
+        )
+        proc = _make_processor(hass=hass, channel_manager=cm)
+        await proc.process(task)
+        hass.bus.async_fire.assert_called_once()
+        event_name, payload = hass.bus.async_fire.call_args[0]
+        assert event_name == EVENT_NOTIFICATION_FAILED
+        assert "missing_required_contact_info" in (payload["error"] or "")
+
+    async def test_rate_limited_event_fires_when_rate_limited(self):
+        """ans_notification_rate_limited is fired with limit_type and retry_at when rate-limited."""
+        hass = _make_hass_with_bus()
+        proc = _make_processor(hass=hass, rate_limiter=_rate_limiter_deny("GLOBAL"))
+        task = make_task()
+        await proc.process(task)
+        hass.bus.async_fire.assert_called_once()
+        event_name, payload = hass.bus.async_fire.call_args[0]
+        assert event_name == EVENT_NOTIFICATION_RATE_LIMITED
+        assert payload["limit_type"] == "GLOBAL"
+        assert payload["retry_at"] is not None  # default mock returns a valid datetime
+        assert payload["notification_id"] == str(task.payload.notification_id)
+
+    async def test_rate_limited_event_fires_with_null_retry_at_when_no_retry(self):
+        """ans_notification_rate_limited fires with retry_at=None when max retries are exceeded."""
+        hass = _make_hass_with_bus()
+        proc = _make_processor(hass=hass, rate_limiter=_rate_limiter_deny("RECIPIENT"))
+        # Exceeded max retries: count_attempts > policy.retry_attempts (default 3)
+        proc._attempt_log.count_attempts = AsyncMock(return_value=10)
+        task = make_task()
+        await proc.process(task)
+        hass.bus.async_fire.assert_called_once()
+        event_name, payload = hass.bus.async_fire.call_args[0]
+        assert event_name == EVENT_NOTIFICATION_RATE_LIMITED
+        assert payload["retry_at"] is None
+
+    async def test_no_failed_event_on_transient_fail(self):
+        """ans_notification_failed is NOT fired for a transient (retryable) failure."""
+        hass = _make_hass_with_bus()
+        proc = _make_processor(
+            hass=hass, adapter=_adapter(status=DeliveryStatus.TRANSIENT_FAIL)
+        )
+        task = make_task()
+        await proc.process(task)
+        fired_names = [call[0][0] for call in hass.bus.async_fire.call_args_list]
+        assert EVENT_NOTIFICATION_FAILED not in fired_names
+
+    async def test_events_fire_even_when_audit_logging_disabled(self):
+        """Delivery outcome events fire regardless of the audit logging setting (they are independent)."""
+        hass = _make_hass_with_bus()
+        # Simulate audit log that always no-ops (disabled-like behaviour)
+        proc = _make_processor(
+            hass=hass, adapter=_adapter(status=DeliveryStatus.SUCCESS)
+        )
+        proc._attempt_log.log_attempt = AsyncMock()  # still called but irrelevant
+        task = make_task()
+        await proc.process(task)
+        # Event must still fire
+        fired_names = [call[0][0] for call in hass.bus.async_fire.call_args_list]
+        assert EVENT_NOTIFICATION_DELIVERED in fired_names

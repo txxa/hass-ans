@@ -18,6 +18,12 @@ from homeassistant.util import dt
 
 from ..channels.base import TTSDeliveryOptions
 from ..channels.channel_manager import ChannelManager
+from ..const import (
+    EVENT_NOTIFICATION_DELIVERED,
+    EVENT_NOTIFICATION_FAILED,
+    EVENT_NOTIFICATION_FILTERED,
+    EVENT_NOTIFICATION_RATE_LIMITED,
+)
 from ..models import (
     Attempt,
     ChannelScope,
@@ -130,6 +136,14 @@ class NotificationDeliveryProcessor:
                 filter_decision.reason,
                 filter_decision.details or {},
             )
+
+            self._hass.bus.async_fire(
+                EVENT_NOTIFICATION_FILTERED,
+                {
+                    **self._build_base_event_payload(task),
+                    "filter_reason": filter_decision.reason.value,
+                },
+            )
             return
 
         # RATE LIMITING (retryable decision)
@@ -154,7 +168,16 @@ class NotificationDeliveryProcessor:
                 task.recipient_id,
                 task.channel_info.id,
             )
-            await self._schedule_retry(task, reason="rate_limited")
+            retry_at = await self._schedule_retry(task, reason="rate_limited")
+
+            self._hass.bus.async_fire(
+                EVENT_NOTIFICATION_RATE_LIMITED,
+                {
+                    **self._build_base_event_payload(task),
+                    "limit_type": limit_type or "UNKNOWN",
+                    "retry_at": retry_at.isoformat() if retry_at else None,
+                },
+            )
             return
 
         # CONTACT INFO VALIDATION (terminal decision if missing/invalid)
@@ -190,20 +213,10 @@ class NotificationDeliveryProcessor:
                 if missing_requirements:
                     # Log attempt with validation failure
                     attempt = await self._create_attempt(task)
-                    attempt.status = DeliveryStatus.PERMANENT_FAIL
-                    attempt.ended_at = datetime.now(UTC)
-                    attempt.error = f"missing_required_contact_info: {', '.join(missing_requirements)}"
-
-                    await self._attempt_log.log_attempt(attempt, task)
-
-                    _LOGGER.warning(
-                        "Task skipped (missing contact info): notification_id=%s job_id=%s "
-                        "recipient=%s channel=%s missing=%s",
-                        task.payload.notification_id,
-                        task.job_id,
-                        task.recipient_id,
-                        task.channel_info.id,
-                        ", ".join(missing_requirements),
+                    await self._handle_permanent_failure(
+                        task,
+                        attempt,
+                        error=f"missing_required_contact_info: {', '.join(missing_requirements)}",
                     )
                     return
 
@@ -375,6 +388,15 @@ class NotificationDeliveryProcessor:
         # Log attempt with final status (only logged once)
         await self._attempt_log.log_attempt(attempt, task)
 
+        self._hass.bus.async_fire(
+            EVENT_NOTIFICATION_DELIVERED,
+            {
+                **self._build_base_event_payload(task),
+                "attempt_number": attempt.attempt_number,
+                "remote_id": result.remote_id,
+            },
+        )
+
         _LOGGER.info(
             "Delivery succeeded: notification_id=%s job_id=%s recipient_id=%s "
             "channel=%s attempt=%s duration_ms=%d%s",
@@ -442,6 +464,15 @@ class NotificationDeliveryProcessor:
         # Log attempt with final status (only logged once)
         await self._attempt_log.log_attempt(attempt, task)
 
+        self._hass.bus.async_fire(
+            EVENT_NOTIFICATION_FAILED,
+            {
+                **self._build_base_event_payload(task),
+                "error": attempt.error,
+                "attempt_number": attempt.attempt_number,
+            },
+        )
+
         _LOGGER.error(
             "Permanent delivery failure: notification_id=%s job_id=%s "
             "recipient_id=%s channel=%s attempt=%s error=%s",
@@ -457,17 +488,30 @@ class NotificationDeliveryProcessor:
     # Retry handling
     # ------------------------------------------------------------------
 
+    def _build_base_event_payload(self, task: NotificationDeliveryTask) -> dict:
+        """Build the common event payload fields shared by all delivery outcome events."""
+        return {
+            "notification_id": str(task.payload.notification_id),
+            "recipient_id": task.recipient_id,
+            "channel_id": task.channel_info.id,
+            "source": task.payload.source,
+            "type": task.payload.type.value,
+        }
+
     async def _schedule_retry(
         self,
         task: NotificationDeliveryTask,
         *,
         reason: str,
-    ) -> None:
+    ) -> datetime | None:
         """Evaluate retry policy and schedule if appropriate.
 
         Args:
             task: Delivery task.
             reason: Reason for retry.
+
+        Returns:
+            The scheduled retry datetime, or None if no retry was scheduled.
 
         """
         attempt_count = await self._attempt_log.count_attempts(task.job_id)
@@ -483,7 +527,7 @@ class NotificationDeliveryProcessor:
                 task.channel_info.id,
                 attempt_count,
             )
-            return
+            return None
 
         # Calculate delay using retry policy
         retry_reason = (
@@ -505,7 +549,7 @@ class NotificationDeliveryProcessor:
                 task.recipient_id,
                 task.channel_info.id,
             )
-            return
+            return None
 
         if retry_decision.next_run_at is None:
             _LOGGER.warning(
@@ -513,7 +557,7 @@ class NotificationDeliveryProcessor:
                 task.payload.notification_id,
                 task.job_id,
             )
-            return
+            return None
 
         # Schedule retry in queue with full task snapshot
         await self._retry_queue.schedule_retry(
@@ -536,3 +580,5 @@ class NotificationDeliveryProcessor:
             retry_decision.next_run_at.isoformat(),
             reason,
         )
+
+        return retry_decision.next_run_at

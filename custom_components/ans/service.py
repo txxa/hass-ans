@@ -33,11 +33,15 @@ async def async_setup_services(
 ) -> None:
     """Register Home Assistant services for ANS."""
 
-    async def _handle_notify(call: ServiceCall) -> None:
+    async def _handle_notify(call: ServiceCall) -> dict[str, str]:
         """Handle notification service call.
 
         Args:
             call: Service call with notification data.
+
+        Returns:
+            A dict containing the generated ``notification_id`` so automations
+            can correlate delivery outcome events back to this call.
 
         """
         notification_id: str | None = None
@@ -59,6 +63,7 @@ async def async_setup_services(
                 exc,
             )
             raise
+        return {"notification_id": notification_id}
 
     hass.services.async_register(
         DOMAIN,

@@ -11,6 +11,12 @@ SERVICE_SEND = "send_notification"
 PERSISTENT_NOTIFICATION_CHANNEL = "notify.persistent_notification"
 SYS_DEFAULT_SYSTEM_RECIPIENT_NAME = "Home Assistant"
 
+# Delivery outcome event names
+EVENT_NOTIFICATION_DELIVERED = "ans_notification_delivered"
+EVENT_NOTIFICATION_FILTERED = "ans_notification_filtered"
+EVENT_NOTIFICATION_FAILED = "ans_notification_failed"
+EVENT_NOTIFICATION_RATE_LIMITED = "ans_notification_rate_limited"
+
 # Max values for system configuration
 SYS_MAX_GLOBAL_RATE_LIMIT = 10000  # Max value configurable in system settings
 SYS_MAX_RETRY_BASE_DELAY_SECONDS = 3600

@@ -192,6 +192,36 @@ async def test_handle_notify_calls_orchestrator():
     orchestrator.handle_notification.assert_called_once()
 
 
+async def test_handle_notify_returns_notification_id():
+    """The registered send handler returns a dict with a 'notification_id' key so automations can correlate events."""
+    hass = _make_hass()
+    orchestrator = _make_orchestrator()
+
+    await async_setup_services(hass, orchestrator)
+
+    registered_calls = {
+        (c.args[0], c.args[1]): c.args[2]
+        for c in hass.services.async_register.call_args_list
+    }
+    handler = registered_calls[(DOMAIN, SERVICE_SEND)]
+
+    service_call = _make_service_call(
+        {
+            "source": "test",
+            "title": "T",
+            "message": "M",
+            "type": "INFO",
+            "criticality": "LOW",
+        }
+    )
+    result = await handler(service_call)
+
+    assert isinstance(result, dict)
+    assert "notification_id" in result
+    # Must be a valid UUID string
+    UUID(result["notification_id"])
+
+
 async def test_handle_notify_invalid_data_raises_value_error():
     """The registered send handler re-raises ValueError when the service call data is incomplete or invalid."""
     hass = _make_hass()

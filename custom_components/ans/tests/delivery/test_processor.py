@@ -23,6 +23,7 @@ from custom_components.ans.models import (
     FilterDecisionType,
     FilterReason,
     RecipientContactInfo,
+    TaskOutcome,
 )
 
 from ..conftest import make_task
@@ -81,6 +82,7 @@ def _make_processor(
     hass=None,
     retry_policy=None,
     adapter=None,
+    on_terminal_outcome=None,
 ) -> NotificationDeliveryProcessor:
     """Build a processor with sensible defaults for all dependencies."""
     adapter = adapter or _adapter()
@@ -121,6 +123,7 @@ def _make_processor(
         notification_registry=notification_registry,
         attempt_log=attempt_log,
         retry_queue=retry_queue,
+        on_terminal_outcome=on_terminal_outcome,
     )
 
 
@@ -451,16 +454,33 @@ class TestScheduleRetry:
 
     async def test_max_retries_exceeded_no_retry(self):
         """When attempt count already exceeds policy.retry_attempts, no retry is scheduled."""
-        proc = _make_processor(adapter=_adapter(status=DeliveryStatus.TRANSIENT_FAIL))
+        callback = MagicMock()
+        hass = _make_hass_with_bus()
+        proc = _make_processor(
+            adapter=_adapter(status=DeliveryStatus.TRANSIENT_FAIL),
+            hass=hass,
+            on_terminal_outcome=callback,
+        )
         # count_attempts returns 4 which is > default policy retry_attempts (3)
         proc._attempt_log.count_attempts = AsyncMock(return_value=4)
         task = make_task()
         await proc.process(task)
         proc._retry_queue.schedule_retry.assert_not_awaited()
+        fired = [c[0][0] for c in hass.bus.async_fire.call_args_list]
+        assert EVENT_NOTIFICATION_FAILED in fired
+        callback.assert_called_once_with(
+            str(task.payload.notification_id), TaskOutcome.FAILED
+        )
 
     async def test_policy_returns_no_retry_no_schedule(self):
         """When RetryPolicy.evaluate() returns should_retry=False, no retry is scheduled."""
-        proc = _make_processor(adapter=_adapter(status=DeliveryStatus.TRANSIENT_FAIL))
+        callback = MagicMock()
+        hass = _make_hass_with_bus()
+        proc = _make_processor(
+            adapter=_adapter(status=DeliveryStatus.TRANSIENT_FAIL),
+            hass=hass,
+            on_terminal_outcome=callback,
+        )
         proc._attempt_log.count_attempts = AsyncMock(return_value=1)
         # Override after construction so _make_processor's default doesn't apply
         proc._retry_policy.evaluate = MagicMock(
@@ -469,10 +489,21 @@ class TestScheduleRetry:
         task = make_task()
         await proc.process(task)
         proc._retry_queue.schedule_retry.assert_not_awaited()
+        fired = [c[0][0] for c in hass.bus.async_fire.call_args_list]
+        assert EVENT_NOTIFICATION_FAILED in fired
+        callback.assert_called_once_with(
+            str(task.payload.notification_id), TaskOutcome.FAILED
+        )
 
     async def test_policy_returns_none_next_run_no_schedule(self):
         """When RetryPolicy.evaluate() returns should_retry=True but next_run_at=None, no retry is scheduled."""
-        proc = _make_processor(adapter=_adapter(status=DeliveryStatus.TRANSIENT_FAIL))
+        callback = MagicMock()
+        hass = _make_hass_with_bus()
+        proc = _make_processor(
+            adapter=_adapter(status=DeliveryStatus.TRANSIENT_FAIL),
+            hass=hass,
+            on_terminal_outcome=callback,
+        )
         proc._attempt_log.count_attempts = AsyncMock(return_value=1)
         # Override after construction so _make_processor's default doesn't apply
         proc._retry_policy.evaluate = MagicMock(
@@ -481,6 +512,64 @@ class TestScheduleRetry:
         task = make_task()
         await proc.process(task)
         proc._retry_queue.schedule_retry.assert_not_awaited()
+        fired = [c[0][0] for c in hass.bus.async_fire.call_args_list]
+        assert EVENT_NOTIFICATION_FAILED in fired
+        callback.assert_called_once_with(
+            str(task.payload.notification_id), TaskOutcome.FAILED
+        )
+
+    async def test_retry_exhaustion_logs_single_attempt(self):
+        """When retries are exhausted, only one attempt record (TRANSIENT_FAIL) is logged — no phantom attempt."""
+        proc = _make_processor(adapter=_adapter(status=DeliveryStatus.TRANSIENT_FAIL))
+        proc._attempt_log.count_attempts = AsyncMock(return_value=4)
+        task = make_task()
+        await proc.process(task)
+        # Only the original TRANSIENT_FAIL attempt — no phantom PERMANENT_FAIL attempt created
+        assert proc._attempt_log.log_attempt.await_count == 1
+
+
+# ── Rate-limit retry exhaustion ───────────────────────────────────────────────
+
+
+class TestRateLimitExhaustion:
+    """Verify that retries exhausted after rate-limiting escalates to a terminal permanent failure."""
+
+    async def test_rate_limited_then_retries_exhausted_fires_failed_event(self):
+        """When rate-limited and _schedule_retry returns None, ans_notification_failed fires."""
+        callback = MagicMock()
+        hass = _make_hass_with_bus()
+        proc = _make_processor(
+            rate_limiter=_rate_limiter_deny("GLOBAL"),
+            hass=hass,
+            on_terminal_outcome=callback,
+        )
+        proc._attempt_log.count_attempts = AsyncMock(return_value=10)
+        task = make_task()
+        await proc.process(task)
+        fired = [c[0][0] for c in hass.bus.async_fire.call_args_list]
+        assert EVENT_NOTIFICATION_RATE_LIMITED in fired
+        assert EVENT_NOTIFICATION_FAILED in fired
+        callback.assert_called_once_with(
+            str(task.payload.notification_id), TaskOutcome.FAILED
+        )
+
+    async def test_rate_limited_with_retry_available_no_failed_event(self):
+        """When rate-limited but a retry is available, ans_notification_failed does NOT fire."""
+        callback = MagicMock()
+        hass = _make_hass_with_bus()
+        proc = _make_processor(
+            rate_limiter=_rate_limiter_deny("GLOBAL"),
+            hass=hass,
+            on_terminal_outcome=callback,
+        )
+        # count_attempts=0: well within retry budget, retry will be scheduled
+        proc._attempt_log.count_attempts = AsyncMock(return_value=0)
+        task = make_task()
+        await proc.process(task)
+        fired = [c[0][0] for c in hass.bus.async_fire.call_args_list]
+        assert EVENT_NOTIFICATION_RATE_LIMITED in fired
+        assert EVENT_NOTIFICATION_FAILED not in fired
+        callback.assert_not_called()
 
 
 # ── Delivery outcome events ───────────────────────────────────────────────────
@@ -597,9 +686,15 @@ class TestDeliveryOutcomeEvents:
         proc._attempt_log.count_attempts = AsyncMock(return_value=10)
         task = make_task()
         await proc.process(task)
-        hass.bus.async_fire.assert_called_once()
-        event_name, payload = hass.bus.async_fire.call_args[0]
-        assert event_name == EVENT_NOTIFICATION_RATE_LIMITED
+        # Rate-limited fires first; failed fires second (retries exhausted).
+        # Find the rate-limited call specifically.
+        rate_limited_calls = [
+            c
+            for c in hass.bus.async_fire.call_args_list
+            if c[0][0] == EVENT_NOTIFICATION_RATE_LIMITED
+        ]
+        assert len(rate_limited_calls) == 1
+        payload = rate_limited_calls[0][0][1]
         assert payload["retry_at"] is None
 
     async def test_no_failed_event_on_transient_fail(self):
@@ -626,3 +721,56 @@ class TestDeliveryOutcomeEvents:
         # Event must still fire
         fired_names = [call[0][0] for call in hass.bus.async_fire.call_args_list]
         assert EVENT_NOTIFICATION_DELIVERED in fired_names
+
+
+class TestTerminalOutcomeCallback:
+    """Verify on_terminal_outcome callback is invoked at every terminal state."""
+
+    async def test_callback_called_on_success(self):
+        """Callback receives (notification_id, TaskOutcome.DELIVERED) on successful delivery."""
+        callback = MagicMock()
+        proc = _make_processor(
+            adapter=_adapter(status=DeliveryStatus.SUCCESS),
+            on_terminal_outcome=callback,
+        )
+        task = make_task()
+        await proc.process(task)
+        callback.assert_called_once_with(
+            str(task.payload.notification_id), TaskOutcome.DELIVERED
+        )
+
+    async def test_callback_called_on_permanent_failure(self):
+        """Callback receives (notification_id, TaskOutcome.FAILED) on permanent adapter failure."""
+        callback = MagicMock()
+        proc = _make_processor(
+            adapter=_adapter(status=DeliveryStatus.PERMANENT_FAIL),
+            on_terminal_outcome=callback,
+        )
+        task = make_task()
+        await proc.process(task)
+        callback.assert_called_once_with(
+            str(task.payload.notification_id), TaskOutcome.FAILED
+        )
+
+    async def test_callback_called_on_filtered(self):
+        """Callback receives (notification_id, TaskOutcome.FILTERED) when filter engine blocks delivery."""
+        callback = MagicMock()
+        proc = _make_processor(
+            filter_engine=_filter_blocked(FilterReason.DND_ACTIVE),
+            on_terminal_outcome=callback,
+        )
+        task = make_task()
+        await proc.process(task)
+        callback.assert_called_once_with(
+            str(task.payload.notification_id), TaskOutcome.FILTERED
+        )
+
+    async def test_no_callback_does_not_raise(self):
+        """Processor works normally when on_terminal_outcome is None (default)."""
+        proc = _make_processor(
+            adapter=_adapter(status=DeliveryStatus.SUCCESS),
+            on_terminal_outcome=None,
+        )
+        task = make_task()
+        # Must not raise
+        await proc.process(task)

@@ -12,6 +12,7 @@ from .delivery import (
     DeliveryStatus,
     NotificationDeliveryTask,
     RetrySchedule,
+    TaskOutcome,
 )
 from .notification import (
     NotificationCriticality,
@@ -44,6 +45,7 @@ __all__ = [
     "DeliveryStatus",
     "NotificationDeliveryTask",
     "RetrySchedule",
+    "TaskOutcome",
     # Notification
     "NotificationCriticality",
     "NotificationPayload",

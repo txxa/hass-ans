@@ -128,6 +128,7 @@ def _make_system(channel_manager: MagicMock | None = None) -> MagicMock:
     system.retry_queue = MagicMock()
     system.retry_queue.remove_retry = AsyncMock()
     system.orchestrator = MagicMock()
+    system.orchestrator.stop = AsyncMock()
     system.rate_limiter = MagicMock()
     return system
 
@@ -841,6 +842,7 @@ class TestTeardownEntryComponents:
         system.housekeeping_scheduler.stop.assert_awaited_once()
         system.deduplication_service.stop.assert_awaited_once()
         system.channel_manager.cleanup_all.assert_awaited_once()
+        system.orchestrator.stop.assert_awaited_once()
         volume_registry.async_unload.assert_awaited_once()
 
     async def test_no_system_only_unloads_volume_registry(self):

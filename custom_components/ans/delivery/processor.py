@@ -9,6 +9,7 @@ Responsible for executing delivery tasks:
 """
 
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -31,6 +32,7 @@ from ..models import (
     DeliveryStatus,
     FilterDecisionType,
     NotificationDeliveryTask,
+    TaskOutcome,
 )
 from ..persistence.file import DeliveryAttemptLog, NotificationRegistry, RetryQueue
 from .filter_engine import FilterEngine
@@ -66,6 +68,7 @@ class NotificationDeliveryProcessor:
         notification_registry: NotificationRegistry,
         attempt_log: DeliveryAttemptLog,
         retry_queue: RetryQueue,
+        on_terminal_outcome: Callable[[str, TaskOutcome], None] | None = None,
     ) -> None:
         """Initialize the Delivery Processor.
 
@@ -78,6 +81,9 @@ class NotificationDeliveryProcessor:
             notification_registry: Notification registry for tracking.
             attempt_log: Delivery attempt log for audit trail.
             retry_queue: Retry queue for scheduling retries.
+            on_terminal_outcome: Optional callback invoked after each terminal task
+                outcome (success, permanent failure, filtered).  Signature:
+                ``(notification_id: str, outcome_key: TaskOutcome) -> None``.
 
         """
         self._filter_engine = filter_engine
@@ -88,6 +94,7 @@ class NotificationDeliveryProcessor:
         self._notification_registry = notification_registry
         self._attempt_log = attempt_log
         self._retry_queue = retry_queue
+        self._on_terminal_outcome = on_terminal_outcome
 
     # ------------------------------------------------------------------
     # Public API
@@ -144,6 +151,10 @@ class NotificationDeliveryProcessor:
                     "filter_reason": filter_decision.reason.value,
                 },
             )
+            if self._on_terminal_outcome is not None:
+                self._on_terminal_outcome(
+                    str(task.payload.notification_id), TaskOutcome.FILTERED
+                )
             return
 
         # RATE LIMITING (retryable decision)
@@ -178,6 +189,14 @@ class NotificationDeliveryProcessor:
                     "retry_at": retry_at.isoformat() if retry_at else None,
                 },
             )
+            if retry_at is None:
+                # Retries exhausted — the already-logged RATE_LIMITED attempt is the
+                # final record; signal failure without creating a phantom attempt.
+                self._signal_terminal_failure(
+                    task,
+                    error="retries_exhausted_after_rate_limit",
+                    attempt_number=attempt.attempt_number,
+                )
             return
 
         # CONTACT INFO VALIDATION (terminal decision if missing/invalid)
@@ -396,6 +415,10 @@ class NotificationDeliveryProcessor:
                 "remote_id": result.remote_id,
             },
         )
+        if self._on_terminal_outcome is not None:
+            self._on_terminal_outcome(
+                str(task.payload.notification_id), TaskOutcome.DELIVERED
+            )
 
         _LOGGER.info(
             "Delivery succeeded: notification_id=%s job_id=%s recipient_id=%s "
@@ -441,7 +464,15 @@ class NotificationDeliveryProcessor:
             error,
         )
 
-        await self._schedule_retry(task, reason="transient_failure")
+        retry_at = await self._schedule_retry(task, reason="transient_failure")
+        if retry_at is None:
+            # Retries exhausted — the already-logged TRANSIENT_FAIL attempt is the
+            # final record; signal failure without creating a phantom attempt.
+            self._signal_terminal_failure(
+                task,
+                error=f"retries_exhausted: {error}",
+                attempt_number=attempt.attempt_number,
+            )
 
     async def _handle_permanent_failure(
         self,
@@ -464,14 +495,7 @@ class NotificationDeliveryProcessor:
         # Log attempt with final status (only logged once)
         await self._attempt_log.log_attempt(attempt, task)
 
-        self._hass.bus.async_fire(
-            EVENT_NOTIFICATION_FAILED,
-            {
-                **self._build_base_event_payload(task),
-                "error": attempt.error,
-                "attempt_number": attempt.attempt_number,
-            },
-        )
+        self._signal_terminal_failure(task, attempt.error, attempt.attempt_number)
 
         _LOGGER.error(
             "Permanent delivery failure: notification_id=%s job_id=%s "
@@ -487,6 +511,32 @@ class NotificationDeliveryProcessor:
     # ------------------------------------------------------------------
     # Retry handling
     # ------------------------------------------------------------------
+
+    def _signal_terminal_failure(
+        self,
+        task: NotificationDeliveryTask,
+        error: str | None,
+        attempt_number: int,
+    ) -> None:
+        """Fire the failed event and invoke the terminal-outcome callback.
+
+        Intentionally decoupled from attempt logging so it can be called both
+        from :meth:`_handle_permanent_failure` (after logging) and from
+        exhaustion paths where the attempt was already logged as
+        TRANSIENT_FAIL / RATE_LIMITED.
+        """
+        self._hass.bus.async_fire(
+            EVENT_NOTIFICATION_FAILED,
+            {
+                **self._build_base_event_payload(task),
+                "error": error,
+                "attempt_number": attempt_number,
+            },
+        )
+        if self._on_terminal_outcome is not None:
+            self._on_terminal_outcome(
+                str(task.payload.notification_id), TaskOutcome.FAILED
+            )
 
     def _build_base_event_payload(self, task: NotificationDeliveryTask) -> dict:
         """Build the common event payload fields shared by all delivery outcome events."""

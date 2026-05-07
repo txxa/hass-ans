@@ -16,6 +16,7 @@ EVENT_NOTIFICATION_DELIVERED = "ans_notification_delivered"
 EVENT_NOTIFICATION_FILTERED = "ans_notification_filtered"
 EVENT_NOTIFICATION_FAILED = "ans_notification_failed"
 EVENT_NOTIFICATION_RATE_LIMITED = "ans_notification_rate_limited"
+EVENT_NOTIFICATION_SETTLED = "ans_notification_settled"
 
 # Max values for system configuration
 SYS_MAX_GLOBAL_RATE_LIMIT = 10000  # Max value configurable in system settings

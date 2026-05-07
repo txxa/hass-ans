@@ -19,11 +19,13 @@ from ..channels.tts_mediaplayer import TTSMediaPlayerAdapter
 from ..config.repository import ConfigRepository
 from ..const import (
     RCPT_DEFAULT_RETRY_ATTEMPTS,
+    RCPT_MAX_RETRY_ATTEMPTS,
     SYS_DEDUP_CLEANUP_INTERVAL,
     SYS_DEDUP_MAX_CACHE_SIZE,
     SYS_DEDUP_WINDOW_SECONDS,
     SYS_STORAGE_HOUSEKEEPING_INTERVAL_HOURS,
 )
+from ..models import TaskOutcome
 from ..persistence.file import DeliveryAttemptLog, NotificationRegistry, RetryQueue
 from ..persistence.housekeeping import HousekeepingScheduler
 from ..persistence.volume_restoration import VolumeRestorationRegistry
@@ -147,6 +149,7 @@ def _create_processor_factory(
     notification_registry: NotificationRegistry,
     attempt_log: DeliveryAttemptLog,
     retry_queue: RetryQueue,
+    on_terminal_outcome: Callable[[str, TaskOutcome], None] | None = None,
 ) -> Callable[[], NotificationDeliveryProcessor]:
     """Return a zero-argument factory that creates :class:`NotificationDeliveryProcessor` instances.
 
@@ -163,6 +166,8 @@ def _create_processor_factory(
         notification_registry: Persistent notification registry.
         attempt_log: Persistent delivery attempt log.
         retry_queue: Persistent retry queue.
+        on_terminal_outcome: Optional callback forwarded to each processor; called
+            after every terminal task outcome (delivered / failed / filtered).
 
     Returns:
         A callable ``() -> NotificationDeliveryProcessor``.
@@ -179,6 +184,7 @@ def _create_processor_factory(
             notification_registry=notification_registry,
             attempt_log=attempt_log,
             retry_queue=retry_queue,
+            on_terminal_outcome=on_terminal_outcome,
         )
 
     return _create_processor
@@ -250,6 +256,11 @@ def create_system(
     # NOTE: sync() is async and is called from async_setup_entry after
     # create_system() returns.  Dynamic adapters are not yet registered.
 
+    # Mutable callback holder to break the circular dependency:
+    # processor_factory → needs callback → orchestrator → needs task_queue → processor_factory.
+    # The lambda reads the holder at call time, after orchestrator is created.
+    _terminal_callback: list[Callable[[str, str], None] | None] = [None]
+
     # Create processor factory for queue
     processor_factory = _create_processor_factory(
         filter_engine=filter_engine,
@@ -260,6 +271,11 @@ def create_system(
         notification_registry=notification_registry,
         attempt_log=attempt_log,
         retry_queue=retry_queue,
+        on_terminal_outcome=lambda nid, key: (
+            _terminal_callback[0](nid, key)
+            if _terminal_callback[0] is not None
+            else None
+        ),
     )
 
     # Create task queue with worker pool
@@ -283,7 +299,10 @@ def create_system(
         notification_registry=notification_registry,
         channel_manager=channel_manager,
         deduplication_service=deduplication_service,
+        hass=hass,
+        settled_ttl_seconds=RCPT_MAX_RETRY_ATTEMPTS * system_config.retry_max_delay,
     )
+    _terminal_callback[0] = orchestrator.on_task_terminal
 
     # Create housekeeping scheduler for cleanup
     housekeeping_scheduler = HousekeepingScheduler(

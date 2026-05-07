@@ -417,6 +417,7 @@ async def _teardown_entry_components(entry_data: dict) -> None:
                 system.housekeeping_scheduler.stop(),
                 system.deduplication_service.stop(),
                 system.channel_manager.cleanup_all(),
+                system.orchestrator.stop(),
             ]
         )
     if volume_registry:

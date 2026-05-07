@@ -42,6 +42,25 @@ class DeliveryStatus(StrEnum):
     SUCCESS = "SUCCESS"
 
 
+class TaskOutcome(StrEnum):
+    """Terminal outcome of a delivery task as reported to the orchestrator.
+
+    Values
+    ------
+    DELIVERED : str
+        Task delivered successfully.
+    FAILED : str
+        Task failed permanently (no further retries).
+    FILTERED : str
+        Task filtered out by policy before delivery.
+
+    """
+
+    DELIVERED = "delivered"
+    FAILED = "failed"
+    FILTERED = "filtered"
+
+
 @dataclass(frozen=True)
 class NotificationDeliveryTask:
     """One task = one (notification × recipient × channel) delivery.

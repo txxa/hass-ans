@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, call, patch
 from uuid import uuid4
 
+from custom_components.ans.const import EVENT_NOTIFICATION_SETTLED
 from custom_components.ans.delivery.orchestrator import NotificationOrchestrator
 from custom_components.ans.models import (
     ChannelInfo,
@@ -13,6 +14,7 @@ from custom_components.ans.models import (
     RecipientContactInfo,
     RecipientNotificationPolicy,
     RecipientType,
+    TaskOutcome,
 )
 from custom_components.ans.models.recipient import TTSSettings
 
@@ -80,12 +82,24 @@ def _make_channel_info(channel_id: str) -> ChannelInfo:
     )
 
 
+def _make_hass() -> MagicMock:
+    """Return a minimal mock HomeAssistant instance for orchestrator tests."""
+    hass = MagicMock()
+    hass.bus = MagicMock()
+    hass.bus.async_fire = MagicMock()
+    # async_listen returns a callable that unsubscribes
+    hass.bus.async_listen = MagicMock(return_value=MagicMock())
+    return hass
+
+
 def _make_orchestrator(
     *,
     snapshot=None,
     recipients: list[str] | None = None,
     channels_per_recipient: dict[str, list[str]] | None = None,
     dedup=None,
+    hass=None,
+    settled_ttl_seconds: int = 60,
 ):
     """Return a (orchestrator, task_queue, notification_registry) tuple wired with sensible mock defaults."""
     snap = snapshot or _make_snapshot(
@@ -117,6 +131,8 @@ def _make_orchestrator(
             notification_registry=notification_registry,
             channel_manager=channel_manager,
             deduplication_service=dedup,
+            hass=hass,
+            settled_ttl_seconds=settled_ttl_seconds,
         ),
         task_queue,
         notification_registry,
@@ -417,3 +433,277 @@ class TestNonTTSOnMediaPlayerChannel:
         enqueued_task = queue.enqueue.call_args[0][0]
         # tts_settings should be None since the recipient is not TTS
         assert enqueued_task.tts_settings is None
+
+
+# ── Settled event ─────────────────────────────────────────────────────────────
+
+_PATCH_ACL = "custom_components.ans.delivery.orchestrator.async_call_later"
+
+
+class TestSettledEvent:
+    """Verify that ans_notification_settled fires once all fan-out tasks reach a terminal state."""
+
+    def _fire_terminal(self, orch, event_name: str, notification_id: str) -> None:
+        """Simulate a terminal delivery outcome from the processor."""
+        outcome_map = {
+            "ans_notification_delivered": TaskOutcome.DELIVERED,
+            "ans_notification_failed": TaskOutcome.FAILED,
+            "ans_notification_filtered": TaskOutcome.FILTERED,
+        }
+        orch.on_task_terminal(notification_id, outcome_map[event_name])
+
+    async def test_all_delivered_fires_settled(self):
+        """Two tasks both delivered → settled fires with delivered=2."""
+        hass = _make_hass()
+        cancel = MagicMock()
+        with patch(_PATCH_ACL, return_value=cancel):
+            orch, _, _ = _make_orchestrator(
+                recipients=["rcpt-1"],
+                channels_per_recipient={"rcpt-1": ["notify.ch_a", "notify.ch_b"]},
+                hass=hass,
+            )
+            payload = make_payload()
+            await orch.handle_notification(payload)
+            nid = payload.notification_id
+
+            self._fire_terminal(orch, "ans_notification_delivered", nid)
+            self._fire_terminal(orch, "ans_notification_delivered", nid)
+
+        hass.bus.async_fire.assert_called_once_with(
+            EVENT_NOTIFICATION_SETTLED,
+            {"notification_id": nid, "delivered": 2, "failed": 0, "filtered": 0},
+        )
+        assert nid not in orch._tracking
+
+    async def test_all_failed_fires_settled(self):
+        """Two tasks both failed → settled fires with failed=2."""
+        hass = _make_hass()
+        cancel = MagicMock()
+        with patch(_PATCH_ACL, return_value=cancel):
+            orch, _, _ = _make_orchestrator(
+                recipients=["rcpt-1"],
+                channels_per_recipient={"rcpt-1": ["notify.ch_a", "notify.ch_b"]},
+                hass=hass,
+            )
+            payload = make_payload()
+            await orch.handle_notification(payload)
+            nid = payload.notification_id
+
+            self._fire_terminal(orch, "ans_notification_failed", nid)
+            self._fire_terminal(orch, "ans_notification_failed", nid)
+
+        hass.bus.async_fire.assert_called_once_with(
+            EVENT_NOTIFICATION_SETTLED,
+            {"notification_id": nid, "delivered": 0, "failed": 2, "filtered": 0},
+        )
+
+    async def test_all_filtered_fires_settled(self):
+        """Two tasks both filtered → settled fires with filtered=2."""
+        hass = _make_hass()
+        cancel = MagicMock()
+        with patch(_PATCH_ACL, return_value=cancel):
+            orch, _, _ = _make_orchestrator(
+                recipients=["rcpt-1"],
+                channels_per_recipient={"rcpt-1": ["notify.ch_a", "notify.ch_b"]},
+                hass=hass,
+            )
+            payload = make_payload()
+            await orch.handle_notification(payload)
+            nid = payload.notification_id
+
+            self._fire_terminal(orch, "ans_notification_filtered", nid)
+            self._fire_terminal(orch, "ans_notification_filtered", nid)
+
+        hass.bus.async_fire.assert_called_once_with(
+            EVENT_NOTIFICATION_SETTLED,
+            {"notification_id": nid, "delivered": 0, "failed": 0, "filtered": 2},
+        )
+
+    async def test_mixed_fires_settled(self):
+        """One delivered + one failed → settled fires with correct mixed counts."""
+        hass = _make_hass()
+        cancel = MagicMock()
+        with patch(_PATCH_ACL, return_value=cancel):
+            orch, _, _ = _make_orchestrator(
+                recipients=["rcpt-1"],
+                channels_per_recipient={"rcpt-1": ["notify.ch_a", "notify.ch_b"]},
+                hass=hass,
+            )
+            payload = make_payload()
+            await orch.handle_notification(payload)
+            nid = payload.notification_id
+
+            self._fire_terminal(orch, "ans_notification_delivered", nid)
+            self._fire_terminal(orch, "ans_notification_failed", nid)
+
+        hass.bus.async_fire.assert_called_once_with(
+            EVENT_NOTIFICATION_SETTLED,
+            {"notification_id": nid, "delivered": 1, "failed": 1, "filtered": 0},
+        )
+
+    async def test_single_task_fires_settled(self):
+        """A single-task notification fires settled after one terminal event."""
+        hass = _make_hass()
+        cancel = MagicMock()
+        with patch(_PATCH_ACL, return_value=cancel):
+            orch, _, _ = _make_orchestrator(
+                recipients=["rcpt-1"],
+                channels_per_recipient={"rcpt-1": ["notify.ch_a"]},
+                hass=hass,
+            )
+            payload = make_payload()
+            await orch.handle_notification(payload)
+            nid = payload.notification_id
+
+            self._fire_terminal(orch, "ans_notification_delivered", nid)
+
+        hass.bus.async_fire.assert_called_once_with(
+            EVENT_NOTIFICATION_SETTLED,
+            {"notification_id": nid, "delivered": 1, "failed": 0, "filtered": 0},
+        )
+
+    async def test_zero_tasks_no_settled(self):
+        """When no tasks are enqueued no settled event fires."""
+        hass = _make_hass()
+        with patch(_PATCH_ACL, return_value=MagicMock()):
+            orch, _, _ = _make_orchestrator(
+                recipients=["rcpt-1"],
+                channels_per_recipient={"rcpt-1": []},
+                hass=hass,
+            )
+            await orch.handle_notification(make_payload())
+
+        hass.bus.async_fire.assert_not_called()
+        assert orch._tracking == {}
+
+    async def test_ttl_evicts_entry_no_settled(self, caplog):
+        """When the TTL fires before all tasks settle, the entry is evicted without firing settled."""
+        import logging  # noqa: PLC0415
+
+        hass = _make_hass()
+        captured_ttl_callback = {}
+        cancel = MagicMock()
+
+        def _fake_acl(_hass, _delay, callback):
+            captured_ttl_callback["cb"] = callback
+            return cancel
+
+        with patch(_PATCH_ACL, side_effect=_fake_acl):
+            orch, _, _ = _make_orchestrator(
+                recipients=["rcpt-1"],
+                channels_per_recipient={"rcpt-1": ["notify.ch_a", "notify.ch_b"]},
+                hass=hass,
+            )
+            payload = make_payload()
+            await orch.handle_notification(payload)
+            nid = payload.notification_id
+
+        # Only one of the two tasks settles
+        self._fire_terminal(orch, "ans_notification_delivered", nid)
+
+        # Fire TTL callback manually
+        with caplog.at_level(logging.WARNING):
+            captured_ttl_callback["cb"](None)
+
+        assert nid not in orch._tracking
+        hass.bus.async_fire.assert_not_called()
+        assert "TTL expired" in caplog.text
+
+    async def test_settled_fires_only_once(self):
+        """A spurious duplicate event after settled does not fire settled again."""
+        hass = _make_hass()
+        cancel = MagicMock()
+        with patch(_PATCH_ACL, return_value=cancel):
+            orch, _, _ = _make_orchestrator(
+                recipients=["rcpt-1"],
+                channels_per_recipient={"rcpt-1": ["notify.ch_a"]},
+                hass=hass,
+            )
+            payload = make_payload()
+            await orch.handle_notification(payload)
+            nid = payload.notification_id
+
+            self._fire_terminal(orch, "ans_notification_delivered", nid)
+            # Spurious second event for the same notification_id (e.g. retry race)
+            self._fire_terminal(orch, "ans_notification_delivered", nid)
+
+        settled_calls = [
+            c
+            for c in hass.bus.async_fire.call_args_list
+            if c
+            == call(
+                EVENT_NOTIFICATION_SETTLED,
+                {"notification_id": nid, "delivered": 1, "failed": 0, "filtered": 0},
+            )
+        ]
+        assert len(settled_calls) == 1
+
+    async def test_stop_cancels_ttl_and_clears_tracking(self):
+        """stop() cancels pending TTL timers and clears tracking."""
+        hass = _make_hass()
+        cancel = MagicMock()
+        with patch(_PATCH_ACL, return_value=cancel):
+            orch, _, _ = _make_orchestrator(
+                recipients=["rcpt-1"],
+                channels_per_recipient={"rcpt-1": ["notify.ch_a"]},
+                hass=hass,
+            )
+            payload = make_payload()
+            await orch.handle_notification(payload)
+
+        # Confirm tracking entry is present
+        assert payload.notification_id in orch._tracking
+
+        await orch.stop()
+
+        # Tracking cleared, TTL cancelled
+        assert orch._tracking == {}
+        cancel.assert_called_once()
+
+    async def test_settled_ttl_uses_configured_value(self):
+        """The TTL passed to async_call_later matches the settled_ttl_seconds constructor argument."""
+        hass = _make_hass()
+        captured_delay: list[int] = []
+
+        def _fake_acl(_hass, delay, _callback):
+            captured_delay.append(delay)
+            return MagicMock()
+
+        with patch(_PATCH_ACL, side_effect=_fake_acl):
+            orch, _, _ = _make_orchestrator(
+                recipients=["rcpt-1"],
+                channels_per_recipient={"rcpt-1": ["notify.ch_a"]},
+                hass=hass,
+                settled_ttl_seconds=7200,
+            )
+            await orch.handle_notification(make_payload())
+
+        assert captured_delay == [7200]
+
+    async def test_settled_fires_after_retry_exhaustion(self):
+        """ans_notification_settled fires when the 'failed' callback comes from retry exhaustion.
+
+        This is the key integration test for the retry-exhaustion fix: the processor
+        calls _on_task_terminal with 'failed' after exhausting retries, which must
+        be enough to settle the notification (no TTL eviction needed).
+        """
+        hass = _make_hass()
+        cancel = MagicMock()
+        with patch(_PATCH_ACL, return_value=cancel):
+            orch, _, _ = _make_orchestrator(
+                recipients=["rcpt-1"],
+                channels_per_recipient={"rcpt-1": ["notify.ch_a"]},
+                hass=hass,
+            )
+            payload = make_payload()
+            await orch.handle_notification(payload)
+            nid = payload.notification_id
+
+            # Simulate processor calling the callback after retry exhaustion
+            self._fire_terminal(orch, "ans_notification_failed", nid)
+
+        hass.bus.async_fire.assert_called_once_with(
+            EVENT_NOTIFICATION_SETTLED,
+            {"notification_id": nid, "delivered": 0, "failed": 1, "filtered": 0},
+        )
+        assert nid not in orch._tracking

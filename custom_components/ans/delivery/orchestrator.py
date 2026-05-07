@@ -22,13 +22,20 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.event import async_call_later
+
 from ..channels.channel_manager import ChannelManager
 from ..config.repository import ConfigRepository
+from ..const import (
+    EVENT_NOTIFICATION_SETTLED,
+)
 from ..models import (
     ConfigSnapshot,
     NotificationDeliveryTask,
     NotificationPayload,
     RecipientType,
+    TaskOutcome,
 )
 from .deduplication import DeduplicationService
 from .queue import NotificationDeliveryTaskQueue
@@ -60,6 +67,8 @@ class NotificationOrchestrator:
         notification_registry,
         channel_manager: ChannelManager,
         deduplication_service: DeduplicationService | None = None,
+        hass: HomeAssistant | None = None,
+        settled_ttl_seconds: int = 3600,
     ) -> None:
         """Initialize the Orchestrator.
 
@@ -69,6 +78,10 @@ class NotificationOrchestrator:
             notification_registry: Notification registry for tracking.
             channel_manager: ChannelManager for live channel and adapter lookups.
             deduplication_service: Optional deduplication service for preventing duplicate deliveries.
+            hass: HomeAssistant instance, required for firing settled events.
+            settled_ttl_seconds: Seconds before an unsettled tracking entry is
+                evicted. Should be ``RCPT_MAX_RETRY_ATTEMPTS * retry_max_delay``
+                so it always exceeds the worst-case retry schedule.
 
         """
         self._config_repo = config_repo
@@ -76,6 +89,12 @@ class NotificationOrchestrator:
         self._notification_registry = notification_registry
         self._channel_manager = channel_manager
         self._deduplication_service = deduplication_service
+        self._hass = hass
+        self._settled_ttl_seconds = settled_ttl_seconds
+
+        # {notification_id: {"expected": int, "delivered": int, "failed": int,
+        #                    "filtered": int, "cancel_ttl": Callable}}
+        self._tracking: dict[str, dict] = {}
 
     async def handle_notification(self, payload: NotificationPayload) -> None:
         """Handle notification orchestration.
@@ -273,6 +292,85 @@ class NotificationOrchestrator:
             len(tasks),
             payload.notification_id,
         )
+
+        if tasks and self._hass is not None:
+            self._register_tracking(payload.notification_id, len(tasks))
+
+    # ------------------------------------------------------------------
+    # Settled-event tracking
+    # ------------------------------------------------------------------
+
+    def _register_tracking(self, notification_id: str, task_count: int) -> None:
+        """Register a notification for settled-event tracking."""
+
+        def _on_ttl(_now: datetime) -> None:
+            if notification_id in self._tracking:
+                _LOGGER.warning(
+                    "Settled-event TTL expired for notification_id=%s — "
+                    "not all tasks reached a terminal state within %d seconds. "
+                    "Evicting tracking entry without firing settled event.",
+                    notification_id,
+                    self._settled_ttl_seconds,
+                )
+                del self._tracking[notification_id]
+
+        cancel_ttl = async_call_later(self._hass, self._settled_ttl_seconds, _on_ttl)
+        self._tracking[notification_id] = {
+            "expected": task_count,
+            "delivered": 0,
+            "failed": 0,
+            "filtered": 0,
+            "cancel_ttl": cancel_ttl,
+        }
+
+    def on_task_terminal(self, notification_id: str, outcome_key: TaskOutcome) -> None:
+        """Receive a terminal task outcome from the processor and check settlement.
+
+        Args:
+            notification_id: The notification ID of the settled task.
+            outcome_key: One of :attr:`TaskOutcome.DELIVERED`, :attr:`TaskOutcome.FAILED`,
+                or :attr:`TaskOutcome.FILTERED`.
+
+        """
+        if notification_id not in self._tracking:
+            return
+        self._tracking[notification_id][outcome_key] += 1
+        self._check_settled(notification_id)
+
+    def _check_settled(self, notification_id: str) -> None:
+        """Fire ans_notification_settled if all tasks have reached a terminal state."""
+        entry = self._tracking.get(notification_id)
+        if entry is None:
+            return
+        total_terminal = entry["delivered"] + entry["failed"] + entry["filtered"]
+        if total_terminal < entry["expected"]:
+            return
+
+        entry["cancel_ttl"]()
+        del self._tracking[notification_id]
+
+        self._hass.bus.async_fire(
+            EVENT_NOTIFICATION_SETTLED,
+            {
+                "notification_id": notification_id,
+                "delivered": entry["delivered"],
+                "failed": entry["failed"],
+                "filtered": entry["filtered"],
+            },
+        )
+        _LOGGER.debug(
+            "Notification settled: notification_id=%s delivered=%d failed=%d filtered=%d",
+            notification_id,
+            entry["delivered"],
+            entry["failed"],
+            entry["filtered"],
+        )
+
+    async def stop(self) -> None:
+        """Cancel pending TTL timers and clear tracking state."""
+        for entry in self._tracking.values():
+            entry["cancel_ttl"]()
+        self._tracking.clear()
 
     # ------------------------------------------------------------------
     # Snapshotting

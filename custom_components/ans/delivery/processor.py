@@ -68,7 +68,7 @@ class NotificationDeliveryProcessor:
         notification_registry: NotificationRegistry,
         attempt_log: DeliveryAttemptLog,
         retry_queue: RetryQueue,
-        on_terminal_outcome: Callable[[str, TaskOutcome], None] | None = None,
+        on_terminal_outcome: Callable[[str, TaskOutcome, str], None] | None = None,
     ) -> None:
         """Initialize the Delivery Processor.
 
@@ -83,7 +83,7 @@ class NotificationDeliveryProcessor:
             retry_queue: Retry queue for scheduling retries.
             on_terminal_outcome: Optional callback invoked after each terminal task
                 outcome (success, permanent failure, filtered).  Signature:
-                ``(notification_id: str, outcome_key: TaskOutcome) -> None``.
+                ``(notification_id: str, outcome_key: TaskOutcome, recipient_id: str) -> None``.
 
         """
         self._filter_engine = filter_engine
@@ -153,7 +153,9 @@ class NotificationDeliveryProcessor:
             )
             if self._on_terminal_outcome is not None:
                 self._on_terminal_outcome(
-                    str(task.payload.notification_id), TaskOutcome.FILTERED
+                    str(task.payload.notification_id),
+                    TaskOutcome.FILTERED,
+                    task.recipient_id,
                 )
             return
 
@@ -417,7 +419,9 @@ class NotificationDeliveryProcessor:
         )
         if self._on_terminal_outcome is not None:
             self._on_terminal_outcome(
-                str(task.payload.notification_id), TaskOutcome.DELIVERED
+                str(task.payload.notification_id),
+                TaskOutcome.DELIVERED,
+                task.recipient_id,
             )
 
         _LOGGER.info(
@@ -535,7 +539,7 @@ class NotificationDeliveryProcessor:
         )
         if self._on_terminal_outcome is not None:
             self._on_terminal_outcome(
-                str(task.payload.notification_id), TaskOutcome.FAILED
+                str(task.payload.notification_id), TaskOutcome.FAILED, task.recipient_id
             )
 
     def _build_base_event_payload(self, task: NotificationDeliveryTask) -> dict:

@@ -469,7 +469,7 @@ class TestScheduleRetry:
         fired = [c[0][0] for c in hass.bus.async_fire.call_args_list]
         assert EVENT_NOTIFICATION_FAILED in fired
         callback.assert_called_once_with(
-            str(task.payload.notification_id), TaskOutcome.FAILED
+            str(task.payload.notification_id), TaskOutcome.FAILED, task.recipient_id
         )
 
     async def test_policy_returns_no_retry_no_schedule(self):
@@ -492,7 +492,7 @@ class TestScheduleRetry:
         fired = [c[0][0] for c in hass.bus.async_fire.call_args_list]
         assert EVENT_NOTIFICATION_FAILED in fired
         callback.assert_called_once_with(
-            str(task.payload.notification_id), TaskOutcome.FAILED
+            str(task.payload.notification_id), TaskOutcome.FAILED, task.recipient_id
         )
 
     async def test_policy_returns_none_next_run_no_schedule(self):
@@ -515,7 +515,7 @@ class TestScheduleRetry:
         fired = [c[0][0] for c in hass.bus.async_fire.call_args_list]
         assert EVENT_NOTIFICATION_FAILED in fired
         callback.assert_called_once_with(
-            str(task.payload.notification_id), TaskOutcome.FAILED
+            str(task.payload.notification_id), TaskOutcome.FAILED, task.recipient_id
         )
 
     async def test_retry_exhaustion_logs_single_attempt(self):
@@ -550,7 +550,7 @@ class TestRateLimitExhaustion:
         assert EVENT_NOTIFICATION_RATE_LIMITED in fired
         assert EVENT_NOTIFICATION_FAILED in fired
         callback.assert_called_once_with(
-            str(task.payload.notification_id), TaskOutcome.FAILED
+            str(task.payload.notification_id), TaskOutcome.FAILED, task.recipient_id
         )
 
     async def test_rate_limited_with_retry_available_no_failed_event(self):
@@ -736,7 +736,7 @@ class TestTerminalOutcomeCallback:
         task = make_task()
         await proc.process(task)
         callback.assert_called_once_with(
-            str(task.payload.notification_id), TaskOutcome.DELIVERED
+            str(task.payload.notification_id), TaskOutcome.DELIVERED, task.recipient_id
         )
 
     async def test_callback_called_on_permanent_failure(self):
@@ -749,7 +749,7 @@ class TestTerminalOutcomeCallback:
         task = make_task()
         await proc.process(task)
         callback.assert_called_once_with(
-            str(task.payload.notification_id), TaskOutcome.FAILED
+            str(task.payload.notification_id), TaskOutcome.FAILED, task.recipient_id
         )
 
     async def test_callback_called_on_filtered(self):
@@ -762,7 +762,7 @@ class TestTerminalOutcomeCallback:
         task = make_task()
         await proc.process(task)
         callback.assert_called_once_with(
-            str(task.payload.notification_id), TaskOutcome.FILTERED
+            str(task.payload.notification_id), TaskOutcome.FILTERED, task.recipient_id
         )
 
     async def test_no_callback_does_not_raise(self):

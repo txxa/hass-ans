@@ -93,7 +93,12 @@ class NotificationOrchestrator:
         self._settled_ttl_seconds = settled_ttl_seconds
 
         # {notification_id: {"expected": int, "delivered": int, "failed": int,
-        #                    "filtered": int, "cancel_ttl": Callable}}
+        #                    "filtered": int, "cancel_ttl": Callable,
+        #                    "total_recipients": int,
+        #                    "recipients": {recipient_id: {"channels_total": int,
+        #                                                  "channels_delivered": int,
+        #                                                  "channels_failed": int,
+        #                                                  "channels_filtered": int}}}}
         self._tracking: dict[str, dict] = {}
 
     async def handle_notification(self, payload: NotificationPayload) -> None:
@@ -294,13 +299,15 @@ class NotificationOrchestrator:
         )
 
         if tasks and self._hass is not None:
-            self._register_tracking(payload.notification_id, len(tasks))
+            self._register_tracking(payload.notification_id, tasks)
 
     # ------------------------------------------------------------------
     # Settled-event tracking
     # ------------------------------------------------------------------
 
-    def _register_tracking(self, notification_id: str, task_count: int) -> None:
+    def _register_tracking(
+        self, notification_id: str, tasks: list[NotificationDeliveryTask]
+    ) -> None:
         """Register a notification for settled-event tracking."""
 
         def _on_ttl(_now: datetime) -> None:
@@ -314,27 +321,49 @@ class NotificationOrchestrator:
                 )
                 del self._tracking[notification_id]
 
+        recipients_map: dict[str, dict] = {}
+        for task in tasks:
+            rid = task.recipient_id
+            if rid not in recipients_map:
+                recipients_map[rid] = {
+                    "channels_total": 0,
+                    "channels_delivered": 0,
+                    "channels_failed": 0,
+                    "channels_filtered": 0,
+                }
+            recipients_map[rid]["channels_total"] += 1
+
         cancel_ttl = async_call_later(self._hass, self._settled_ttl_seconds, _on_ttl)
         self._tracking[notification_id] = {
-            "expected": task_count,
+            "expected": len(tasks),
             "delivered": 0,
             "failed": 0,
             "filtered": 0,
             "cancel_ttl": cancel_ttl,
+            "total_recipients": len(recipients_map),
+            "recipients": recipients_map,
         }
 
-    def on_task_terminal(self, notification_id: str, outcome_key: TaskOutcome) -> None:
+    def on_task_terminal(
+        self, notification_id: str, outcome_key: TaskOutcome, recipient_id: str
+    ) -> None:
         """Receive a terminal task outcome from the processor and check settlement.
 
         Args:
             notification_id: The notification ID of the settled task.
             outcome_key: One of :attr:`TaskOutcome.DELIVERED`, :attr:`TaskOutcome.FAILED`,
                 or :attr:`TaskOutcome.FILTERED`.
+            recipient_id: The recipient ID of the settled task.
 
         """
         if notification_id not in self._tracking:
             return
         self._tracking[notification_id][outcome_key] += 1
+        recipient_stats = self._tracking[notification_id]["recipients"].get(
+            recipient_id
+        )
+        if recipient_stats is not None:
+            recipient_stats[f"channels_{outcome_key}"] += 1
         self._check_settled(notification_id)
 
     def _check_settled(self, notification_id: str) -> None:
@@ -349,13 +378,22 @@ class NotificationOrchestrator:
         entry["cancel_ttl"]()
         del self._tracking[notification_id]
 
+        recipients_delivered = sum(
+            1 for r in entry["recipients"].values() if r["channels_delivered"] > 0
+        )
         self._hass.bus.async_fire(
             EVENT_NOTIFICATION_SETTLED,
             {
                 "notification_id": notification_id,
+                "total_tasks": entry["expected"],
+                "total_recipients": entry["total_recipients"],
                 "delivered": entry["delivered"],
                 "failed": entry["failed"],
                 "filtered": entry["filtered"],
+                "recipients_delivered": recipients_delivered,
+                "recipients": {
+                    rid: dict(stats) for rid, stats in entry["recipients"].items()
+                },
             },
         )
         _LOGGER.debug(

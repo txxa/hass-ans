@@ -149,7 +149,7 @@ def _create_processor_factory(
     notification_registry: NotificationRegistry,
     attempt_log: DeliveryAttemptLog,
     retry_queue: RetryQueue,
-    on_terminal_outcome: Callable[[str, TaskOutcome], None] | None = None,
+    on_terminal_outcome: Callable[[str, TaskOutcome, str], None] | None = None,
 ) -> Callable[[], NotificationDeliveryProcessor]:
     """Return a zero-argument factory that creates :class:`NotificationDeliveryProcessor` instances.
 
@@ -271,8 +271,8 @@ def create_system(
         notification_registry=notification_registry,
         attempt_log=attempt_log,
         retry_queue=retry_queue,
-        on_terminal_outcome=lambda nid, key: (
-            _terminal_callback[0](nid, key)
+        on_terminal_outcome=lambda nid, key, recipient_id: (
+            _terminal_callback[0](nid, key, recipient_id)
             if _terminal_callback[0] is not None
             else None
         ),

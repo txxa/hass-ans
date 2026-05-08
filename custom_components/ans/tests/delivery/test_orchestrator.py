@@ -443,14 +443,16 @@ _PATCH_ACL = "custom_components.ans.delivery.orchestrator.async_call_later"
 class TestSettledEvent:
     """Verify that ans_notification_settled fires once all fan-out tasks reach a terminal state."""
 
-    def _fire_terminal(self, orch, event_name: str, notification_id: str) -> None:
+    def _fire_terminal(
+        self, orch, event_name: str, notification_id: str, recipient_id: str = "rcpt-1"
+    ) -> None:
         """Simulate a terminal delivery outcome from the processor."""
         outcome_map = {
             "ans_notification_delivered": TaskOutcome.DELIVERED,
             "ans_notification_failed": TaskOutcome.FAILED,
             "ans_notification_filtered": TaskOutcome.FILTERED,
         }
-        orch.on_task_terminal(notification_id, outcome_map[event_name])
+        orch.on_task_terminal(notification_id, outcome_map[event_name], recipient_id)
 
     async def test_all_delivered_fires_settled(self):
         """Two tasks both delivered → settled fires with delivered=2."""
@@ -471,7 +473,23 @@ class TestSettledEvent:
 
         hass.bus.async_fire.assert_called_once_with(
             EVENT_NOTIFICATION_SETTLED,
-            {"notification_id": nid, "delivered": 2, "failed": 0, "filtered": 0},
+            {
+                "notification_id": nid,
+                "total_tasks": 2,
+                "total_recipients": 1,
+                "delivered": 2,
+                "failed": 0,
+                "filtered": 0,
+                "recipients_delivered": 1,
+                "recipients": {
+                    "rcpt-1": {
+                        "channels_total": 2,
+                        "channels_delivered": 2,
+                        "channels_failed": 0,
+                        "channels_filtered": 0,
+                    },
+                },
+            },
         )
         assert nid not in orch._tracking
 
@@ -494,7 +512,23 @@ class TestSettledEvent:
 
         hass.bus.async_fire.assert_called_once_with(
             EVENT_NOTIFICATION_SETTLED,
-            {"notification_id": nid, "delivered": 0, "failed": 2, "filtered": 0},
+            {
+                "notification_id": nid,
+                "total_tasks": 2,
+                "total_recipients": 1,
+                "delivered": 0,
+                "failed": 2,
+                "filtered": 0,
+                "recipients_delivered": 0,
+                "recipients": {
+                    "rcpt-1": {
+                        "channels_total": 2,
+                        "channels_delivered": 0,
+                        "channels_failed": 2,
+                        "channels_filtered": 0,
+                    },
+                },
+            },
         )
 
     async def test_all_filtered_fires_settled(self):
@@ -516,7 +550,23 @@ class TestSettledEvent:
 
         hass.bus.async_fire.assert_called_once_with(
             EVENT_NOTIFICATION_SETTLED,
-            {"notification_id": nid, "delivered": 0, "failed": 0, "filtered": 2},
+            {
+                "notification_id": nid,
+                "total_tasks": 2,
+                "total_recipients": 1,
+                "delivered": 0,
+                "failed": 0,
+                "filtered": 2,
+                "recipients_delivered": 0,
+                "recipients": {
+                    "rcpt-1": {
+                        "channels_total": 2,
+                        "channels_delivered": 0,
+                        "channels_failed": 0,
+                        "channels_filtered": 2,
+                    },
+                },
+            },
         )
 
     async def test_mixed_fires_settled(self):
@@ -538,7 +588,23 @@ class TestSettledEvent:
 
         hass.bus.async_fire.assert_called_once_with(
             EVENT_NOTIFICATION_SETTLED,
-            {"notification_id": nid, "delivered": 1, "failed": 1, "filtered": 0},
+            {
+                "notification_id": nid,
+                "total_tasks": 2,
+                "total_recipients": 1,
+                "delivered": 1,
+                "failed": 1,
+                "filtered": 0,
+                "recipients_delivered": 1,
+                "recipients": {
+                    "rcpt-1": {
+                        "channels_total": 2,
+                        "channels_delivered": 1,
+                        "channels_failed": 1,
+                        "channels_filtered": 0,
+                    },
+                },
+            },
         )
 
     async def test_single_task_fires_settled(self):
@@ -559,7 +625,23 @@ class TestSettledEvent:
 
         hass.bus.async_fire.assert_called_once_with(
             EVENT_NOTIFICATION_SETTLED,
-            {"notification_id": nid, "delivered": 1, "failed": 0, "filtered": 0},
+            {
+                "notification_id": nid,
+                "total_tasks": 1,
+                "total_recipients": 1,
+                "delivered": 1,
+                "failed": 0,
+                "filtered": 0,
+                "recipients_delivered": 1,
+                "recipients": {
+                    "rcpt-1": {
+                        "channels_total": 1,
+                        "channels_delivered": 1,
+                        "channels_failed": 0,
+                        "channels_filtered": 0,
+                    },
+                },
+            },
         )
 
     async def test_zero_tasks_no_settled(self):
@@ -633,7 +715,23 @@ class TestSettledEvent:
             if c
             == call(
                 EVENT_NOTIFICATION_SETTLED,
-                {"notification_id": nid, "delivered": 1, "failed": 0, "filtered": 0},
+                {
+                    "notification_id": nid,
+                    "total_tasks": 1,
+                    "total_recipients": 1,
+                    "delivered": 1,
+                    "failed": 0,
+                    "filtered": 0,
+                    "recipients_delivered": 1,
+                    "recipients": {
+                        "rcpt-1": {
+                            "channels_total": 1,
+                            "channels_delivered": 1,
+                            "channels_failed": 0,
+                            "channels_filtered": 0,
+                        },
+                    },
+                },
             )
         ]
         assert len(settled_calls) == 1
@@ -704,6 +802,205 @@ class TestSettledEvent:
 
         hass.bus.async_fire.assert_called_once_with(
             EVENT_NOTIFICATION_SETTLED,
-            {"notification_id": nid, "delivered": 0, "failed": 1, "filtered": 0},
+            {
+                "notification_id": nid,
+                "total_tasks": 1,
+                "total_recipients": 1,
+                "delivered": 0,
+                "failed": 1,
+                "filtered": 0,
+                "recipients_delivered": 0,
+                "recipients": {
+                    "rcpt-1": {
+                        "channels_total": 1,
+                        "channels_delivered": 0,
+                        "channels_failed": 1,
+                        "channels_filtered": 0,
+                    },
+                },
+            },
         )
         assert nid not in orch._tracking
+
+    async def test_multi_recipient_all_delivered(self):
+        """Two recipients each with two channels all delivered → correct per-recipient breakdown."""
+        hass = _make_hass()
+        cancel = MagicMock()
+        with patch(_PATCH_ACL, return_value=cancel):
+            orch, _, _ = _make_orchestrator(
+                recipients=["rcpt-1", "rcpt-2"],
+                channels_per_recipient={
+                    "rcpt-1": ["notify.ch_a", "notify.ch_b"],
+                    "rcpt-2": ["notify.ch_a", "notify.ch_b"],
+                },
+                hass=hass,
+            )
+            payload = make_payload()
+            await orch.handle_notification(payload)
+            nid = payload.notification_id
+
+            self._fire_terminal(orch, "ans_notification_delivered", nid, "rcpt-1")
+            self._fire_terminal(orch, "ans_notification_delivered", nid, "rcpt-1")
+            self._fire_terminal(orch, "ans_notification_delivered", nid, "rcpt-2")
+            self._fire_terminal(orch, "ans_notification_delivered", nid, "rcpt-2")
+
+        hass.bus.async_fire.assert_called_once_with(
+            EVENT_NOTIFICATION_SETTLED,
+            {
+                "notification_id": nid,
+                "total_tasks": 4,
+                "total_recipients": 2,
+                "delivered": 4,
+                "failed": 0,
+                "filtered": 0,
+                "recipients_delivered": 2,
+                "recipients": {
+                    "rcpt-1": {
+                        "channels_total": 2,
+                        "channels_delivered": 2,
+                        "channels_failed": 0,
+                        "channels_filtered": 0,
+                    },
+                    "rcpt-2": {
+                        "channels_total": 2,
+                        "channels_delivered": 2,
+                        "channels_failed": 0,
+                        "channels_filtered": 0,
+                    },
+                },
+            },
+        )
+
+    async def test_multi_recipient_partial_success(self):
+        """One recipient fully delivered, one fully filtered → recipients_delivered counts only the delivered one."""
+        hass = _make_hass()
+        cancel = MagicMock()
+        with patch(_PATCH_ACL, return_value=cancel):
+            orch, _, _ = _make_orchestrator(
+                recipients=["rcpt-1", "rcpt-2"],
+                channels_per_recipient={
+                    "rcpt-1": ["notify.ch_a", "notify.ch_b"],
+                    "rcpt-2": ["notify.ch_a", "notify.ch_b"],
+                },
+                hass=hass,
+            )
+            payload = make_payload()
+            await orch.handle_notification(payload)
+            nid = payload.notification_id
+
+            self._fire_terminal(orch, "ans_notification_delivered", nid, "rcpt-1")
+            self._fire_terminal(orch, "ans_notification_delivered", nid, "rcpt-1")
+            self._fire_terminal(orch, "ans_notification_filtered", nid, "rcpt-2")
+            self._fire_terminal(orch, "ans_notification_filtered", nid, "rcpt-2")
+
+        hass.bus.async_fire.assert_called_once_with(
+            EVENT_NOTIFICATION_SETTLED,
+            {
+                "notification_id": nid,
+                "total_tasks": 4,
+                "total_recipients": 2,
+                "delivered": 2,
+                "failed": 0,
+                "filtered": 2,
+                "recipients_delivered": 1,
+                "recipients": {
+                    "rcpt-1": {
+                        "channels_total": 2,
+                        "channels_delivered": 2,
+                        "channels_failed": 0,
+                        "channels_filtered": 0,
+                    },
+                    "rcpt-2": {
+                        "channels_total": 2,
+                        "channels_delivered": 0,
+                        "channels_failed": 0,
+                        "channels_filtered": 2,
+                    },
+                },
+            },
+        )
+
+    async def test_multi_recipient_all_failed_recipients_delivered_zero(self):
+        """All tasks fail across all recipients → recipients_delivered is 0."""
+        hass = _make_hass()
+        cancel = MagicMock()
+        with patch(_PATCH_ACL, return_value=cancel):
+            orch, _, _ = _make_orchestrator(
+                recipients=["rcpt-1", "rcpt-2"],
+                channels_per_recipient={
+                    "rcpt-1": ["notify.ch_a"],
+                    "rcpt-2": ["notify.ch_a"],
+                },
+                hass=hass,
+            )
+            payload = make_payload()
+            await orch.handle_notification(payload)
+            nid = payload.notification_id
+
+            self._fire_terminal(orch, "ans_notification_failed", nid, "rcpt-1")
+            self._fire_terminal(orch, "ans_notification_failed", nid, "rcpt-2")
+
+        hass.bus.async_fire.assert_called_once_with(
+            EVENT_NOTIFICATION_SETTLED,
+            {
+                "notification_id": nid,
+                "total_tasks": 2,
+                "total_recipients": 2,
+                "delivered": 0,
+                "failed": 2,
+                "filtered": 0,
+                "recipients_delivered": 0,
+                "recipients": {
+                    "rcpt-1": {
+                        "channels_total": 1,
+                        "channels_delivered": 0,
+                        "channels_failed": 1,
+                        "channels_filtered": 0,
+                    },
+                    "rcpt-2": {
+                        "channels_total": 1,
+                        "channels_delivered": 0,
+                        "channels_failed": 1,
+                        "channels_filtered": 0,
+                    },
+                },
+            },
+        )
+
+    async def test_recipient_partial_channel_delivery(self):
+        """One recipient, one channel delivered and one failed → recipients_delivered=1."""
+        hass = _make_hass()
+        cancel = MagicMock()
+        with patch(_PATCH_ACL, return_value=cancel):
+            orch, _, _ = _make_orchestrator(
+                recipients=["rcpt-1"],
+                channels_per_recipient={"rcpt-1": ["notify.ch_a", "notify.ch_b"]},
+                hass=hass,
+            )
+            payload = make_payload()
+            await orch.handle_notification(payload)
+            nid = payload.notification_id
+
+            self._fire_terminal(orch, "ans_notification_delivered", nid, "rcpt-1")
+            self._fire_terminal(orch, "ans_notification_failed", nid, "rcpt-1")
+
+        hass.bus.async_fire.assert_called_once_with(
+            EVENT_NOTIFICATION_SETTLED,
+            {
+                "notification_id": nid,
+                "total_tasks": 2,
+                "total_recipients": 1,
+                "delivered": 1,
+                "failed": 1,
+                "filtered": 0,
+                "recipients_delivered": 1,
+                "recipients": {
+                    "rcpt-1": {
+                        "channels_total": 2,
+                        "channels_delivered": 1,
+                        "channels_failed": 1,
+                        "channels_filtered": 0,
+                    },
+                },
+            },
+        )

@@ -74,6 +74,9 @@ from ..const import (
     SYS_MAX_RETRY_BACKOFF_FACTOR,
     SYS_MAX_RETRY_BASE_DELAY_SECONDS,
     SYS_MAX_RETRY_MAX_DELAY_SECONDS,
+    SYS_MIN_RETRY_BACKOFF_FACTOR,
+    SYS_MIN_RETRY_BASE_DELAY_SECONDS,
+    SYS_MIN_RETRY_MAX_DELAY_SECONDS,
     SYS_STORAGE_DEFAULT_FILE_RETENTION_DAYS,
     SYS_STORAGE_MAX_FILE_RETENTION_DAYS,
     TTS_DEFAULT_MESSAGE_FORMAT,
@@ -283,7 +286,13 @@ def get_system_options_schema(
                     SYS_DEFAULT_RETRY_BASE_DELAY_SECONDS,
                 )
             },
-        ): vol.All(int, vol.Range(min=1, max=SYS_MAX_RETRY_BASE_DELAY_SECONDS)),
+        ): vol.All(
+            int,
+            vol.Range(
+                min=SYS_MIN_RETRY_BASE_DELAY_SECONDS,
+                max=SYS_MAX_RETRY_BASE_DELAY_SECONDS,
+            ),
+        ),
         vol.Required(
             SYS_CONFIG_RETRY_BACKOFF_FACTOR_KEY,
             description={
@@ -294,7 +303,9 @@ def get_system_options_schema(
             },
         ): vol.All(
             vol.Coerce(float),
-            vol.Range(min=1.0, max=SYS_MAX_RETRY_BACKOFF_FACTOR),
+            vol.Range(
+                min=SYS_MIN_RETRY_BACKOFF_FACTOR, max=SYS_MAX_RETRY_BACKOFF_FACTOR
+            ),
         ),
         vol.Required(
             SYS_CONFIG_RETRY_MAX_DELAY_KEY,
@@ -304,7 +315,12 @@ def get_system_options_schema(
                     SYS_DEFAULT_RETRY_MAX_DELAY_SECONDS,
                 )
             },
-        ): vol.All(int, vol.Range(min=60, max=SYS_MAX_RETRY_MAX_DELAY_SECONDS)),
+        ): vol.All(
+            int,
+            vol.Range(
+                min=SYS_MIN_RETRY_MAX_DELAY_SECONDS, max=SYS_MAX_RETRY_MAX_DELAY_SECONDS
+            ),
+        ),
         vol.Required(
             SYS_CONFIG_QUEUE_CONCURRENCY_KEY,
             description={

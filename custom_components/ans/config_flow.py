@@ -86,7 +86,7 @@ class ANSConfigFlow(ConfigFlow, domain=DOMAIN):
     - options: Tunable parameters (rate limits) - modified via options flow
     """
 
-    VERSION = 1
+    VERSION = 2
 
     def __init__(self) -> None:
         """Initialize the config flow."""

@@ -18,7 +18,6 @@ from ..channels.signal import SignalDeliveryAdapter
 from ..channels.tts_mediaplayer import TTSMediaPlayerAdapter
 from ..config.repository import ConfigRepository
 from ..const import (
-    RCPT_DEFAULT_RETRY_ATTEMPTS,
     RCPT_MAX_RETRY_ATTEMPTS,
     SYS_DEDUP_CLEANUP_INTERVAL,
     SYS_DEDUP_MAX_CACHE_SIZE,
@@ -242,7 +241,7 @@ def create_system(
         rate_limit_window=system_config.rate_limit_window,  # Hard-coded to 60s
     )
     retry_policy = RetryPolicy(
-        max_attempts=RCPT_DEFAULT_RETRY_ATTEMPTS,  # Hard-coded: same for all, overridden by recipient config
+        max_attempts=RCPT_MAX_RETRY_ATTEMPTS,
         base_delay=timedelta(seconds=system_config.retry_base_delay),
         backoff_factor=system_config.retry_backoff_factor,
         max_delay=timedelta(seconds=system_config.retry_max_delay),

@@ -20,7 +20,18 @@ from homeassistant.helpers.event import async_track_state_added_domain
 
 from .channels.channel_manager import ChannelManager
 from .config.repository import ConfigRepository
-from .const import REQUIRED_MP_FEATURES
+from .const import (
+    REQUIRED_MP_FEATURES,
+    SYS_CONFIG_RETRY_BACKOFF_FACTOR_KEY,
+    SYS_CONFIG_RETRY_BASE_DELAY_KEY,
+    SYS_CONFIG_RETRY_MAX_DELAY_KEY,
+    SYS_MAX_RETRY_BACKOFF_FACTOR,
+    SYS_MAX_RETRY_BASE_DELAY_SECONDS,
+    SYS_MAX_RETRY_MAX_DELAY_SECONDS,
+    SYS_MIN_RETRY_BACKOFF_FACTOR,
+    SYS_MIN_RETRY_BASE_DELAY_SECONDS,
+    SYS_MIN_RETRY_MAX_DELAY_SECONDS,
+)
 from .delivery.factory import ANSSystem, create_system
 from .helper import get_main_entry
 from .models import NotificationDeliveryTask
@@ -453,6 +464,62 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload integration resources for a config entry."""
     _LOGGER.debug("Unloading Advanced Notification System entry: %s", entry.entry_id)
     await _cleanup_entry_data(entry)
+    return True
+
+
+async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
+    """Migrate old config entries to the current schema version."""
+    _LOGGER.debug(
+        "Migrating ANS config entry %s from version %s to %s",
+        config_entry.entry_id,
+        config_entry.version,
+        2,
+    )
+
+    if config_entry.version == 1:
+        new_options = dict(config_entry.options or {})
+
+        # Clamp retry_base_delay into [SYS_MIN_RETRY_BASE_DELAY_SECONDS, SYS_MAX_RETRY_BASE_DELAY_SECONDS]
+        if SYS_CONFIG_RETRY_BASE_DELAY_KEY in new_options:
+            new_options[SYS_CONFIG_RETRY_BASE_DELAY_KEY] = max(
+                SYS_MIN_RETRY_BASE_DELAY_SECONDS,
+                min(
+                    new_options[SYS_CONFIG_RETRY_BASE_DELAY_KEY],
+                    SYS_MAX_RETRY_BASE_DELAY_SECONDS,
+                ),
+            )
+
+        # Clamp retry_backoff_factor into [SYS_MIN_RETRY_BACKOFF_FACTOR, SYS_MAX_RETRY_BACKOFF_FACTOR]
+        if SYS_CONFIG_RETRY_BACKOFF_FACTOR_KEY in new_options:
+            new_options[SYS_CONFIG_RETRY_BACKOFF_FACTOR_KEY] = max(
+                SYS_MIN_RETRY_BACKOFF_FACTOR,
+                min(
+                    new_options[SYS_CONFIG_RETRY_BACKOFF_FACTOR_KEY],
+                    float(SYS_MAX_RETRY_BACKOFF_FACTOR),
+                ),
+            )
+
+        # Clamp retry_max_delay into [SYS_MIN_RETRY_MAX_DELAY_SECONDS, SYS_MAX_RETRY_MAX_DELAY_SECONDS]
+        if SYS_CONFIG_RETRY_MAX_DELAY_KEY in new_options:
+            new_options[SYS_CONFIG_RETRY_MAX_DELAY_KEY] = max(
+                SYS_MIN_RETRY_MAX_DELAY_SECONDS,
+                min(
+                    new_options[SYS_CONFIG_RETRY_MAX_DELAY_KEY],
+                    SYS_MAX_RETRY_MAX_DELAY_SECONDS,
+                ),
+            )
+
+        # Enforce cross-field constraint: retry_max_delay >= retry_base_delay
+        base = new_options.get(SYS_CONFIG_RETRY_BASE_DELAY_KEY)
+        max_delay = new_options.get(SYS_CONFIG_RETRY_MAX_DELAY_KEY)
+        if base is not None and max_delay is not None and max_delay < base:
+            new_options[SYS_CONFIG_RETRY_MAX_DELAY_KEY] = base
+
+        hass.config_entries.async_update_entry(
+            config_entry, options=new_options, version=2
+        )
+        _LOGGER.info("Migrated ANS config entry %s to version 2", config_entry.entry_id)
+
     return True
 
 

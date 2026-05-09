@@ -45,6 +45,7 @@ from custom_components.ans import (
     _setup_system,
     _setup_tasks,
     _teardown_entry_components,
+    async_migrate_entry,
     async_setup_entry,
     async_unload_entry,
     get_channel_manager,
@@ -1181,3 +1182,122 @@ class TestChannelManagerRequestResync:
         mgr.resync.assert_awaited_once()
         assert mgr._setup_in_progress is False
         assert mgr._pending_resync is False
+
+
+# ===========================================================================
+# async_migrate_entry
+# ===========================================================================
+
+
+class TestAsyncMigrateEntry:
+    """Verify async_migrate_entry() clamps v1 retry options into the new bounds."""
+
+    def _make_entry_v1(self, options: dict) -> MagicMock:
+        """Return a v1 mock ConfigEntry with the given options."""
+        entry = MagicMock()
+        entry.entry_id = "test-entry-id"
+        entry.version = 1
+        entry.options = options
+        return entry
+
+    async def test_values_within_range_unchanged(self):
+        """Options already within the new bounds are preserved unchanged; version becomes 2."""
+        hass = _make_hass()
+        hass.config_entries.async_update_entry = MagicMock()
+        options = {
+            "retry_base_delay": 60,
+            "retry_backoff_factor": 2.0,
+            "retry_max_delay": 3600,
+        }
+        entry = self._make_entry_v1(options)
+
+        result = await async_migrate_entry(hass, entry)
+
+        assert result is True
+        hass.config_entries.async_update_entry.assert_called_once()
+        call_kwargs = hass.config_entries.async_update_entry.call_args.kwargs
+        assert call_kwargs["version"] == 2
+        saved = call_kwargs["options"]
+        assert saved["retry_base_delay"] == 60
+        assert saved["retry_backoff_factor"] == 2.0
+        assert saved["retry_max_delay"] == 3600
+
+    async def test_base_delay_too_high_clamped_to_max(self):
+        """retry_base_delay above 300 is clamped to SYS_MAX_RETRY_BASE_DELAY_SECONDS (300)."""
+        hass = _make_hass()
+        hass.config_entries.async_update_entry = MagicMock()
+        entry = self._make_entry_v1({"retry_base_delay": 1800})
+
+        await async_migrate_entry(hass, entry)
+
+        saved = hass.config_entries.async_update_entry.call_args.kwargs["options"]
+        assert saved["retry_base_delay"] == 300
+
+    async def test_base_delay_too_low_raised_to_min(self):
+        """retry_base_delay below 10 is raised to SYS_MIN_RETRY_BASE_DELAY_SECONDS (10)."""
+        hass = _make_hass()
+        hass.config_entries.async_update_entry = MagicMock()
+        entry = self._make_entry_v1({"retry_base_delay": 5})
+
+        await async_migrate_entry(hass, entry)
+
+        saved = hass.config_entries.async_update_entry.call_args.kwargs["options"]
+        assert saved["retry_base_delay"] == 10
+
+    async def test_backoff_factor_too_high_clamped_to_max(self):
+        """retry_backoff_factor above 3.0 is clamped to SYS_MAX_RETRY_BACKOFF_FACTOR (3)."""
+        hass = _make_hass()
+        hass.config_entries.async_update_entry = MagicMock()
+        entry = self._make_entry_v1({"retry_backoff_factor": 4.5})
+
+        await async_migrate_entry(hass, entry)
+
+        saved = hass.config_entries.async_update_entry.call_args.kwargs["options"]
+        assert saved["retry_backoff_factor"] == 3.0
+
+    async def test_max_delay_too_high_clamped_to_max(self):
+        """retry_max_delay above 3600 is clamped to SYS_MAX_RETRY_MAX_DELAY_SECONDS (3600)."""
+        hass = _make_hass()
+        hass.config_entries.async_update_entry = MagicMock()
+        entry = self._make_entry_v1({"retry_max_delay": 86400})
+
+        await async_migrate_entry(hass, entry)
+
+        saved = hass.config_entries.async_update_entry.call_args.kwargs["options"]
+        assert saved["retry_max_delay"] == 3600
+
+    async def test_max_delay_raised_when_below_base_delay(self):
+        """retry_max_delay is raised to equal retry_base_delay when it would be less after clamping."""
+        hass = _make_hass()
+        hass.config_entries.async_update_entry = MagicMock()
+        # After clamping: base=120, max=60 — cross-field guard must raise max to 120
+        entry = self._make_entry_v1({"retry_base_delay": 120, "retry_max_delay": 60})
+
+        await async_migrate_entry(hass, entry)
+
+        saved = hass.config_entries.async_update_entry.call_args.kwargs["options"]
+        assert saved["retry_max_delay"] == saved["retry_base_delay"]
+
+    async def test_empty_options_migrates_without_error(self):
+        """An entry with no options at all migrates cleanly to version 2."""
+        hass = _make_hass()
+        hass.config_entries.async_update_entry = MagicMock()
+        entry = self._make_entry_v1({})
+
+        result = await async_migrate_entry(hass, entry)
+
+        assert result is True
+        call_kwargs = hass.config_entries.async_update_entry.call_args.kwargs
+        assert call_kwargs["version"] == 2
+
+    async def test_none_options_migrates_without_error(self):
+        """An entry whose options is None migrates cleanly to version 2."""
+        hass = _make_hass()
+        hass.config_entries.async_update_entry = MagicMock()
+        entry = self._make_entry_v1(None)
+
+        result = await async_migrate_entry(hass, entry)
+
+        assert result is True
+        call_kwargs = hass.config_entries.async_update_entry.call_args.kwargs
+        assert call_kwargs["version"] == 2

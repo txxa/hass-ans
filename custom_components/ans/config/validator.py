@@ -49,6 +49,9 @@ from ..const import (
     SYS_CONFIG_GLOBAL_RATE_LIMIT_KEY,
     # SYS_CONFIG_TTS_INTEGRATION_KEY,
     SYS_MAX_GLOBAL_RATE_LIMIT,
+    SYS_MIN_RETRY_BACKOFF_FACTOR,
+    SYS_MIN_RETRY_BASE_DELAY_SECONDS,
+    SYS_MIN_RETRY_MAX_DELAY_SECONDS,
     TTS_DEFAULT_SSML_ENABLED,
     TTS_DEFAULT_VOLUME_MANAGEMENT_ENABLED,
 )
@@ -913,25 +916,37 @@ class ConfigValidator:
             raise FieldValidationError(SYS_CONFIG_GLOBAL_RATE_LIMIT_KEY, str(e)) from e
 
         # Validate retry settings
-        if not isinstance(config.retry_base_delay, int) or config.retry_base_delay < 1:
+        if (
+            not isinstance(config.retry_base_delay, int)
+            or config.retry_base_delay < SYS_MIN_RETRY_BASE_DELAY_SECONDS
+        ):
             raise FieldValidationError(
                 "retry_base_delay",
-                "Retry base delay must be an integer >= 1",
+                f"Retry base delay must be an integer >= {SYS_MIN_RETRY_BASE_DELAY_SECONDS}",
             )
 
         if (
             not isinstance(config.retry_backoff_factor, (int, float))
-            or config.retry_backoff_factor < 1.0
+            or config.retry_backoff_factor < SYS_MIN_RETRY_BACKOFF_FACTOR
         ):
             raise FieldValidationError(
                 "retry_backoff_factor",
-                "Retry backoff factor must be a number >= 1.0",
+                f"Retry backoff factor must be a number >= {SYS_MIN_RETRY_BACKOFF_FACTOR}",
             )
 
-        if not isinstance(config.retry_max_delay, int) or config.retry_max_delay < 60:
+        if (
+            not isinstance(config.retry_max_delay, int)
+            or config.retry_max_delay < SYS_MIN_RETRY_MAX_DELAY_SECONDS
+        ):
             raise FieldValidationError(
                 "retry_max_delay",
-                "Retry max delay must be an integer >= 60",
+                f"Retry max delay must be an integer >= {SYS_MIN_RETRY_MAX_DELAY_SECONDS}",
+            )
+
+        if config.retry_max_delay < config.retry_base_delay:
+            raise FieldValidationError(
+                "retry_max_delay",
+                "Retry max delay must be >= retry base delay",
             )
 
         # Validate queue concurrency

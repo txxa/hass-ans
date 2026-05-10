@@ -18,6 +18,7 @@ This section covers internals and extension points for users who want to underst
 - [TTS — Volume Restoration Registry](#tts--volume-restoration-registry)
 - [Rate Limiter — Token Bucket Details](#rate-limiter--token-bucket-details)
 - [Deduplication — LRU Cache Details](#deduplication--lru-cache-details)
+- [Delivery Outcome Events — Payload Reference](#delivery-outcome-events--payload-reference)
 - [Channel Manager — Adapter Lifecycle](#channel-manager--adapter-lifecycle)
 - [Extending ANS with a New Channel](#extending-ans-with-a-new-channel)
 
@@ -169,6 +170,130 @@ The deduplication cache is an in-memory LRU structure:
 - **Scope:** Per ANS instance, not persisted across restarts
 
 The cache is reset on each HA restart. This means that if a notification was delivered just before a restart and the same notification_id is retried after restart, deduplication will not catch it. In practice this only affects tasks in the retry queue that survived a restart.
+
+
+## Delivery Outcome Events — Payload Reference
+
+Complete payload schemas for all events fired by the delivery pipeline. See [How It Works → Delivery Outcome Events](how-it-works.md#delivery-outcome-events) for a conceptual overview.
+
+### Base payload (all per-channel events)
+
+```json
+{
+    "notification_id": "<uuid-v4>",
+    "recipient_id": "<recipient-id>",
+    "channel_id": "<channel-id>",
+    "source": "<source-string>",
+    "criticality": "<criticality-level>",
+    "type": "<notification-type>"
+}
+```
+
+### `ans_notification_delivered`
+
+```json
+{
+    "notification_id": "...",
+    "recipient_id": "...",
+    "channel_id": "...",
+    "source": "...",
+    "type": "...",
+    "attempt_number": 1,
+    "remote_id": "<adapter-provided-id-or-null>"
+}
+```
+
+`remote_id` is an opaque string returned by the channel adapter (e.g. a message ID from the downstream service). It is `null` when the adapter does not provide one.
+
+### `ans_notification_filtered`
+
+```json
+{
+    "notification_id": "...",
+    "recipient_id": "...",
+    "channel_id": "...",
+    "source": "...",
+    "type": "...",
+    "filter_reason": "<FilterReason-enum-value>"
+}
+```
+
+### `ans_notification_failed`
+
+```json
+{
+    "notification_id": "...",
+    "recipient_id": "...",
+    "channel_id": "...",
+    "source": "...",
+    "type": "...",
+    "error": "<exception-message-or-null>",
+    "attempt_number": 3
+}
+```
+
+This event fires only when `PERMANENT_FAIL` is reached (all retry attempts exhausted). Transient failures during earlier attempts are logged but not surfaced as events.
+
+### `ans_notification_rate_limited`
+
+```json
+{
+    "notification_id": "...",
+    "recipient_id": "...",
+    "channel_id": "...",
+    "source": "...",
+    "type": "...",
+    "limit_type": "GLOBAL",
+    "retry_at": "2025-01-01T12:00:00+00:00"
+}
+```
+
+`limit_type` is `"GLOBAL"` or `"RECIPIENT"`. `retry_at` is an ISO-8601 timestamp indicating when the task is scheduled to be retried; it is `null` when the rate-limit is terminal (retries exhausted), in which case `ans_notification_failed` is also fired.
+
+### `ans_notification_settled`
+
+```json
+{
+    "notification_id": "<uuid-v4>",
+    "total_tasks": 4,
+    "total_recipients": 2,
+    "delivered": 3,
+    "failed": 0,
+    "filtered": 1,
+    "recipients_delivered": 2,
+    "recipients": {
+        "<recipient-id-1>": {
+            "channels_total": 3,
+            "channels_delivered": 2,
+            "channels_failed": 0,
+            "channels_filtered": 1
+        },
+        "<recipient-id-2>": {
+            "channels_total": 1,
+            "channels_delivered": 1,
+            "channels_failed": 0,
+            "channels_filtered": 0
+        }
+    }
+}
+```
+
+Field definitions:
+
+| Field | Description |
+|---|---|
+| `total_tasks` | Total channel tasks dispatched for this notification |
+| `total_recipients` | Number of unique recipient IDs addressed |
+| `delivered` | Tasks that reached `SUCCESS` |
+| `failed` | Tasks that reached `PERMANENT_FAIL` |
+| `filtered` | Tasks dropped by a filter stage |
+| `recipients_delivered` | Recipients with `channels_delivered >= 1` |
+| `recipients[id].channels_total` | Total tasks for that recipient |
+| `recipients[id].channels_delivered` | Successful deliveries for that recipient |
+| `recipients[id].channels_failed` | Permanent failures for that recipient |
+| `recipients[id].channels_filtered` | Filtered tasks for that recipient |
+
+> **TTL edge case:** Settled tracking is held in memory with a 1-hour TTL. If retries are still outstanding when the TTL expires (e.g. a task is stuck in the retry queue for over an hour), the settled event is not fired and a warning is logged instead.
 
 
 ## Channel Manager — Adapter Lifecycle

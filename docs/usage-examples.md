@@ -27,6 +27,7 @@ Practical `ans.send_notification` examples covering every channel type, common h
   - [Pattern 2 — Security Always Gets Through](#pattern-2--security-always-gets-through)
   - [Pattern 3 — CRITICAL Only at Night](#pattern-3--critical-only-at-night)
 - [Source Blocking in Practice](#source-blocking-in-practice)
+- [Reacting to Delivery Outcomes](#reacting-to-delivery-outcomes)
 - [Maintaining Your Setup](#maintaining-your-setup)
   - [When to Refresh Channels](#when-to-refresh-channels)
 
@@ -746,6 +747,86 @@ The first call is silently discarded for that recipient. The second is processed
 
 > **Tip:** Test your regex at [regex101.com](https://regex101.com) (select Python flavor) before entering it in the recipient wizard. ANS uses `re.match()`, which anchors the pattern to the **start of the string** — a bare pattern like `"motion"` will **not** match `"automation.motion_alert"` because the match is attempted at position 0. Use `^automation\.` to match automation sources, or prefix with `.*` (e.g. `.*motion.*`) to match anywhere in the source string. The leading `^` anchor is redundant but harmless since `re.match()` is already start-anchored.
 
+
+## Reacting to Delivery Outcomes
+
+ANS fires HA bus events at every terminal outcome of the delivery pipeline. Use these events to build escalation logic, alert on failures, or correlate service calls with results.
+
+For full payload schemas, see [Advanced → Delivery Outcome Events — Payload Reference](advanced.md#delivery-outcome-events--payload-reference) and [How It Works → Delivery Outcome Events](how-it-works.md#delivery-outcome-events).
+
+### Example 1 — Capture the notification ID
+
+Use `response_variable` to capture the `notification_id` returned by `ans.send_notification`, then match it against event data in follow-up steps:
+
+```yaml
+- alias: "Security alert with outcome tracking"
+  trigger:
+    - platform: state
+      entity_id: binary_sensor.back_door
+      to: "on"
+  action:
+    - action: ans.send_notification
+      data:
+        message: "Back door opened"
+        type: SECURITY
+        criticality: HIGH
+      response_variable: ans_result
+    # ans_result.notification_id is now available for correlation
+    - wait_for_trigger:
+        - platform: event
+          event_type: ans_notification_settled
+          event_data:
+            notification_id: "{{ ans_result.notification_id }}"
+      timeout: "00:05:00"
+      continue_on_timeout: true
+```
+
+### Example 2 — Escalate if no one received the notification
+
+React to `ans_notification_settled` when `recipients_delivered` is `0` — meaning no channel delivered successfully for any recipient. Filter by `criticality` to avoid escalating low-priority misses:
+
+```yaml
+- alias: "ANS — escalate on total delivery failure"
+  trigger:
+    - platform: event
+      event_type: ans_notification_settled
+  condition:
+    - condition: template
+      value_template: >
+        {{ trigger.event.data.recipients_delivered == 0
+           and trigger.event.data.criticality in ['HIGH', 'CRITICAL'] }}
+  action:
+    - action: notify.mobile_app_fallback_device
+      data:
+        message: >
+          ANS delivery failure: notification {{ trigger.event.data.notification_id }}
+          reached 0 of {{ trigger.event.data.total_recipients }} recipient(s).
+        title: "Notification delivery failed"
+```
+
+### Example 3 — Alert on permanent channel failure
+
+Subscribe to `ans_notification_failed` for targeted alerts when a specific channel permanently fails:
+
+```yaml
+- alias: "ANS — alert on Signal delivery failure"
+  trigger:
+    - platform: event
+      event_type: ans_notification_failed
+      event_data:
+        channel_id: "notify.signal"
+  action:
+    - action: notify.persistent_notification
+      data:
+        message: >
+          Signal delivery failed for notification {{ trigger.event.data.notification_id }}
+          (recipient: {{ trigger.event.data.recipient_id }},
+          criticality: {{ trigger.event.data.criticality }}).
+          Error: {{ trigger.event.data.error }}
+        title: "ANS — Signal channel failure"
+```
+
+---
 
 ## Maintaining Your Setup
 

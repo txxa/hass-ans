@@ -21,6 +21,7 @@ The `ans.send_notification` service reference and a stage-by-stage walkthrough o
   - [Stage 8 — Retry on Failure](#stage-8--retry-on-failure)
   - [Stage 9 — Persistence](#stage-9--persistence)
 - [Deduplication](#deduplication)
+- [Delivery Outcome Events](#delivery-outcome-events)
 - [Channel Detection and the Refresh Service](#channel-detection-and-the-refresh-service)
 
 ## The Service Call
@@ -229,6 +230,81 @@ These files are stored in `<config>/.storage/` and cleaned up automatically base
 ## Deduplication
 
 ANS maintains an LRU cache (max 1 000 entries, 60-second TTL) keyed on `(notification_id, channel_id)`. If the same notification is delivered to the same channel twice within 60 seconds — for example due to a race condition or misconfigured automation — the second delivery is silently dropped. After 60 seconds, delivery to the same `(notification, channel)` pair is permitted again.
+
+---
+
+## Delivery Outcome Events
+
+ANS fires Home Assistant bus events at every terminal outcome of the delivery pipeline. Automations and scripts can subscribe to these events to build escalation logic, dashboards, or monitoring.
+
+### Per-Channel Events
+
+One event is fired per channel task when it reaches a terminal state:
+
+| Event | Fired when |
+|---|---|
+| `ans_notification_delivered` | Channel adapter confirmed delivery |
+| `ans_notification_filtered` | Task dropped by type/criticality/DND/source filter |
+| `ans_notification_failed` | All retry attempts exhausted (permanent failure) |
+| `ans_notification_rate_limited` | Task rate-limited; queued for retry or dropped |
+
+All four events share a base payload:
+
+| Field | Type | Description |
+|---|---|---|
+| `notification_id` | `str` | UUID v4 identifying the notification |
+| `recipient_id` | `str` | Configured recipient ID |
+| `channel_id` | `str` | Channel that attempted delivery |
+| `source` | `str` | Integration or automation that called `ans.send_notification` |
+| `criticality` | `str` | Criticality level (e.g. `LOW`, `CRITICAL`) |
+| `type` | `str` | Notification type (e.g. `INFO`, `ALERT`) |
+
+Extra fields per event:
+
+| Event | Extra fields |
+|---|---|
+| `ans_notification_delivered` | `attempt_number: int`, `remote_id: str \| null` |
+| `ans_notification_filtered` | `filter_reason: str` (the `FilterReason` enum value) |
+| `ans_notification_failed` | `error: str \| null`, `attempt_number: int` |
+| `ans_notification_rate_limited` | `limit_type: str` (`"GLOBAL"` or `"RECIPIENT"`), `retry_at: str \| null` (ISO-8601; `null` when retries are exhausted) |
+
+### The Settled Event
+
+`ans_notification_settled` fires once **all** fan-out tasks for a notification reach a terminal state. It provides an aggregate view across all recipients and channels:
+
+| Field | Type | Description |
+|---|---|---|
+| `notification_id` | `str` | UUID v4 identifying the notification |
+| `total_tasks` | `int` | Total channel tasks dispatched |
+| `total_recipients` | `int` | Number of unique recipients addressed |
+| `delivered` | `int` | Tasks that reached `SUCCESS` |
+| `failed` | `int` | Tasks that reached `PERMANENT_FAIL` |
+| `filtered` | `int` | Tasks dropped by a filter |
+| `recipients_delivered` | `int` | Recipients with at least one channel delivered |
+| `recipients` | `dict` | Per-recipient channel breakdown (see [Payload Reference](advanced.md#delivery-outcome-events--payload-reference)) |
+
+The `recipients_delivered` field is the key field for "did anyone receive this?" escalation logic: if it is `0`, no channel delivered successfully for any recipient.
+
+### Service Response and Event Correlation
+
+`ans.send_notification` returns a response payload:
+
+```yaml
+{ "notification_id": "<uuid>" }
+```
+
+Capture it with `response_variable` and use the ID to correlate the service call with delivery outcome events:
+
+```yaml
+action: ans.send_notification
+data:
+  message: "Security alert"
+  type: SECURITY
+response_variable: ans_result
+# ans_result.notification_id can now be matched against event data.notification_id
+```
+
+Events fire after persistence, so the audit log already contains the matching record by the time your automation reacts. See [Usage Examples](usage-examples.md#reacting-to-delivery-outcomes) for full automation patterns and [Payload Reference](advanced.md#delivery-outcome-events--payload-reference) for exact field definitions.
 
 ---
 

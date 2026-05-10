@@ -549,6 +549,7 @@ class NotificationDeliveryProcessor:
             "recipient_id": task.recipient_id,
             "channel_id": task.channel_info.id,
             "source": task.payload.source,
+            "criticality": task.payload.criticality.value,
             "type": task.payload.type.value,
         }
 

@@ -601,6 +601,7 @@ class TestDeliveryOutcomeEvents:
         assert payload["recipient_id"] == task.recipient_id
         assert payload["channel_id"] == task.channel_info.id
         assert payload["source"] == task.payload.source
+        assert payload["criticality"] == task.payload.criticality.value
         assert payload["type"] == task.payload.type.value
         assert "attempt_number" in payload
         assert "remote_id" in payload

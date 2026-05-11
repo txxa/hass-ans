@@ -57,6 +57,7 @@ from ..const import (
     SYS_CONFIG_ENABLED_CHANNELS_KEY,
     SYS_CONFIG_GLOBAL_RATE_LIMIT_KEY,
     SYS_CONFIG_QUEUE_CONCURRENCY_KEY,
+    SYS_CONFIG_QUEUE_MAX_DEPTH_KEY,
     SYS_CONFIG_RETRY_BACKOFF_FACTOR_KEY,
     SYS_CONFIG_RETRY_BASE_DELAY_KEY,
     SYS_CONFIG_RETRY_MAX_DELAY_KEY,
@@ -66,14 +67,17 @@ from ..const import (
     SYS_DEFAULT_ENABLED_CHANNELS,
     SYS_DEFAULT_GLOBAL_RATE_LIMIT,
     SYS_DEFAULT_QUEUE_CONCURRENCY,
+    SYS_DEFAULT_QUEUE_MAX_DEPTH,
     SYS_DEFAULT_RETRY_BACKOFF_FACTOR,
     SYS_DEFAULT_RETRY_BASE_DELAY_SECONDS,
     SYS_DEFAULT_RETRY_MAX_DELAY_SECONDS,
     SYS_MAX_GLOBAL_RATE_LIMIT,
     SYS_MAX_QUEUE_CONCURRENCY,
+    SYS_MAX_QUEUE_MAX_DEPTH,
     SYS_MAX_RETRY_BACKOFF_FACTOR,
     SYS_MAX_RETRY_BASE_DELAY_SECONDS,
     SYS_MAX_RETRY_MAX_DELAY_SECONDS,
+    SYS_MIN_QUEUE_MAX_DEPTH,
     SYS_MIN_RETRY_BACKOFF_FACTOR,
     SYS_MIN_RETRY_BASE_DELAY_SECONDS,
     SYS_MIN_RETRY_MAX_DELAY_SECONDS,
@@ -329,6 +333,17 @@ def get_system_options_schema(
                 )
             },
         ): vol.All(int, vol.Range(min=1, max=SYS_MAX_QUEUE_CONCURRENCY)),
+        vol.Required(
+            SYS_CONFIG_QUEUE_MAX_DEPTH_KEY,
+            description={
+                "suggested_value": defaults.get(
+                    SYS_CONFIG_QUEUE_MAX_DEPTH_KEY, SYS_DEFAULT_QUEUE_MAX_DEPTH
+                )
+            },
+        ): vol.All(
+            int,
+            vol.Range(min=SYS_MIN_QUEUE_MAX_DEPTH, max=SYS_MAX_QUEUE_MAX_DEPTH),
+        ),
     }
 
     # Only show audit retention if audit logging is enabled

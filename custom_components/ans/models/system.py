@@ -11,6 +11,7 @@ from ..const import (
     SYS_CONFIG_ENABLED_CHANNELS_KEY,
     SYS_CONFIG_GLOBAL_RATE_LIMIT_KEY,
     SYS_CONFIG_QUEUE_CONCURRENCY_KEY,
+    SYS_CONFIG_QUEUE_MAX_DEPTH_KEY,
     SYS_CONFIG_RETRY_BACKOFF_FACTOR_KEY,
     SYS_CONFIG_RETRY_BASE_DELAY_KEY,
     SYS_CONFIG_RETRY_MAX_DELAY_KEY,
@@ -19,6 +20,7 @@ from ..const import (
     SYS_DEFAULT_ENABLE_AUDIT_LOGGING,
     SYS_DEFAULT_GLOBAL_RATE_LIMIT,
     SYS_DEFAULT_QUEUE_CONCURRENCY,
+    SYS_DEFAULT_QUEUE_MAX_DEPTH,
     SYS_DEFAULT_RATE_LIMIT_WINDOW,
     SYS_DEFAULT_RETRY_BACKOFF_FACTOR,
     SYS_DEFAULT_RETRY_BASE_DELAY_SECONDS,
@@ -41,6 +43,7 @@ class SystemConfig:
     retry_backoff_factor: float = SYS_DEFAULT_RETRY_BACKOFF_FACTOR
     retry_max_delay: int = SYS_DEFAULT_RETRY_MAX_DELAY_SECONDS
     queue_max_concurrency: int = SYS_DEFAULT_QUEUE_CONCURRENCY
+    queue_max_depth: int = SYS_DEFAULT_QUEUE_MAX_DEPTH
     storage_retention_days: int = SYS_STORAGE_DEFAULT_FILE_RETENTION_DAYS
     enable_audit_logging: bool = (
         True  # Enable/disable audit logging (notifications + attempts)
@@ -74,6 +77,7 @@ class SystemConfig:
         data[SYS_CONFIG_RETRY_BACKOFF_FACTOR_KEY] = self.retry_backoff_factor
         data[SYS_CONFIG_RETRY_MAX_DELAY_KEY] = self.retry_max_delay
         data[SYS_CONFIG_QUEUE_CONCURRENCY_KEY] = self.queue_max_concurrency
+        data[SYS_CONFIG_QUEUE_MAX_DEPTH_KEY] = self.queue_max_depth
         data[SYS_CONFIG_STORAGE_RETENTION_DAYS_KEY] = self.storage_retention_days
         data[SYS_CONFIG_ENABLE_AUDIT_LOGGING_KEY] = self.enable_audit_logging
         data[SYS_CONFIG_TTS_SERVICE_KEY] = self.tts_service
@@ -99,6 +103,9 @@ class SystemConfig:
             ),
             queue_max_concurrency=data.get(
                 SYS_CONFIG_QUEUE_CONCURRENCY_KEY, SYS_DEFAULT_QUEUE_CONCURRENCY
+            ),
+            queue_max_depth=data.get(
+                SYS_CONFIG_QUEUE_MAX_DEPTH_KEY, SYS_DEFAULT_QUEUE_MAX_DEPTH
             ),
             storage_retention_days=data.get(
                 SYS_CONFIG_STORAGE_RETENTION_DAYS_KEY,

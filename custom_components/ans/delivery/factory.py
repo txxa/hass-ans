@@ -18,6 +18,7 @@ from ..channels.signal import SignalDeliveryAdapter
 from ..channels.tts_mediaplayer import TTSMediaPlayerAdapter
 from ..config.repository import ConfigRepository
 from ..const import (
+    EVENT_NOTIFICATION_FAILED,
     RCPT_MAX_RETRY_ATTEMPTS,
     SYS_DEDUP_CLEANUP_INTERVAL,
     SYS_DEDUP_MAX_CACHE_SIZE,
@@ -282,6 +283,19 @@ def create_system(
         max_concurrency=system_config.queue_max_concurrency,
         processor_factory=processor_factory,
         retry_queue=retry_queue,
+        queue_max_depth=system_config.queue_max_depth,
+        on_queue_full=lambda task: hass.bus.async_fire(
+            EVENT_NOTIFICATION_FAILED,
+            {
+                "notification_id": str(task.payload.notification_id),
+                "recipient_id": task.recipient_id,
+                "channel_id": task.channel_info.id,
+                "source": task.payload.source,
+                "type": task.payload.type.value,
+                "error": "queue_full",
+                "attempt_number": 0,
+            },
+        ),
     )
 
     # Create deduplication service (prevents duplicate deliveries)

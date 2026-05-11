@@ -83,6 +83,7 @@
                     "retry_backoff_factor": "Wiederholungs-Backoff-Multiplikator",
                     "retry_max_delay": "Maximale Wiederholungsverzögerung (Sekunden)",
                     "queue_max_concurrency": "Maximale Parallelität der Warteschlange (parallele Zustellungen)",
+                    "queue_max_depth": "Maximale Warteschlangentiefe (max. wartende Aufgaben)",
                     "storage_retention_days": "Aufbewahrungsdauer des Audit-Protokolls (Tage, nur sichtbar wenn Audit-Protokollierung aktiviert)"
                 },
                 "data_description": {
@@ -91,6 +92,7 @@
                     "retry_backoff_factor": "Multiplikator, der nach jedem weiteren Wiederholungsversuch auf die Verzögerung angewendet wird (z. B. verdoppelt 2.0 die Wartezeit jedes Mal).",
                     "retry_max_delay": "Obergrenze in Sekunden für die Verzögerung zwischen Wiederholungsversuchen, unabhängig vom Backoff-Faktor.",
                     "queue_max_concurrency": "Anzahl der Zustellaufgaben, die parallel ausgeführt werden können. Höhere Werte steigern den Durchsatz, verbrauchen jedoch mehr Ressourcen.",
+                    "queue_max_depth": "Maximale Anzahl von Zustellaufgaben, die in der Warteschlange warten können. Wenn die Warteschlange voll ist, werden überschüssige Aufgaben mit einer Warnung verworfen. Standard: 500.",
                     "storage_retention_days": "Anzahl der Tage, für die Benachrichtigungs- und Zustelldatensätze aufbewahrt werden. 0 eingeben, um die automatische Bereinigung zu deaktivieren. Nur sichtbar, wenn die Audit-Protokollierung aktiviert ist."
                 }
             },
@@ -137,6 +139,7 @@
             "retry_backoff_factor": "Wiederholungs-Backoff-Faktor muss eine Zahl zwischen 1.0 und 5.0 sein.",
             "retry_max_delay": "Maximale Wiederholungsverzögerung muss eine ganze Zahl zwischen 60 und 86400 Sekunden sein.",
             "queue_max_concurrency": "Warteschlangen-Parallelität muss eine ganze Zahl zwischen 1 und 20 sein.",
+            "queue_max_depth": "Maximale Warteschlangentiefe muss eine ganze Zahl zwischen 10 und 5000 sein.",
             "storage_retention_days": "Aufbewahrungsdauer des Audit-Protokolls muss eine ganze Zahl zwischen 0 und 365 Tagen sein.",
             "notification_types": "Wählen Sie mindestens einen Benachrichtigungstyp aus.",
             "blocked_sources_regex": "Ungültiger regulärer Ausdruck für gesperrte Quellen.",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -39,6 +40,8 @@ def _make_queue(
     max_concurrency: int = 5,
     processor_factory=None,
     retry_queue=None,
+    queue_max_depth: int = 500,
+    on_queue_full=None,
 ) -> NotificationDeliveryTaskQueue:
     """Return a NotificationDeliveryTaskQueue with a default processor factory and the given parameters."""
     factory = processor_factory or _make_processor_factory()
@@ -46,6 +49,8 @@ def _make_queue(
         max_concurrency=max_concurrency,
         processor_factory=factory,
         retry_queue=retry_queue,
+        queue_max_depth=queue_max_depth,
+        on_queue_full=on_queue_full,
     )
 
 
@@ -665,3 +670,157 @@ class TestEdgeCases:
         await asyncio.sleep(0.05)
 
         assert task.job_id not in processed
+
+
+# ---------------------------------------------------------------------------
+# Queue depth limit / backpressure
+# ---------------------------------------------------------------------------
+
+
+class TestQueueDepthInit:
+    """Verify queue_max_depth parameter validation in __init__."""
+
+    def test_valid_queue_max_depth_does_not_raise(self):
+        """NotificationDeliveryTaskQueue() does not raise for valid queue_max_depth values."""
+        _make_queue(queue_max_depth=10)
+        _make_queue(queue_max_depth=500)
+        _make_queue(queue_max_depth=5000)
+
+    def test_zero_queue_max_depth_raises(self):
+        """NotificationDeliveryTaskQueue() raises ValueError when queue_max_depth is 0."""
+        with pytest.raises(ValueError, match="queue_max_depth"):
+            _make_queue(queue_max_depth=0)
+
+    def test_negative_queue_max_depth_raises(self):
+        """NotificationDeliveryTaskQueue() raises ValueError when queue_max_depth is negative."""
+        with pytest.raises(ValueError, match="queue_max_depth"):
+            _make_queue(queue_max_depth=-1)
+
+    def test_repr_includes_max_depth(self):
+        """__repr__() output includes the max_depth field."""
+        q = _make_queue(queue_max_depth=42)
+        assert "max_depth=42" in repr(q)
+
+
+class TestQueueDepthLimit:
+    """Verify backpressure behaviour when the queue reaches its configured max depth."""
+
+    async def test_queue_accepts_tasks_up_to_max_depth(self):
+        """pending_count equals max_depth after filling exactly to capacity."""
+        q = _make_queue(queue_max_depth=3)
+        for _ in range(3):
+            await q.enqueue(make_task())
+        assert q.pending_count == 3
+
+    async def test_queue_full_drops_task_without_raising(self, caplog):
+        """enqueue() on a full queue logs a warning and does not raise."""
+        q = _make_queue(queue_max_depth=2)
+        await q.enqueue(make_task())
+        await q.enqueue(make_task())
+
+        overflow_task = make_task()
+        with caplog.at_level(logging.WARNING):
+            await q.enqueue(overflow_task)  # must not raise
+
+        assert q.pending_count == 2  # queue did not grow beyond max
+        assert any("full" in record.message.lower() for record in caplog.records)
+
+    async def test_queue_full_calls_on_queue_full_callback(self):
+        """on_queue_full callback is invoked with the dropped task when queue is full."""
+        dropped: list = []
+
+        q = _make_queue(queue_max_depth=1, on_queue_full=dropped.append)
+        await q.enqueue(make_task())  # fills the queue
+
+        overflow_task = make_task()
+        await q.enqueue(overflow_task)
+
+        assert len(dropped) == 1
+        assert dropped[0].job_id == overflow_task.job_id
+
+    async def test_queue_full_no_callback_does_not_raise(self):
+        """enqueue() on a full queue without on_queue_full set does not raise."""
+        q = _make_queue(queue_max_depth=1)
+        await q.enqueue(make_task())
+        await q.enqueue(make_task())  # must not raise even with no callback
+
+    async def test_delayed_enqueue_drops_on_full(self):
+        """_delayed_enqueue drops the task (via enqueue()) when the queue is full."""
+        dropped: list = []
+        q = _make_queue(queue_max_depth=1, on_queue_full=dropped.append)
+        await q.enqueue(make_task())  # fill the queue
+
+        real_sleep = asyncio.sleep
+
+        async def _instant_sleep(*_args):
+            await real_sleep(0)
+
+        overflow_task = make_task()
+        with patch.object(asyncio, "sleep", _instant_sleep):
+            await q._delayed_enqueue(overflow_task, timedelta(seconds=1))
+            await real_sleep(0)
+
+        assert len(dropped) == 1
+        assert dropped[0].job_id == overflow_task.job_id
+
+
+class TestRetryPollerDeferOnFull:
+    """Verify that retry tasks are deferred (not dropped) when the queue is full."""
+
+    async def test_poller_defers_retry_when_queue_full(self):
+        """remove_retry is NOT called when the queue is full — task stays in retry store."""
+        job_id = uuid4()
+        snap = _make_fresh_snapshot()
+        past = datetime.now(UTC) - timedelta(seconds=1)
+
+        mock_rq = MagicMock()
+        mock_rq.get_pending_retries = AsyncMock(return_value=[(job_id, past, snap)])
+        mock_rq.remove_retry = AsyncMock()
+
+        # Fill the queue so put_nowait raises QueueFull
+        q = _make_queue(retry_queue=mock_rq, queue_max_depth=1)
+        await q.enqueue(make_task())  # fill to capacity
+
+        real_sleep = asyncio.sleep
+        iteration = 0
+
+        async def _one_shot_sleep(*_args):
+            nonlocal iteration
+            iteration += 1
+            if iteration >= 1:
+                q._stopped.set()
+            await real_sleep(0)
+
+        with patch.object(asyncio, "sleep", _one_shot_sleep):
+            await q._retry_poller_loop()
+
+        # Task must NOT have been removed from persistent store
+        mock_rq.remove_retry.assert_not_awaited()
+
+    async def test_poller_removes_retry_after_successful_enqueue(self):
+        """remove_retry IS called once the queue has room and the task is handed off."""
+        job_id = uuid4()
+        snap = _make_fresh_snapshot()
+        past = datetime.now(UTC) - timedelta(seconds=1)
+
+        mock_rq = MagicMock()
+        mock_rq.get_pending_retries = AsyncMock(return_value=[(job_id, past, snap)])
+        mock_rq.remove_retry = AsyncMock()
+
+        # Queue has space (not pre-filled)
+        q = _make_queue(retry_queue=mock_rq, queue_max_depth=10)
+
+        real_sleep = asyncio.sleep
+        iteration = 0
+
+        async def _one_shot_sleep(*_args):
+            nonlocal iteration
+            iteration += 1
+            if iteration >= 1:
+                q._stopped.set()
+            await real_sleep(0)
+
+        with patch.object(asyncio, "sleep", _one_shot_sleep):
+            await q._retry_poller_loop()
+
+        mock_rq.remove_retry.assert_awaited_once_with(job_id)

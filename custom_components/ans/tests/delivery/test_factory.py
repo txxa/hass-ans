@@ -312,6 +312,37 @@ class TestCreateSystemHappyPath:
         _, kwargs = mock_queue_cls.call_args
         assert kwargs["max_concurrency"] == 7
 
+    def test_queue_max_depth_sourced_from_system_config(self):
+        """NotificationDeliveryTaskQueue must be created with system_config.queue_max_depth."""
+        hass = _make_hass()
+        sc = _make_system_config(queue_max_depth=250)
+        repo = _make_config_repo(sc)
+        vol_reg = _make_volume_registry()
+
+        with (
+            patch(
+                "ans.delivery.factory._create_channel_manager",
+                return_value=MagicMock(),
+            ),
+            patch("ans.delivery.factory.NotificationRegistry"),
+            patch("ans.delivery.factory.DeliveryAttemptLog"),
+            patch("ans.delivery.factory.RetryQueue"),
+            patch("ans.delivery.factory.FilterEngine"),
+            patch("ans.delivery.factory.RateLimiter"),
+            patch("ans.delivery.factory.RetryPolicy"),
+            patch(
+                "ans.delivery.factory.NotificationDeliveryTaskQueue"
+            ) as mock_queue_cls,
+            patch("ans.delivery.factory.DeduplicationService"),
+            patch("ans.delivery.factory.NotificationOrchestrator"),
+            patch("ans.delivery.factory.HousekeepingScheduler"),
+        ):
+            mock_queue_cls.return_value = MagicMock()
+            create_system(hass=hass, config_repo=repo, volume_registry=vol_reg)
+
+        _, kwargs = mock_queue_cls.call_args
+        assert kwargs["queue_max_depth"] == 250
+
     def test_audit_logging_enabled_passed_to_stores(self):
         """NotificationRegistry and DeliveryAttemptLog must receive the audit flag."""
         hass = _make_hass()

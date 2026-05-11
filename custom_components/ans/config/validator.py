@@ -49,6 +49,7 @@ from ..const import (
     SYS_CONFIG_GLOBAL_RATE_LIMIT_KEY,
     # SYS_CONFIG_TTS_INTEGRATION_KEY,
     SYS_MAX_GLOBAL_RATE_LIMIT,
+    SYS_MIN_QUEUE_MAX_DEPTH,
     SYS_MIN_RETRY_BACKOFF_FACTOR,
     SYS_MIN_RETRY_BASE_DELAY_SECONDS,
     SYS_MIN_RETRY_MAX_DELAY_SECONDS,
@@ -957,6 +958,16 @@ class ConfigValidator:
             raise FieldValidationError(
                 "queue_max_concurrency",
                 "Queue max concurrency must be an integer >= 1",
+            )
+
+        # Validate queue max depth
+        if (
+            not isinstance(config.queue_max_depth, int)
+            or config.queue_max_depth < SYS_MIN_QUEUE_MAX_DEPTH
+        ):
+            raise FieldValidationError(
+                "queue_max_depth",
+                f"Queue max depth must be an integer >= {SYS_MIN_QUEUE_MAX_DEPTH}",
             )
 
         # Validate storage retention

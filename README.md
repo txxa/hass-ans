@@ -35,6 +35,7 @@ ANS is a custom Home Assistant integration that acts as a centralized notificati
 - **Audit log** — notification registry and delivery attempt logs with configurable retention (default 7 days, max 365 days) and hourly auto-purge
 - **Delivery outcome events** — `ans_notification_delivered`, `ans_notification_filtered`, `ans_notification_failed`, and `ans_notification_rate_limited` HA bus events let automations react to per-channel delivery results in real time
 - **Notification settled event** — `ans_notification_settled` fires once all fan-out tasks for a notification reach a terminal state, carrying per-recipient channel counts and a `recipients_delivered` total so automations can detect total delivery failure
+- **Stale channel Repairs issues** — when a `notify.*` service or `media_player.*` entity disappears from HA, ANS raises a HA Repairs issue in the UI with a clear remediation step; the issue is automatically dismissed when the channel recovers
 - **Service response** — `ans.send_notification` returns `{"notification_id": "..."}` for use with `response_variable`, enabling event correlation in automations
 - **Built-in diagnostics** panel for channel health and adapter status
 

@@ -327,5 +327,11 @@
                 "create_entry_failed": "Der Empfängereintrag konnte nicht erstellt werden. Details finden Sie in den Protokollen."
             }
         }
+    },
+    "issues": {
+        "stale_channel": {
+            "title": "Benachrichtigungskanal nicht verfügbar: {channel_label}",
+            "description": "Der Benachrichtigungskanal '{channel_id}' ist in Home Assistant nicht mehr verfügbar. Benachrichtigungen, die an diesen Kanal geleitet werden, schlagen dauerhaft fehl, bis der Kanal wiederhergestellt ist.\n\nZur Behebung: Führen Sie den Dienst `ans.refresh_channels` aus, um verfügbare Kanäle erneut zu erkennen, oder konfigurieren Sie die betroffenen Empfänger so, dass sie einen anderen Kanal verwenden."
+        }
     }
 }

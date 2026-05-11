@@ -12,15 +12,19 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_SERVICE_REGISTERED
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.entity_registry import (
     EVENT_ENTITY_REGISTRY_UPDATED,
     EventEntityRegistryUpdatedData,
 )
 from homeassistant.helpers.event import async_track_state_added_domain
 
+from .channels.base import ChannelStatus
 from .channels.channel_manager import ChannelManager
 from .config.repository import ConfigRepository
 from .const import (
+    DOMAIN,
+    REPAIR_ISSUE_STALE_CHANNEL,
     REQUIRED_MP_FEATURES,
     SYS_CONFIG_RETRY_BACKOFF_FACTOR_KEY,
     SYS_CONFIG_RETRY_BASE_DELAY_KEY,
@@ -229,6 +233,60 @@ async def _setup_services(hass: HomeAssistant, system: ANSSystem) -> None:
     _LOGGER.debug("[ANS setup] Services registered")
 
 
+def _setup_repairs(
+    hass: HomeAssistant,
+    channel_manager: ChannelManager,
+) -> None:
+    """Register the channel lifecycle callback that creates and deletes Repairs issues.
+
+    Creates a HA Repairs issue whenever a channel transitions to STALE so the user
+    sees an actionable alert in the UI.  Deletes the issue when the channel recovers.
+
+    Parameters
+    ----------
+    hass : HomeAssistant
+        Home Assistant instance used to call the issue registry helpers.
+    channel_manager : ChannelManager
+        Channel manager on which the lifecycle callback is registered.
+
+    """
+
+    def _on_channel_lifecycle_change(
+        newly_staled: list[str], newly_recovered: list[str]
+    ) -> None:
+        for channel_id in newly_staled:
+            record = channel_manager.get_record(channel_id)
+            channel_label = record.info.label if record else channel_id
+            issue_id = f"{REPAIR_ISSUE_STALE_CHANNEL}_{channel_id.replace('.', '_')}"
+            _LOGGER.debug(
+                "Creating repair issue '%s' for stale channel '%s'",
+                issue_id,
+                channel_id,
+            )
+            ir.async_create_issue(
+                hass,
+                DOMAIN,
+                issue_id,
+                is_fixable=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key=REPAIR_ISSUE_STALE_CHANNEL,
+                translation_placeholders={
+                    "channel_label": channel_label,
+                    "channel_id": channel_id,
+                },
+            )
+        for channel_id in newly_recovered:
+            issue_id = f"{REPAIR_ISSUE_STALE_CHANNEL}_{channel_id.replace('.', '_')}"
+            _LOGGER.debug(
+                "Deleting repair issue '%s' for recovered channel '%s'",
+                issue_id,
+                channel_id,
+            )
+            ir.async_delete_issue(hass, DOMAIN, issue_id)
+
+    channel_manager.set_channel_lifecycle_callback(_on_channel_lifecycle_change)
+
+
 def _setup_listeners(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -391,6 +449,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # until finalize_setup() clears the _setup_in_progress flag.
         _setup_listeners(hass, entry, system.channel_manager)
 
+        # Register the Repairs callback so stale-channel issues are surfaced in the UI.
+        # Must be registered before finalize_setup() in case a deferred resync fires.
+        _setup_repairs(hass, system.channel_manager)
+
         # Phase 3 — persistence
         pending_tasks, orphaned_retries = await _setup_persistence(hass, system)
 
@@ -402,6 +464,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         # Finalize setup: clear suppression flag and flush any deferred resync.
         await system.channel_manager.finalize_setup()
+
+        # Post-restart cleanup: delete any stale-channel Repairs issues for channels
+        # that are now ACTIVE (they recovered during the restart window). This is a
+        # no-op if no issue exists for a given channel.
+        for record in system.channel_manager.get_all_records():
+            if record.status == ChannelStatus.ACTIVE:
+                ir.async_delete_issue(
+                    hass,
+                    DOMAIN,
+                    f"{REPAIR_ISSUE_STALE_CHANNEL}_{record.info.id.replace('.', '_')}",
+                )
 
         _LOGGER.info("Successfully set up ANS config entry: %s", entry.entry_id)
 

@@ -11,6 +11,9 @@ SERVICE_SEND = "send_notification"
 PERSISTENT_NOTIFICATION_CHANNEL = "notify.persistent_notification"
 SYS_DEFAULT_SYSTEM_RECIPIENT_NAME = "Home Assistant"
 
+# Repair issue IDs
+REPAIR_ISSUE_STALE_CHANNEL = "stale_channel"
+
 # Delivery outcome event names
 EVENT_NOTIFICATION_DELIVERED = "ans_notification_delivered"
 EVENT_NOTIFICATION_FILTERED = "ans_notification_filtered"

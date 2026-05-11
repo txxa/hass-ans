@@ -23,6 +23,7 @@ The `ans.send_notification` service reference and a stage-by-stage walkthrough o
 - [Deduplication](#deduplication)
 - [Delivery Outcome Events](#delivery-outcome-events)
 - [Channel Detection and the Refresh Service](#channel-detection-and-the-refresh-service)
+  - [Stale Channel Repairs Issues](#stale-channel-repairs-issues)
 
 ## The Service Call
 
@@ -322,6 +323,20 @@ service: ans.refresh_channels
 ```
 
 No parameters are required. See [Troubleshooting](troubleshooting.md#channel-not-appearing) for when to use this.
+
+### Stale Channel Repairs Issues
+
+When a channel that ANS previously knew about is no longer detected in HA — because the Companion App was uninstalled, an integration was removed, or an entity was renamed — the `ChannelManager` marks that channel as `STALE` and ANS raises a HA **Repairs issue** automatically. The issue appears in **Settings → System → Repairs** with:
+
+- The name of the missing channel
+- The channel ID (for use in reconfiguration)
+- Instructions to run `ans.refresh_channels` or update the affected recipients
+
+The Repairs issue is dismissed automatically as soon as the channel is detected as `ACTIVE` again — no manual action is needed if the channel recovers (e.g., phone reconnected, integration reinstalled). On HA startup, ANS also runs a cleanup sweep that dismisses any lingering Repairs issues for channels that are already back to `ACTIVE`.
+
+Each stale channel produces exactly one Repairs issue. If the same channel goes stale and recovers multiple times, only one issue exists at any point in time.
+
+See [Advanced Topics → Channel Manager — Adapter Lifecycle](advanced.md#channel-manager--adapter-lifecycle) for the full set of channel states.
 
 ---
 

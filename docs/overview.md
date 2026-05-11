@@ -15,6 +15,7 @@ An introduction to ANS: what it is, what problems it solves, and what you need t
   - [Reliable Delivery](#reliable-delivery)
   - [TTS Volume Management](#tts-volume-management)
   - [Audit Logging](#audit-logging)
+  - [Stale Channel Repairs](#stale-channel-repairs)
   - [Built-in Diagnostics](#built-in-diagnostics)
   - [Flexible Configuration](#flexible-configuration)
 - [Use Cases](#use-cases)
@@ -67,6 +68,9 @@ For TTS recipients, ANS automatically adjusts media player volume based on time 
 
 ### Audit Logging
 When enabled, ANS records every notification and every delivery attempt to JSON files in the HA `.storage/` directory. The retention period is configurable (default: 7 days, max: 365 days). Hourly housekeeping automatically purges expired records.
+
+### Stale Channel Repairs
+When a `notify.*` service or `media_player.*` entity disappears from Home Assistant (companion app uninstalled, integration removed, entity renamed), ANS marks the channel as `STALE` and raises a HA **Repairs** issue in **Settings → System → Repairs**. The issue names the missing channel and explains exactly how to resolve it — either by running `ans.refresh_channels` to re-detect the channel, or by reconfiguring the affected recipients to use a different channel. The Repairs issue is automatically dismissed once the channel is detected as active again.
 
 ### Built-in Diagnostics
 The standard HA Diagnostics panel (Settings → Integrations → ANS → Download Diagnostics) provides a snapshot of channel health, adapter status, and recipient counts — without exposing any personal data.

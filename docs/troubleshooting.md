@@ -8,6 +8,7 @@ Diagnosing common delivery problems, channel issues, and answers to frequently a
 
 - [Troubleshooting](#troubleshooting)
   - [Channel Not Appearing](#channel-not-appearing)
+  - [Channel Went Missing — Repairs Issue](#channel-went-missing--repairs-issue)
   - [Notification Not Delivered](#notification-not-delivered)
   - [DND Is Blocking Notifications I Want](#dnd-is-blocking-notifications-i-want)
   - [Rate Limit Triggered](#rate-limit-triggered)
@@ -44,6 +45,28 @@ Diagnosing common delivery problems, channel issues, and answers to frequently a
 3. **Media player missing required features** — ANS only detects media players that support both `PLAY_MEDIA` and `VOLUME_SET`. Check that your media player integration reports these capabilities. Players that are grouped, virtual, or stream-only may not qualify.
 
 4. **Channel not enabled** — a channel must be in the "Enabled notification channels" list (system settings) before it can be assigned to recipients. Check **Settings → Integrations → ANS → Reconfigure** and confirm the channel is selected.
+
+---
+
+### Channel Went Missing — Repairs Issue
+
+**Symptom:** A notification channel that was working suddenly disappears, and you see a **Repairs** issue in **Settings → System → Repairs** with the title "Notification channel unavailable: {channel}".
+
+**What happened:** The `notify.*` service or `media_player.*` entity that this channel was backed by is no longer available in Home Assistant. This happens when the Companion App is uninstalled, an integration is removed, or an entity is renamed. ANS has marked the channel as `STALE` and raised a Repairs issue to surface the problem.
+
+**Consequences:** Any delivery tasks targeting this channel will result in `PERMANENT_FAIL` until the channel is restored.
+
+**Resolution options:**
+
+1. **Restore the channel** — reinstall the Companion App, re-add the integration, or restore the entity name. Then run `ans.refresh_channels` to re-detect it:
+   ```yaml
+   service: ans.refresh_channels
+   ```
+   The Repairs issue is dismissed automatically once ANS detects the channel as active again.
+
+2. **Remove the channel from recipient mappings** — if the channel is gone permanently, go to each affected recipient's Channel Mapping and replace the stale channel with an available one. Then run `ans.refresh_channels` to clear the STALE status.
+
+> **Note:** ANS runs a Repairs cleanup sweep on every startup. If the missing channel was restored while Home Assistant was offline, the issue will be dismissed automatically the next time ANS loads.
 
 ---
 

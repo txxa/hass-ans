@@ -20,6 +20,7 @@ This section covers internals and extension points for users who want to underst
 - [Deduplication — LRU Cache Details](#deduplication--lru-cache-details)
 - [Delivery Outcome Events — Payload Reference](#delivery-outcome-events--payload-reference)
 - [Channel Manager — Adapter Lifecycle](#channel-manager--adapter-lifecycle)
+  - [Stale Channel Repairs Issues](#stale-channel-repairs-issues)
 - [Extending ANS with a New Channel](#extending-ans-with-a-new-channel)
 
 
@@ -311,6 +312,32 @@ Adapter types:
 - **STATIC** (e.g., `notify.persistent_notification`) — always present, single instance
 - **DYNAMIC_SINGLE** (e.g., `notify.signal`) — created once when enabled
 - **DYNAMIC_MULTI** (e.g., `notify.mobile_app_*`, `media_player.*`) — one adapter instance per detected variant
+
+### Stale Channel Repairs Issues
+
+The `ChannelManager` exposes a lifecycle callback hook (`set_channel_lifecycle_callback`) that is invoked whenever `sync()` causes channels to transition between states. ANS uses this hook to drive the HA Repairs integration.
+
+**Callback signature:**
+```python
+Callable[[list[str], list[str]], None]
+# Arguments: (newly_staled_channel_ids, newly_recovered_channel_ids)
+```
+
+Both lists contain raw channel IDs (e.g. `notify.mobile_app_phone`). The callback is invoked synchronously from `sync()` and only when at least one of the two lists is non-empty.
+
+**What ANS does with the callback:**
+
+| Event | Action |
+|---|---|
+| Channel transitions to `STALE` | `ir.async_create_issue(domain, issue_id, ...)` — raises a Repairs issue with `stale_channel_<id>` as the issue key |
+| Channel transitions from `STALE` to `ACTIVE` | `ir.async_delete_issue(domain, issue_id)` — dismisses the Repairs issue |
+
+Issue IDs use `channel_id.replace(".", "_")` so they are valid HA identifiers (e.g., `stale_channel_notify_mobile_app_phone`). The original `channel_id` is preserved as a `translation_placeholder` and displayed in the issue description.
+
+**Post-restart cleanup sweep:**
+After `finalize_setup()` completes, ANS calls `ir.async_delete_issue()` for every currently `ACTIVE` channel. This is a safe no-op when no matching issue exists, but ensures any issue that was raised before a restart (when the channel was STALE) is cleaned up if the channel recovered while HA was offline. This avoids stale Repairs issues persisting across restarts.
+
+**Translation keys:** `issues.stale_channel.title` and `issues.stale_channel.description` are defined in `translations/en.json` (and `de.json`, `fr.json`). Placeholders: `{channel_label}` (display name), `{channel_id}` (raw service ID).
 
 
 ## Extending ANS with a New Channel

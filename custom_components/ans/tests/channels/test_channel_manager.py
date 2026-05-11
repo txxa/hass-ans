@@ -907,3 +907,90 @@ class TestModuleLevelDetectors:
         hass.states.async_entity_ids.return_value = ["tts.z_engine", "tts.a_engine"]
         result = detect_tts_entities(hass)
         assert result == sorted(result)
+
+
+# ── Lifecycle callback ────────────────────────────────────────────────────────
+
+
+class TestLifecycleCallback:
+    """Verify the channel lifecycle callback fires on STALE/ACTIVE transitions."""
+
+    def test_set_channel_lifecycle_callback_stores_callback(self):
+        """set_channel_lifecycle_callback stores the callable on the manager."""
+        mgr = _make_manager()
+        cb = MagicMock()
+        mgr.set_channel_lifecycle_callback(cb)
+        assert mgr._channel_lifecycle_callback is cb
+
+    async def test_callback_called_with_newly_staled_channel_ids(self):
+        """When a channel transitions to STALE, callback receives it in newly_staled."""
+        hass = _make_hass(notify_services={"mobile_app_phone": {}})
+        mgr = _make_manager(hass)
+        mgr.register_factory(_dummy_factory("notify.mobile_app_phone"))
+        await mgr.sync(["notify.mobile_app_phone"])
+
+        cb = MagicMock()
+        mgr.set_channel_lifecycle_callback(cb)
+
+        # Channel disappears → STALE
+        hass.services.async_services.return_value = {}
+        await mgr.sync(["notify.mobile_app_phone"])
+
+        cb.assert_called_once()
+        newly_staled, newly_recovered = cb.call_args[0]
+        assert "notify.mobile_app_phone" in newly_staled
+        assert newly_recovered == []
+
+    async def test_callback_called_with_newly_recovered_channel_ids(self):
+        """When a previously STALE channel becomes ACTIVE, callback receives it in newly_recovered."""
+        hass = _make_hass(notify_services={"mobile_app_phone": {}})
+        mgr = _make_manager(hass)
+        mgr.register_factory(_dummy_factory("notify.mobile_app_phone"))
+        await mgr.sync(["notify.mobile_app_phone"])
+
+        # Force channel to STALE
+        hass.services.async_services.return_value = {}
+        await mgr.sync(["notify.mobile_app_phone"])
+        assert mgr.get_record("notify.mobile_app_phone").status == ChannelStatus.STALE
+
+        cb = MagicMock()
+        mgr.set_channel_lifecycle_callback(cb)
+
+        # Channel comes back → ACTIVE, should fire callback with newly_recovered
+        hass.services.async_services.return_value = {"notify": {"mobile_app_phone": {}}}
+        await mgr.sync(["notify.mobile_app_phone"])
+
+        cb.assert_called_once()
+        newly_staled, newly_recovered = cb.call_args[0]
+        assert newly_staled == []
+        assert "notify.mobile_app_phone" in newly_recovered
+
+    async def test_callback_not_called_when_no_transition(self):
+        """Callback is not invoked when no channel changes STALE status."""
+        hass = _make_hass(notify_services={"mobile_app_phone": {}})
+        mgr = _make_manager(hass)
+        mgr.register_factory(_dummy_factory("notify.mobile_app_phone"))
+
+        cb = MagicMock()
+        mgr.set_channel_lifecycle_callback(cb)
+
+        # Two syncs with the same healthy channel — no STALE transitions
+        await mgr.sync(["notify.mobile_app_phone"])
+        await mgr.sync(["notify.mobile_app_phone"])
+
+        cb.assert_not_called()
+
+    async def test_callback_not_called_if_never_registered(self):
+        """sync() does not raise when no lifecycle callback is registered."""
+        hass = _make_hass(notify_services={"mobile_app_phone": {}})
+        mgr = _make_manager(hass)
+        mgr.register_factory(_dummy_factory("notify.mobile_app_phone"))
+        await mgr.sync(["notify.mobile_app_phone"])
+
+        # Channel disappears — no callback registered, must not raise
+        hass.services.async_services.return_value = {}
+        await mgr.sync(["notify.mobile_app_phone"])
+
+        record = mgr.get_record("notify.mobile_app_phone")
+        assert record is not None
+        assert record.status == ChannelStatus.STALE

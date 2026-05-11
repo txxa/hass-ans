@@ -41,6 +41,7 @@ from custom_components.ans import (
     _setup_config,
     _setup_listeners,
     _setup_persistence,
+    _setup_repairs,
     _setup_services,
     _setup_system,
     _setup_tasks,
@@ -53,8 +54,13 @@ from custom_components.ans import (
     get_rate_limiter,
     get_task_queue,
 )
+from custom_components.ans.channels.base import ChannelRecord, ChannelStatus
 from custom_components.ans.channels.channel_manager import ChannelManager
-from custom_components.ans.const import REQUIRED_MP_FEATURES
+from custom_components.ans.const import (
+    DOMAIN,
+    REPAIR_ISSUE_STALE_CHANNEL,
+    REQUIRED_MP_FEATURES,
+)
 
 from .conftest import make_task
 
@@ -1301,3 +1307,174 @@ class TestAsyncMigrateEntry:
         assert result is True
         call_kwargs = hass.config_entries.async_update_entry.call_args.kwargs
         assert call_kwargs["version"] == 2
+
+
+# ===========================================================================
+# _setup_repairs
+# ===========================================================================
+
+
+class TestSetupRepairs:
+    """Verify _setup_repairs() wires the lifecycle callback and reacts correctly."""
+
+    def _make_channel_info(self, channel_id: str) -> MagicMock:
+        info = MagicMock()
+        info.id = channel_id
+        info.label = channel_id.replace("notify.", "").replace("_", " ").title()
+        return info
+
+    def _make_record(self, channel_id: str, status: ChannelStatus) -> ChannelRecord:
+        info = self._make_channel_info(channel_id)
+        return ChannelRecord(info=info, adapter=None, status=status)
+
+    def test_setup_repairs_registers_callback_on_channel_manager(self):
+        """_setup_repairs() calls set_channel_lifecycle_callback on the channel manager."""
+        hass = _make_hass()
+        channel_manager = _make_channel_manager()
+        channel_manager.set_channel_lifecycle_callback = MagicMock()
+
+        _setup_repairs(hass, channel_manager)
+
+        channel_manager.set_channel_lifecycle_callback.assert_called_once()
+        cb = channel_manager.set_channel_lifecycle_callback.call_args[0][0]
+        assert callable(cb)
+
+    def test_callback_creates_repair_issue_for_stale_channel(self):
+        """Callback invokes ir.async_create_issue with correct args when a channel goes STALE."""
+        hass = _make_hass()
+        channel_manager = _make_channel_manager()
+        channel_manager.set_channel_lifecycle_callback = MagicMock()
+        channel_manager.get_record = MagicMock(
+            return_value=self._make_record(
+                "notify.mobile_app_phone", ChannelStatus.STALE
+            )
+        )
+
+        _setup_repairs(hass, channel_manager)
+        cb = channel_manager.set_channel_lifecycle_callback.call_args[0][0]
+
+        with patch("custom_components.ans.ir") as mock_ir:
+            cb(["notify.mobile_app_phone"], [])
+
+        mock_ir.async_create_issue.assert_called_once_with(
+            hass,
+            DOMAIN,
+            f"{REPAIR_ISSUE_STALE_CHANNEL}_notify_mobile_app_phone",
+            is_fixable=False,
+            severity=mock_ir.IssueSeverity.WARNING,
+            translation_key=REPAIR_ISSUE_STALE_CHANNEL,
+            translation_placeholders={
+                "channel_label": channel_manager.get_record.return_value.info.label,
+                "channel_id": "notify.mobile_app_phone",
+            },
+        )
+
+    def test_callback_deletes_repair_issue_for_recovered_channel(self):
+        """Callback invokes ir.async_delete_issue with the correct issue ID when a channel recovers."""
+        hass = _make_hass()
+        channel_manager = _make_channel_manager()
+        channel_manager.set_channel_lifecycle_callback = MagicMock()
+
+        _setup_repairs(hass, channel_manager)
+        cb = channel_manager.set_channel_lifecycle_callback.call_args[0][0]
+
+        with patch("custom_components.ans.ir") as mock_ir:
+            cb([], ["notify.mobile_app_phone"])
+
+        mock_ir.async_delete_issue.assert_called_once_with(
+            hass,
+            DOMAIN,
+            f"{REPAIR_ISSUE_STALE_CHANNEL}_notify_mobile_app_phone",
+        )
+
+    def test_callback_uses_channel_id_as_label_when_record_is_none(self):
+        """When get_record returns None, channel_id is used as the label fallback."""
+        hass = _make_hass()
+        channel_manager = _make_channel_manager()
+        channel_manager.set_channel_lifecycle_callback = MagicMock()
+        channel_manager.get_record = MagicMock(return_value=None)
+
+        _setup_repairs(hass, channel_manager)
+        cb = channel_manager.set_channel_lifecycle_callback.call_args[0][0]
+
+        with patch("custom_components.ans.ir") as mock_ir:
+            cb(["notify.gone_channel"], [])
+
+        call_kwargs = mock_ir.async_create_issue.call_args.kwargs
+        assert (
+            call_kwargs["translation_placeholders"]["channel_label"]
+            == "notify.gone_channel"
+        )
+
+    async def test_post_setup_sweep_deletes_issues_for_active_channels(self):
+        """After finalize_setup(), ir.async_delete_issue is called for each ACTIVE channel."""
+        hass = _make_hass()
+        entry = _make_entry()
+        config_repo = _make_config_repo()
+        system = _make_system()
+
+        active_record = self._make_record(
+            "notify.mobile_app_phone", ChannelStatus.ACTIVE
+        )
+        stale_record = self._make_record("notify.gone", ChannelStatus.STALE)
+        system.channel_manager.get_all_records = MagicMock(
+            return_value=[active_record, stale_record]
+        )
+
+        with (
+            patch("custom_components.ans.VolumeRestorationRegistry") as mock_vol,
+            patch("custom_components.ans._setup_config", return_value=config_repo),
+            patch("custom_components.ans._setup_system", return_value=system),
+            patch(
+                "custom_components.ans._setup_persistence",
+                return_value=([], []),
+            ),
+            patch("custom_components.ans._setup_tasks"),
+            patch("custom_components.ans._setup_services"),
+            patch("custom_components.ans._setup_listeners"),
+            patch("custom_components.ans._setup_repairs"),
+            patch("custom_components.ans.ir") as mock_ir,
+        ):
+            mock_vol.return_value.async_load = AsyncMock()
+            await async_setup_entry(hass, entry)
+
+        # Only the ACTIVE channel should trigger async_delete_issue in the sweep
+        delete_calls = [
+            call
+            for call in mock_ir.async_delete_issue.call_args_list
+            if call.args[2] == f"{REPAIR_ISSUE_STALE_CHANNEL}_notify_mobile_app_phone"
+        ]
+        assert len(delete_calls) == 1
+        # STALE channel must NOT be cleaned up in the sweep
+        stale_calls = [
+            call
+            for call in mock_ir.async_delete_issue.call_args_list
+            if call.args[2] == f"{REPAIR_ISSUE_STALE_CHANNEL}_notify_gone"
+        ]
+        assert len(stale_calls) == 0
+
+    async def test_async_setup_entry_calls_setup_repairs(self):
+        """async_setup_entry() calls _setup_repairs() with hass and the channel manager."""
+        hass = _make_hass()
+        entry = _make_entry()
+        config_repo = _make_config_repo()
+        system = _make_system()
+
+        with (
+            patch("custom_components.ans.VolumeRestorationRegistry") as mock_vol,
+            patch("custom_components.ans._setup_config", return_value=config_repo),
+            patch("custom_components.ans._setup_system", return_value=system),
+            patch(
+                "custom_components.ans._setup_persistence",
+                return_value=([], []),
+            ),
+            patch("custom_components.ans._setup_tasks"),
+            patch("custom_components.ans._setup_services"),
+            patch("custom_components.ans._setup_listeners"),
+            patch("custom_components.ans._setup_repairs") as mock_setup_repairs,
+            patch("custom_components.ans.ir"),
+        ):
+            mock_vol.return_value.async_load = AsyncMock()
+            await async_setup_entry(hass, entry)
+
+        mock_setup_repairs.assert_called_once_with(hass, system.channel_manager)

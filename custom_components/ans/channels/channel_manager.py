@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from homeassistant.core import HomeAssistant
@@ -72,10 +73,29 @@ class ChannelManager:
         # adapter generations so that a resync() replacement adapter inherits
         # the same lock and concurrent deliveries remain serialised.
         self._delivery_locks: dict[str, asyncio.Lock] = {}
+        # Optional callback fired after each sync() when channels go STALE or
+        # recover from STALE to ACTIVE. Signature: (newly_staled, newly_recovered).
+        self._channel_lifecycle_callback: (
+            Callable[[list[str], list[str]], None] | None
+        ) = None
 
     # ------------------------------------------------------------------
     # Registration
     # ------------------------------------------------------------------
+
+    def set_channel_lifecycle_callback(
+        self, callback: Callable[[list[str], list[str]], None]
+    ) -> None:
+        """Register a callback invoked when channels go STALE or recover.
+
+        The callback receives two lists:
+        - *newly_staled*: channel IDs that transitioned to STALE in this sync.
+        - *newly_recovered*: channel IDs that moved from STALE back to ACTIVE.
+
+        The callback is called synchronously inside :meth:`sync` after
+        ``self._records`` is updated, so the new state is already visible.
+        """
+        self._channel_lifecycle_callback = callback
 
     def register_factory(self, factory: AdapterFactory) -> None:
         """Register an adapter factory by channel_prefix."""
@@ -244,7 +264,27 @@ class ChannelManager:
             if destroy_coros:
                 await asyncio.gather(*destroy_coros, return_exceptions=True)
 
+            # Compute lifecycle transitions for the callback before updating state.
+            previously_stale = {
+                ch_id
+                for ch_id, r in self._records.items()
+                if r.status == ChannelStatus.STALE
+            }
+            newly_staled = [
+                ch_id
+                for ch_id, r in new_records.items()
+                if r.status == ChannelStatus.STALE and ch_id not in previously_stale
+            ]
+            newly_recovered = [
+                ch_id
+                for ch_id, r in new_records.items()
+                if r.status == ChannelStatus.ACTIVE and ch_id in previously_stale
+            ]
+
             self._records = new_records
+
+            if self._channel_lifecycle_callback and (newly_staled or newly_recovered):
+                self._channel_lifecycle_callback(newly_staled, newly_recovered)
 
             if added or removed:
                 # Break active channels down by type for the summary log.

@@ -10,6 +10,7 @@ Diagnosing common delivery problems, channel issues, and answers to frequently a
   - [Channel Not Appearing](#channel-not-appearing)
   - [Channel Went Missing — Repairs Issue](#channel-went-missing--repairs-issue)
   - [Notification Not Delivered](#notification-not-delivered)
+  - [Notification Dropped — Queue Full](#notification-dropped--queue-full)
   - [DND Is Blocking Notifications I Want](#dnd-is-blocking-notifications-i-want)
   - [Rate Limit Triggered](#rate-limit-triggered)
   - [TTS Volume Not Restoring](#tts-volume-not-restoring)
@@ -97,6 +98,24 @@ Open `<config>/.storage/ans_delivery_attempts.json`. Find the attempt for your n
 **Step 3 — Check criticality mapping:**
 
 Confirm the criticality level you used maps to at least one channel for that recipient. In the recipient's Channel Mapping, a criticality level with no channels configured causes silent suppression.
+
+---
+
+### Notification Dropped — Queue Full
+
+**Symptom:** An `ans_notification_failed` event fires with `error: "queue_full"` immediately after `ans.send_notification`, and a warning appears in the HA log: `Delivery queue is full`.
+
+**What happened:** The ANS delivery queue reached its configured maximum depth (`queue_max_depth`, default 500). The incoming task was dropped rather than queued to prevent unbounded memory growth. This typically indicates a misconfigured automation firing at a very high rate.
+
+**Resolution options:**
+
+1. **Fix the runaway automation** — inspect recent automations for loops or high-frequency triggers. An automation that calls `ans.send_notification` in response to every state change of a frequently-updating entity (e.g., a sensor that changes every second) is the most common cause.
+
+2. **Increase `queue_max_depth`** — if the volume is legitimate (many recipients, many channels, burst notifications), go to **Settings → Integrations → ANS → Configure** and increase **Queue max depth** (maximum: 5 000). Monitor memory usage after increasing.
+
+3. **Reduce `queue_max_concurrency`** — a lower concurrency setting means tasks drain from the queue more slowly, which can exacerbate queue-full events. If you increased concurrency previously and now see queue-full drops, try lowering it.
+
+> **Note:** Tasks that are in the persistent retry queue and cannot be re-enqueued because the queue is full are **not** discarded — they are deferred to the next retry cycle (every 10 seconds). Only brand-new tasks from `ans.send_notification` are dropped when the queue is full.
 
 ---
 

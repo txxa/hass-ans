@@ -83,6 +83,7 @@ After initial setup you can adjust system-wide performance settings at any time 
 | **Retry backoff multiplier** | Each successive retry waits this many times longer than the previous. `2.0` doubles the wait each time. | 2 | 1.0–5.0 |
 | **Retry maximum delay** | Upper cap on the delay between retries regardless of backoff. | 3 600 s (1 hr) | 60–86 400 |
 | **Queue max concurrency** | Number of delivery tasks that run in parallel. Higher values increase throughput but consume more resources. | 5 | 1–20 |
+| **Queue max depth** | Maximum number of delivery tasks that can wait in the queue at once. When the queue is full, excess tasks are dropped with a warning and an `ans_notification_failed` event. Increase if you have many recipients or high notification volume. | 500 | 10–5 000 |
 | **Audit log retention** | Days to keep notification and delivery records. Set to `0` to disable automatic cleanup. Only visible when audit logging is on. | 7 | 0–365 |
 
 ---

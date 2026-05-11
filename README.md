@@ -28,6 +28,7 @@ ANS is a custom Home Assistant integration that acts as a centralized notificati
 - **Do Not Disturb** per recipient with configurable time windows and bypass rules for type and criticality
 - **Source blocking** via per-recipient regex patterns
 - **Rate limiting** — token bucket algorithm at both per-recipient and global level, with automatic retry queuing
+- **Queue depth limit** — configurable bounded delivery queue (default 500 tasks) prevents memory exhaustion under automation storms; excess tasks are dropped with a warning and a `ans_notification_failed` event
 - **Retry with exponential backoff** — configurable attempts and delays, with crash recovery across HA restarts
 - **Deduplication** — idempotent delivery prevents duplicate notifications, including duplicate TTS playback
 - **TTS via media player** — time-based and criticality-based volume control, automatic volume restoration, and per-device delivery lock to prevent overlapping playback

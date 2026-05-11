@@ -135,6 +135,8 @@ If a criticality level has no channels configured for a recipient, that recipien
 
 ANS creates one independent delivery task for each `(recipient, channel)` pair. Tasks are enqueued in the delivery queue and processed concurrently up to the configured `queue_max_concurrency` limit. Each task is self-contained: it carries a full copy of the payload, recipient policy, contact info, and the configuration snapshot reference.
 
+The delivery queue is **bounded** by the `queue_max_depth` setting (default: 500). If the queue is full when a new task arrives — for example during an automation storm — the task is dropped immediately, a warning is logged, and an `ans_notification_failed` event is fired with `error: "queue_full"`. Tasks in the persistent retry queue that cannot be re-enqueued when the queue is full are deferred to the next retry cycle rather than discarded.
+
 ### Stage 5 — Filtering
 
 Each task is evaluated against three filters in sequence. Any filter that blocks the notification terminates the task permanently — no retry is scheduled.

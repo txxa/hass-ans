@@ -1088,6 +1088,7 @@ def _raw_sys_config(**overrides) -> SimpleNamespace:
         "retry_backoff_factor": 2.0,
         "retry_max_delay": 3600,
         "queue_max_concurrency": 5,
+        "queue_max_depth": 500,
         "storage_retention_days": 7,
         "enabled_channels": ["notify.persistent_notification"],
         "persistent_notifications_enabled": True,
@@ -1174,6 +1175,27 @@ def test_validate_system_config_version_below_one_raises():
     with pytest.raises(FieldValidationError) as exc_info:
         ConfigValidator.validate_system_config(_raw_sys_config(version=0))
     assert exc_info.value.field == "version"
+
+
+def test_validate_system_config_valid_queue_max_depth_passes():
+    """validate_system_config() accepts a valid queue_max_depth value (e.g. 500)."""
+    ConfigValidator.validate_system_config(
+        _raw_sys_config(queue_max_depth=500)
+    )  # must not raise
+
+
+def test_validate_system_config_queue_max_depth_below_min_raises():
+    """A queue_max_depth below the minimum (10) raises FieldValidationError on field 'queue_max_depth'."""
+    with pytest.raises(FieldValidationError) as exc_info:
+        ConfigValidator.validate_system_config(_raw_sys_config(queue_max_depth=9))
+    assert exc_info.value.field == "queue_max_depth"
+
+
+def test_validate_system_config_queue_max_depth_non_integer_raises():
+    """A non-integer queue_max_depth raises FieldValidationError on field 'queue_max_depth'."""
+    with pytest.raises(FieldValidationError) as exc_info:
+        ConfigValidator.validate_system_config(_raw_sys_config(queue_max_depth="500"))
+    assert exc_info.value.field == "queue_max_depth"
 
 
 # ---------------------------------------------------------------------------

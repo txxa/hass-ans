@@ -83,6 +83,7 @@
                     "retry_backoff_factor": "Retry backoff multiplier",
                     "retry_max_delay": "Retry maximum delay (seconds)",
                     "queue_max_concurrency": "Queue max concurrency (parallel deliveries)",
+                    "queue_max_depth": "Queue max depth (max queued tasks)",
                     "storage_retention_days": "Audit log retention (days, only shown if audit logging enabled)"
                 },
                 "data_description": {
@@ -91,6 +92,7 @@
                     "retry_backoff_factor": "Multiplier applied to the delay after each successive retry attempt (e.g. 2.0 doubles the wait time each time).",
                     "retry_max_delay": "Upper cap in seconds on the delay between retry attempts regardless of backoff factor.",
                     "queue_max_concurrency": "Number of delivery tasks that can run in parallel. Higher values increase throughput but consume more resources.",
+                    "queue_max_depth": "Maximum number of delivery tasks that can wait in the queue. When the queue is full, excess tasks are dropped with a warning. Default: 500.",
                     "storage_retention_days": "Number of days to keep notification and delivery records. Set to 0 to disable automatic cleanup. Only visible when audit logging is enabled."
                 }
             },
@@ -137,6 +139,7 @@
             "retry_backoff_factor": "Retry backoff factor must be a number between 1.0 and 5.0.",
             "retry_max_delay": "Retry max delay must be an integer between 60 and 86400 seconds.",
             "queue_max_concurrency": "Queue concurrency must be an integer between 1 and 20.",
+            "queue_max_depth": "Queue max depth must be an integer between 10 and 5000.",
             "storage_retention_days": "Audit log retention must be an integer between 0 and 365 days.",
             "notification_types": "Select at least one notification type.",
             "blocked_sources_regex": "Invalid regular expression for blocked sources.",

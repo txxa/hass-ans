@@ -30,6 +30,9 @@ SYS_MAX_RETRY_BACKOFF_FACTOR = 3
 SYS_MIN_RETRY_MAX_DELAY_SECONDS = 60
 SYS_MAX_RETRY_MAX_DELAY_SECONDS = 3600
 SYS_MAX_QUEUE_CONCURRENCY = 20
+SYS_MIN_QUEUE_MAX_DEPTH = 10
+SYS_DEFAULT_QUEUE_MAX_DEPTH = 500
+SYS_MAX_QUEUE_MAX_DEPTH = 5000
 # Default values for system configuration
 SYS_DEFAULT_RATE_LIMIT_WINDOW = 60  # Rate limit window in seconds
 SYS_DEFAULT_GLOBAL_RATE_LIMIT = 100  # Pre-filled default value in form
@@ -128,6 +131,7 @@ SYS_CONFIG_RETRY_BASE_DELAY_KEY = "retry_base_delay"
 SYS_CONFIG_RETRY_BACKOFF_FACTOR_KEY = "retry_backoff_factor"
 SYS_CONFIG_RETRY_MAX_DELAY_KEY = "retry_max_delay"
 SYS_CONFIG_QUEUE_CONCURRENCY_KEY = "queue_max_concurrency"
+SYS_CONFIG_QUEUE_MAX_DEPTH_KEY = "queue_max_depth"
 SYS_CONFIG_STORAGE_RETENTION_DAYS_KEY = "storage_retention_days"
 SYS_CONFIG_ENABLE_AUDIT_LOGGING_KEY = "enable_audit_logging"
 SYS_CONFIG_TTS_SERVICE_KEY = "tts_service"  # NEW: TTS service configuration

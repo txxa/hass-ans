@@ -47,6 +47,8 @@ class NotificationDeliveryTaskQueue:
         max_concurrency: int,
         processor_factory: Callable[[], NotificationDeliveryProcessor],
         retry_queue: RetryQueue | None = None,
+        queue_max_depth: int = 500,
+        on_queue_full: Callable[[NotificationDeliveryTask], None] | None = None,
     ) -> None:
         """Initialise the task queue.
 
@@ -57,16 +59,30 @@ class NotificationDeliveryTaskQueue:
                 :class:`NotificationDeliveryProcessor` for each worker task.
             retry_queue: Optional :class:`~..persistence.file.RetryQueue` used
                 by the retry-poller loop to re-enqueue overdue retries.
+            queue_max_depth: Maximum number of tasks that may wait in the
+                queue at any time.  When the queue is full, new enqueue calls
+                drop the incoming task and invoke *on_queue_full* (if set)
+                instead of blocking.  Must be a positive integer.
+            on_queue_full: Optional callback invoked with the dropped
+                :class:`NotificationDeliveryTask` when the queue is full.
+                Called synchronously inside :meth:`enqueue`.
 
         Raises:
-            ValueError: If *max_concurrency* is not a positive integer.
+            ValueError: If *max_concurrency* or *queue_max_depth* is not a
+                positive integer.
 
         """
         if max_concurrency < 1:
             raise ValueError(
                 f"max_concurrency must be a positive integer, got {max_concurrency}"
             )
-        self._queue: asyncio.Queue[NotificationDeliveryTask] = asyncio.Queue()
+        if queue_max_depth < 1:
+            raise ValueError(
+                f"queue_max_depth must be a positive integer, got {queue_max_depth}"
+            )
+        self._queue: asyncio.Queue[NotificationDeliveryTask] = asyncio.Queue(
+            maxsize=queue_max_depth
+        )
         self._max_concurrency = max_concurrency
         self._semaphore = asyncio.Semaphore(max_concurrency)
         self._active_tasks = 0
@@ -76,6 +92,8 @@ class NotificationDeliveryTaskQueue:
         self._stopped = asyncio.Event()
         self._retry_queue = retry_queue
         self._background_tasks: set[asyncio.Task] = set()
+        self._queue_max_depth = queue_max_depth
+        self._on_queue_full = on_queue_full
 
     # --------------------
     # Lifecycle
@@ -166,7 +184,8 @@ class NotificationDeliveryTaskQueue:
             f"running={self.is_running} "
             f"pending={self.pending_count} "
             f"active={self.active_task_count} "
-            f"max_concurrency={self._max_concurrency}>"
+            f"max_concurrency={self._max_concurrency} "
+            f"max_depth={self._queue_max_depth}>"
         )
 
     # --------------------
@@ -176,11 +195,27 @@ class NotificationDeliveryTaskQueue:
     async def enqueue(self, task: NotificationDeliveryTask) -> None:
         """Enqueue a delivery task for immediate processing.
 
+        If the queue has reached its configured maximum depth the task is
+        silently dropped: a warning is logged and the *on_queue_full*
+        callback (if any) is invoked.  No exception is raised so that
+        callers do not need to handle back-pressure explicitly.
+
         Args:
             task: Delivery task to enqueue.
 
         """
-        await self._queue.put(task)
+        try:
+            self._queue.put_nowait(task)
+        except asyncio.QueueFull:
+            _LOGGER.warning(
+                "ANS delivery queue full (max_depth=%d): dropping task "
+                "notification_id=%s job_id=%s",
+                self._queue_max_depth,
+                task.payload.notification_id,
+                task.job_id,
+            )
+            if self._on_queue_full is not None:
+                self._on_queue_full(task)
 
     async def add_task(
         self, task: NotificationDeliveryTask, delay: timedelta | None = None
@@ -282,15 +317,31 @@ class NotificationDeliveryTaskQueue:
                         task = NotificationDeliveryTask.from_snapshot(
                             job_id, task_snapshot
                         )
-                        await self._retry_queue.remove_retry(job_id)
-                        await self.enqueue(task)
                     except (ValueError, KeyError, AttributeError) as exc:
                         _LOGGER.error(
-                            "Failed to reconstruct/enqueue retry task %s: %s",
+                            "Failed to reconstruct retry task %s: %s",
                             job_id,
                             exc,
                         )
                         await self._retry_queue.remove_retry(job_id)
+                        continue
+
+                    # Attempt to hand off to the in-memory queue *before*
+                    # removing from persistent store (at-least-once guarantee).
+                    # If the queue is full the task stays in the retry store and
+                    # will be re-attempted on the next poll cycle.
+                    try:
+                        self._queue.put_nowait(task)
+                    except asyncio.QueueFull:
+                        _LOGGER.warning(
+                            "ANS delivery queue full (max_depth=%d): deferring "
+                            "retry job_id=%s to next poll cycle",
+                            self._queue_max_depth,
+                            job_id,
+                        )
+                        continue
+
+                    await self._retry_queue.remove_retry(job_id)
 
             except Exception:  # noqa: BLE001
                 _LOGGER.exception(

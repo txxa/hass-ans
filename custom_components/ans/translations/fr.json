@@ -83,6 +83,7 @@
                     "retry_backoff_factor": "Multiplicateur de backoff des tentatives",
                     "retry_max_delay": "Délai maximal des tentatives (secondes)",
                     "queue_max_concurrency": "Concurrence maximale de la file (livraisons parallèles)",
+                    "queue_max_depth": "Profondeur maximale de la file (tâches en attente max)",
                     "storage_retention_days": "Rétention des journaux d'audit (jours, visible uniquement si la journalisation est activée)"
                 },
                 "data_description": {
@@ -91,6 +92,7 @@
                     "retry_backoff_factor": "Multiplicateur appliqué au délai après chaque tentative successive (ex. : 2.0 double le temps d'attente à chaque fois).",
                     "retry_max_delay": "Plafond en secondes du délai entre les tentatives, quel que soit le facteur de backoff.",
                     "queue_max_concurrency": "Nombre de tâches de livraison pouvant s'exécuter en parallèle. Des valeurs plus élevées augmentent le débit mais consomment plus de ressources.",
+                    "queue_max_depth": "Nombre maximum de tâches de livraison pouvant attendre dans la file. Lorsque la file est pleine, les tâches excédentaires sont supprimées avec un avertissement. Défaut : 500.",
                     "storage_retention_days": "Nombre de jours de conservation des enregistrements de notifications et de livraisons. Définissez 0 pour désactiver le nettoyage automatique. Visible uniquement lorsque la journalisation d'audit est activée."
                 }
             },
@@ -137,6 +139,7 @@
             "retry_backoff_factor": "Le facteur de backoff doit être un nombre compris entre 1.0 et 5.0.",
             "retry_max_delay": "Le délai maximal des tentatives doit être un entier compris entre 60 et 86400 secondes.",
             "queue_max_concurrency": "La concurrence de la file doit être un entier compris entre 1 et 20.",
+            "queue_max_depth": "La profondeur maximale de la file doit être un entier compris entre 10 et 5000.",
             "storage_retention_days": "La rétention des journaux doit être un entier compris entre 0 et 365 jours.",
             "notification_types": "Sélectionnez au moins un type de notification.",
             "blocked_sources_regex": "Expression régulière invalide pour les sources bloquées.",

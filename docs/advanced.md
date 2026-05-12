@@ -115,9 +115,16 @@ The Signal adapter (`channels/signal.py`) supports the following `metadata` keys
 | Key | Type | Description |
 |---|---|---|
 | `text_mode` | `"styled"` \| `"normal"` | `styled` uses Signal's markdown-like formatting (`**bold**`, `_italic_`). When not set and a title is present, ANS automatically uses `styled`. |
-| `attachments` | `list[str]` | Local file paths to attach (e.g., `["/media/snapshots/camera.jpg"]`). Files must be accessible by the HA process. |
+| `attachments` | `list[str]` | Local file paths to attach. Only files under the HA `config/`, `media/`, or `www/` directories are allowed (see note below). |
 | `urls` | `list[str]` | Image URLs to send as attachments. |
 | `verify_ssl` | `bool` | Whether to verify SSL certificates when fetching image URLs. Default: `true`. Set to `false` for self-signed certificates. |
+
+> **Attachment path restriction**: ANS validates every path in `attachments` before forwarding it to Signal. Only paths that resolve to a location inside one of these HA directories are allowed:
+> - `config/` (the HA configuration root)
+> - `config/media/`
+> - `config/www/`
+>
+> Paths outside these directories — including traversal attempts (`../../etc/passwd`) and symlinks that point outside the allowed tree — are silently dropped and a warning is written to the HA log. The notification is still delivered with the remaining valid attachments. If all paths are invalid, the notification is sent without attachments.
 
 Phone number masking: ANS logs only the last 4 digits of phone numbers at debug level (`****1234`). Full numbers are never written to logs.
 

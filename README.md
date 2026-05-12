@@ -32,7 +32,7 @@ ANS is a custom Home Assistant integration that acts as a centralized notificati
 - **Retry with exponential backoff** — configurable attempts and delays, with crash recovery across HA restarts
 - **Deduplication** — idempotent delivery prevents duplicate notifications, including duplicate TTS playback
 - **TTS via media player** — time-based and criticality-based volume control, automatic volume restoration, and per-device delivery lock to prevent overlapping playback
-- **Mobile app, Signal Messenger, persistent notification** support out of the box; extensible adapter architecture for additional channels
+- **Mobile app, Signal Messenger, persistent notification** support out of the box; Signal attachments are restricted to HA-managed directories (`config/`, `media/`, `www/`) to prevent path-traversal access; extensible adapter architecture for additional channels
 - **Audit log** — notification registry and delivery attempt logs with configurable retention (default 7 days, max 365 days) and hourly auto-purge
 - **Delivery outcome events** — `ans_notification_delivered`, `ans_notification_filtered`, `ans_notification_failed`, and `ans_notification_rate_limited` HA bus events let automations react to per-channel delivery results in real time
 - **Notification settled event** — `ans_notification_settled` fires once all fan-out tasks for a notification reach a terminal state, carrying per-recipient channel counts and a `recipients_delivered` total so automations can detect total delivery failure

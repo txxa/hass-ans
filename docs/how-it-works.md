@@ -190,6 +190,8 @@ Calls `notify.mobile_app_{device_id}`. The `title` and `message` are sent as-is.
 **Signal Messenger**
 Calls `notify.signal` with the recipient's phone number. When `text_mode: styled` is set in metadata (or when a title is present without an explicit mode), the message is formatted with bold title (`**Title**`). Supports file attachments (`attachments:` list of local paths) and image URLs (`urls:` list) via metadata.
 
+> **Security**: ANS validates every path in `attachments` before forwarding it to Signal. Only paths that resolve to inside the HA `config/`, `media/`, or `www/` directories are accepted. Paths outside those directories — including `../` traversal sequences and symlinks that point outside the allowed tree — are silently dropped with a warning log. The notification is still sent with any remaining valid attachments. See [Signal Messenger — Metadata Reference](advanced.md#signal-messenger--metadata-reference) for full details.
+
 **TTS via Media Player**
 Calls the configured TTS service targeting the media player entity. If volume management is enabled, ANS:
 1. Reads the current media player volume

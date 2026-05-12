@@ -210,3 +210,59 @@ class TestMobileAppFactory:
         adapter = factory.factory_fn(hass, "test_device")
         assert isinstance(adapter, MobileAppDeliveryAdapter)
         assert adapter.device_id == "test_device"
+
+
+# ── Actions ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestMobileAppActions:
+    """Verify that payload.actions is forwarded correctly into service_data."""
+
+    async def test_actions_forwarded_when_present(self):
+        """Non-empty actions list is placed under service_data['data']['actions']."""
+        adapter, hass = _make_adapter()
+        actions = [
+            {"action": "open", "title": "Open"},
+            {"action": "dismiss", "title": "Dismiss"},
+        ]
+        payload = make_payload(actions=actions)
+        await _deliver(adapter, payload)
+        sd = hass.services.async_call.call_args.kwargs["service_data"]
+        assert sd["data"]["actions"] == actions
+
+    async def test_empty_actions_not_forwarded(self):
+        """Empty actions list must NOT add an 'actions' key to service_data['data']."""
+        adapter, hass = _make_adapter()
+        payload = make_payload(actions=[])
+        await _deliver(adapter, payload)
+        sd = hass.services.async_call.call_args.kwargs["service_data"]
+        assert "actions" not in sd["data"]
+
+    async def test_actions_with_no_metadata(self):
+        """Actions are added alongside idempotency_key when payload has no metadata."""
+        adapter, hass = _make_adapter()
+        actions = [{"action": "ok", "title": "OK"}]
+        payload = make_payload(metadata={}, actions=actions)
+        await _deliver(adapter, payload, idempotency_key="key-x")
+        sd = hass.services.async_call.call_args.kwargs["service_data"]
+        assert sd["data"]["idempotency_key"] == "key-x"
+        assert sd["data"]["actions"] == actions
+
+    async def test_actions_with_metadata(self):
+        """Actions and metadata both appear in service_data['data'] without conflict."""
+        adapter, hass = _make_adapter()
+        actions = [{"action": "ok", "title": "OK"}]
+        payload = make_payload(metadata={"tag": "motion"}, actions=actions)
+        await _deliver(adapter, payload)
+        sd = hass.services.async_call.call_args.kwargs["service_data"]
+        assert sd["data"]["tag"] == "motion"
+        assert sd["data"]["actions"] == actions
+
+    async def test_actions_list_is_a_copy(self):
+        """The actions list written to service_data is a copy, not the same object."""
+        adapter, hass = _make_adapter()
+        actions = [{"action": "ok", "title": "OK"}]
+        payload = make_payload(actions=actions)
+        await _deliver(adapter, payload)
+        sd = hass.services.async_call.call_args.kwargs["service_data"]
+        assert sd["data"]["actions"] is not payload.actions

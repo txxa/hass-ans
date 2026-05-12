@@ -6,13 +6,19 @@ from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID
 
 import pytest
+import voluptuous as vol
 
 from ..const import DOMAIN, SERVICE_SEND
 from ..models.notification import (
     NotificationCriticality,
     NotificationType,
 )
-from ..service import SERVICE_REFRESH_CHANNELS, _build_payload, async_setup_services
+from ..service import (
+    SEND_NOTIFICATION_SCHEMA,
+    SERVICE_REFRESH_CHANNELS,
+    _build_payload,
+    async_setup_services,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -158,6 +164,121 @@ def test_build_payload_without_metadata_defaults_empty():
     )
     payload = _build_payload(call)
     assert payload.metadata == {}
+
+
+# ---------------------------------------------------------------------------
+# _build_payload — actions
+# ---------------------------------------------------------------------------
+
+
+class TestBuildPayloadActions:
+    """Verify that _build_payload() correctly handles the optional 'actions' field."""
+
+    def test_build_payload_with_actions(self):
+        """Actions list in service data is preserved on the returned payload."""
+        actions = [
+            {"action": "open", "title": "Open"},
+            {"action": "dismiss", "title": "Dismiss"},
+        ]
+        call = _make_service_call(
+            {
+                "source": "test",
+                "title": "T",
+                "message": "M",
+                "type": "INFO",
+                "criticality": "LOW",
+                "actions": actions,
+            }
+        )
+        payload = _build_payload(call)
+        assert payload.actions == actions
+
+    def test_build_payload_default_empty_actions(self):
+        """When 'actions' is absent, payload.actions defaults to an empty list."""
+        call = _make_service_call(
+            {
+                "source": "test",
+                "title": "T",
+                "message": "M",
+                "type": "INFO",
+                "criticality": "LOW",
+            }
+        )
+        payload = _build_payload(call)
+        assert payload.actions == []
+
+    def test_build_payload_channel_data_defaults_empty(self):
+        """channel_data always defaults to an empty dict (not in service schema yet)."""
+        call = _make_service_call(
+            {
+                "source": "test",
+                "title": "T",
+                "message": "M",
+                "type": "INFO",
+                "criticality": "LOW",
+            }
+        )
+        payload = _build_payload(call)
+        assert payload.channel_data == {}
+
+
+# ---------------------------------------------------------------------------
+# SEND_NOTIFICATION_SCHEMA validation
+# ---------------------------------------------------------------------------
+
+
+class TestSendNotificationSchema:
+    """Verify that SEND_NOTIFICATION_SCHEMA enforces actions constraints."""
+
+    _BASE = {
+        "source": "test",
+        "title": "T",
+        "message": "M",
+        "type": "INFO",
+        "criticality": "LOW",
+    }
+
+    def test_schema_valid_actions(self):
+        """Schema accepts a list of up to 3 well-formed action dicts."""
+        data = {
+            **self._BASE,
+            "actions": [
+                {"action": "open", "title": "Open"},
+                {
+                    "action": "dismiss",
+                    "title": "Dismiss",
+                    "uri": "homeassistant://navigate/lovelace",
+                },
+            ],
+        }
+        result = SEND_NOTIFICATION_SCHEMA(data)
+        assert len(result["actions"]) == 2
+
+    def test_schema_rejects_too_many_actions(self):
+        """Schema rejects more than 3 actions."""
+        data = {
+            **self._BASE,
+            "actions": [{"action": f"act{i}", "title": f"Act {i}"} for i in range(4)],
+        }
+        with pytest.raises(vol.Invalid):
+            SEND_NOTIFICATION_SCHEMA(data)
+
+    def test_schema_rejects_missing_action_key(self):
+        """Schema rejects an action dict that is missing the required 'action' key."""
+        data = {**self._BASE, "actions": [{"title": "Open"}]}
+        with pytest.raises(vol.Invalid):
+            SEND_NOTIFICATION_SCHEMA(data)
+
+    def test_schema_rejects_missing_title_key(self):
+        """Schema rejects an action dict that is missing the required 'title' key."""
+        data = {**self._BASE, "actions": [{"action": "open"}]}
+        with pytest.raises(vol.Invalid):
+            SEND_NOTIFICATION_SCHEMA(data)
+
+    def test_schema_allows_no_actions_field(self):
+        """Schema defaults 'actions' to [] when the key is absent."""
+        result = SEND_NOTIFICATION_SCHEMA(dict(self._BASE))
+        assert result["actions"] == []
 
 
 # ---------------------------------------------------------------------------

@@ -69,6 +69,23 @@ send_notification:
         camera: front_entrance
       selector:
         object:
+    actions:
+      name: Actions
+      description: >
+        Optional list of action buttons to display on the notification (mobile app only).
+        Each entry must have an `action` identifier and a `title` label; `uri` is optional.
+        Maximum 3 actions (Home Assistant mobile app limit).
+        When an action is tapped, the companion app fires a `mobile_app_notification_action`
+        event with the `action` value, which automations can listen for.
+        Ignored by non-mobile-app channels (Signal, TTS, persistent notifications).
+      required: false
+      example:
+        - action: open_door
+          title: Open Door
+        - action: dismiss
+          title: Dismiss
+      selector:
+        object:
 refresh_channels:
   name: Refresh Channels
   description: >

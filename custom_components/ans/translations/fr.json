@@ -365,6 +365,10 @@
                 "metadata": {
                     "name": "Métadonnées",
                     "description": "Métadonnées personnalisées facultatives associées à la notification (sous forme de dictionnaire clé-valeur)."
+                },
+                "actions": {
+                    "name": "Actions",
+                    "description": "Liste optionnelle de boutons d'action (application mobile uniquement, max. 3). Chaque entrée nécessite un identifiant `action` et un `title` ; `uri` est facultatif. Appuyer sur une action déclenche un événement `mobile_app_notification_action`. Ignoré par les canaux non mobiles."
                 }
             }
         },

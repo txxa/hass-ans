@@ -365,6 +365,10 @@
                 "metadata": {
                     "name": "Metadaten",
                     "description": "Optionale benutzerdefinierte Metadaten zur Benachrichtigung (als Schlüssel-Wert-Wörterbuch)."
+                },
+                "actions": {
+                    "name": "Aktionen",
+                    "description": "Optionale Liste von Aktionsschaltflächen (nur Mobile App, max. 3). Jeder Eintrag erfordert einen `action`-Bezeichner und einen `title`-Label; `uri` ist optional. Beim Antippen einer Aktion wird ein `mobile_app_notification_action`-Ereignis ausgelöst. Wird von Nicht-Mobile-App-Kanälen ignoriert."
                 }
             }
         },

@@ -9,6 +9,7 @@ An introduction to ANS: what it is, what problems it solves, and what you need t
 - [What is ANS?](#what-is-ans)
 - [Key Features](#key-features)
   - [Multi-Channel Delivery](#multi-channel-delivery)
+  - [Actionable Mobile Notifications](#actionable-mobile-notifications)
   - [Criticality-Based Routing](#criticality-based-routing)
   - [Intelligent Filtering](#intelligent-filtering)
   - [Rate Limiting](#rate-limiting)
@@ -37,10 +38,13 @@ ANS decouples *what to send* from *how and to whom to send it*. Routing decision
 ### Multi-Channel Delivery
 Route a single notification to any combination of:
 - **Persistent Notification** — HA frontend sidebar (always available)
-- **Mobile App** — Push notifications via the HA Companion App
+- **Mobile App** — Push notifications via the HA Companion App, with optional action buttons
 - **Signal Messenger** — Messages via the Signal integration, with support for styled text, file attachments (restricted to HA-managed directories), and image URLs
 - **TTS via Media Player** — Spoken announcements through any media player entity that supports playback and volume control
 - **Extensible adapter architecture** — additional channels can be added without modifying core delivery logic
+
+### Actionable Mobile Notifications
+Mobile push notifications can include up to 3 action buttons defined in the top-level `actions` field of `ans.send_notification`. When a button is tapped, the HA Companion App fires a `mobile_app_notification_action` event on the HA bus. Automations can listen for that event and react — closing a garage door, unlocking a door, or acknowledging an alert. Action buttons are ignored by all other channels (Signal, TTS, persistent notification).
 
 ### Criticality-Based Routing
 Every notification carries a criticality level (`LOW`, `MEDIUM`, `HIGH`, `CRITICAL`). Each recipient maps each level to a different set of channels. A LOW-criticality reminder might go only to the HA sidebar; a CRITICAL security alert goes to mobile, Signal, and every speaker in the house.

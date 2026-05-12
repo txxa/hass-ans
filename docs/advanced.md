@@ -14,6 +14,7 @@ This section covers internals and extension points for users who want to underst
   - [`ans_retry_queue.json`](#ans_retry_queuejson)
   - [Housekeeping](#housekeeping)
 - [Signal Messenger — Metadata Reference](#signal-messenger--metadata-reference)
+- [Mobile App — Actions Reference](#mobile-app--actions-reference)
 - [TTS — SSML Mode](#tts--ssml-mode)
 - [TTS — Volume Restoration Registry](#tts--volume-restoration-registry)
 - [Rate Limiter — Token Bucket Details](#rate-limiter--token-bucket-details)
@@ -106,6 +107,39 @@ Pending retry tasks. Each entry includes the full serialized task snapshot so it
 ### Housekeeping
 
 ANS runs a housekeeping task hourly. It removes records older than the configured retention period (`storage_retention_days`, default 7). Setting retention to `0` disables automatic cleanup.
+
+
+## Mobile App — Actions Reference
+
+Action buttons are defined in the top-level `actions` field of `ans.send_notification` (not under `metadata`). ANS forwards them to `notify.mobile_app_*` as the `actions` key inside the `data:` payload.
+
+| Key | Required | Type | Description |
+|---|---|---|---|
+| `action` | Yes | `str` | Identifier returned in the `mobile_app_notification_action` event when the button is tapped. Must be a non-empty string. Convention: use uppercase with underscores (e.g. `CLOSE_GARAGE`). |
+| `title` | Yes | `str` | Button label displayed on the notification. |
+| `uri` | No | `str` | URI to open when the button is tapped. Accepts any URI scheme the Companion App supports: `https://`, `homeassistant://`, deep links, etc. |
+
+Additional Companion App keys (e.g. `destructive: true` for iOS red buttons) can be included alongside these and are forwarded as-is.
+
+**Limits:**
+- Maximum **3** action buttons per notification (enforced by `SEND_NOTIFICATION_SCHEMA`).
+- Action buttons are forwarded **only** by `MobileAppDeliveryAdapter`. All other adapters (Signal, persistent notification, TTS) silently ignore the `actions` field.
+
+**Receiving the action event:**
+```yaml
+- alias: "Handle tapped action"
+  trigger:
+    - platform: event
+      event_type: mobile_app_notification_action
+      event_data:
+        action: "CLOSE_GARAGE"   # matches the 'action' key you defined
+  action:
+    - service: cover.close_cover
+      target:
+        entity_id: cover.garage_door
+```
+
+The response automation is standard Home Assistant — ANS is not involved after the notification is delivered.
 
 
 ## Signal Messenger — Metadata Reference

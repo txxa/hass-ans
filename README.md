@@ -33,6 +33,7 @@ ANS is a custom Home Assistant integration that acts as a centralized notificati
 - **Deduplication** — idempotent delivery prevents duplicate notifications, including duplicate TTS playback
 - **TTS via media player** — time-based and criticality-based volume control, automatic volume restoration, and per-device delivery lock to prevent overlapping playback
 - **Mobile app, Signal Messenger, persistent notification** support out of the box; Signal attachments are restricted to HA-managed directories (`config/`, `media/`, `www/`) to prevent path-traversal access; extensible adapter architecture for additional channels
+- **Actionable mobile notifications** — include up to 3 action buttons in mobile push notifications via the `actions` field; button taps fire a `mobile_app_notification_action` HA bus event for automation response
 - **Audit log** — notification registry and delivery attempt logs with configurable retention (default 7 days, max 365 days) and hourly auto-purge
 - **Delivery outcome events** — `ans_notification_delivered`, `ans_notification_filtered`, `ans_notification_failed`, and `ans_notification_rate_limited` HA bus events let automations react to per-channel delivery results in real time
 - **Notification settled event** — `ans_notification_settled` fires once all fan-out tasks for a notification reach a terminal state, carrying per-recipient channel counts and a `recipients_delivered` total so automations can detect total delivery failure
@@ -91,6 +92,7 @@ data:
 | `type` | ✅ | `INFO` `WARNING` `ALERT` `REMINDER` `EVENT` `SECURITY` |
 | `criticality` | ✅ | `LOW` `MEDIUM` `HIGH` `CRITICAL` |
 | `metadata` | ❌ | key-value dict — passed through to channel adapters |
+| `actions` | ❌ | list of up to 3 action button dicts (`action`, `title`, optional `uri`) — forwarded to Mobile App only; ignored by other channels |
 
 For real-world automation patterns see [Usage Examples](docs/usage-examples.md). For the full service reference and delivery pipeline see [How It Works](docs/how-it-works.md).
 

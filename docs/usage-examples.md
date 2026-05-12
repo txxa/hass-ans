@@ -546,7 +546,7 @@ Metadata:
 
 ## Actionable Notifications (Mobile App)
 
-ANS supports HA Companion App action buttons via the `metadata` field. The send side goes through ANS; the response side uses a standard HA automation listening for the `mobile_app_notification_action` event — exactly as it would with a direct `notify.mobile_app_*` call.
+ANS supports HA Companion App action buttons via the top-level `actions` field. The send side goes through ANS; the response side uses a standard HA automation listening for the `mobile_app_notification_action` event — exactly as it would with a direct `notify.mobile_app_*` call.
 
 ### Primary Example: Garage Door — Tap to Close
 
@@ -569,11 +569,11 @@ ANS supports HA Companion App action buttons via the `metadata` field. The send 
         criticality: HIGH
         metadata:
           tag: "garage_door_open"     # Used to clear the notification on close
-          actions:
-            - action: "CLOSE_GARAGE"
-              title: "Close Garage"
-            - action: "DISMISS_GARAGE"
-              title: "Dismiss"
+        actions:
+          - action: "CLOSE_GARAGE"
+            title: "Close Garage"
+          - action: "DISMISS_GARAGE"
+            title: "Dismiss"
 ```
 
 **Automation 2 — Handle the button tap:**
@@ -619,12 +619,12 @@ ANS supports HA Companion App action buttons via the `metadata` field. The send 
         metadata:
           tag: "front_door_unknown"
           image: "/api/camera_proxy/camera.front_door"
-          actions:
-            - action: "UNLOCK_FRONT_DOOR"
-              title: "Unlock"
-              destructive: true
-            - action: "IGNORE_DOOR"
-              title: "Ignore"
+        actions:
+          - action: "UNLOCK_FRONT_DOOR"
+            title: "Unlock"
+            destructive: true
+          - action: "IGNORE_DOOR"
+            title: "Ignore"
 
 # Respond
 - alias: "Front door — handle unlock action"

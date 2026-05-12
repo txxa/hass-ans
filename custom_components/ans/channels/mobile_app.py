@@ -221,6 +221,11 @@ class MobileAppDeliveryAdapter(DeliveryAdapter):
             else:
                 service_data["data"] = {"idempotency_key": idempotency_key}
 
+            # Forward action buttons if the notification defines any.
+            # Non-mobile-app adapters silently ignore payload.actions.
+            if payload.actions:
+                service_data["data"]["actions"] = list(payload.actions)
+
             # Call mobile_app notify service
             await self._hass.services.async_call(
                 domain="notify",

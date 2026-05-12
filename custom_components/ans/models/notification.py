@@ -42,4 +42,13 @@ class NotificationPayload:
     type: NotificationType
     criticality: NotificationCriticality
     created_at: datetime
+    # --- optional payload fields ---
+    # metadata:     user-supplied semantic data (entity_id, camera name, …)
+    # actions:      interactive response options — notification content consumed by
+    #               capable adapters (e.g. MobileAppDeliveryAdapter); ignored by others
+    # channel_data: adapter-specific delivery directives keyed by adapter type
+    #               (e.g. {"mobile_app": {"tag": "..."}}); reserved for future items
+    #               such as NH-3 (acknowledgement tracking) — not yet in service schema
     metadata: dict[str, Any] = field(default_factory=dict)
+    actions: list[dict[str, Any]] = field(default_factory=list)
+    channel_data: dict[str, Any] = field(default_factory=dict)

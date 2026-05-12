@@ -365,6 +365,10 @@
                 "metadata": {
                     "name": "Metadata",
                     "description": "Optional custom metadata associated with the notification (as a key-value dictionary)."
+                },
+                "actions": {
+                    "name": "Actions",
+                    "description": "Optional list of action buttons (mobile app only, max 3). Each entry requires an `action` identifier and a `title` label; `uri` is optional. Tapping an action fires a `mobile_app_notification_action` event. Ignored by non-mobile-app channels."
                 }
             }
         },

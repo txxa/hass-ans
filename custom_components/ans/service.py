@@ -12,7 +12,9 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
+import voluptuous as vol
 from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.helpers import config_validation as cv
 
 from .const import DOMAIN, SERVICE_SEND
 from .delivery.orchestrator import NotificationOrchestrator
@@ -25,6 +27,31 @@ from .models import (
 SERVICE_REFRESH_CHANNELS = "refresh_channels"
 
 _LOGGER = logging.getLogger(__name__)
+
+# Schema for a single action button (HA mobile app supports up to 3).
+_ACTION_SCHEMA = vol.Schema(
+    {
+        vol.Required("action"): cv.string,
+        vol.Required("title"): cv.string,
+        vol.Optional("uri"): cv.string,
+    }
+)
+
+# Full service call schema for ans.send_notification.
+SEND_NOTIFICATION_SCHEMA = vol.Schema(
+    {
+        vol.Required("source"): cv.string,
+        vol.Required("title"): cv.string,
+        vol.Required("message"): cv.string,
+        vol.Required("type"): vol.In([t.value for t in NotificationType]),
+        vol.Required("criticality"): vol.In([c.value for c in NotificationCriticality]),
+        vol.Optional("metadata", default={}): dict,
+        vol.Optional("actions", default=[]): vol.All(
+            [_ACTION_SCHEMA], vol.Length(max=3)
+        ),
+    },
+    extra=vol.ALLOW_EXTRA,
+)
 
 
 async def async_setup_services(
@@ -69,6 +96,7 @@ async def async_setup_services(
         DOMAIN,
         SERVICE_SEND,
         _handle_notify,
+        schema=SEND_NOTIFICATION_SCHEMA,
     )
     _LOGGER.debug("ANS service '%s.%s' registered", DOMAIN, SERVICE_SEND)
 
@@ -131,6 +159,7 @@ def _build_payload(call: ServiceCall) -> NotificationPayload:
             type=NotificationType(data["type"]),
             criticality=NotificationCriticality(data["criticality"]),
             metadata=dict(data.get("metadata", {})),
+            actions=list(data.get("actions", [])),
             created_at=datetime.now(UTC),
         )
     except KeyError as exc:

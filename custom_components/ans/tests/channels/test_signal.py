@@ -46,11 +46,26 @@ def _make_contact(phone: str | None = "+49123456789") -> RecipientContactInfo:
     return RecipientContactInfo(email_address=None, phone_number=phone)
 
 
-def _make_adapter() -> tuple[SignalDeliveryAdapter, MagicMock]:
-    """Create a SignalDeliveryAdapter with a fully mocked hass instance."""
+def _make_adapter(
+    config_dir: str = "/config",
+) -> tuple[SignalDeliveryAdapter, MagicMock]:
+    """Create a SignalDeliveryAdapter with a fully mocked hass instance.
+
+    Parameters
+    ----------
+    config_dir:
+        Root config directory reported by ``hass.config``.  Defaults to
+        ``/config`` which covers all existing tests.  Pass a real ``tmp_path``
+        sub-directory in path-guard tests that need actual symlink resolution.
+
+    """
     hass = MagicMock()
     hass.services = MagicMock()
     hass.services.async_call = AsyncMock()
+    hass.config.config_dir = config_dir
+    hass.config.path = MagicMock(
+        side_effect=lambda *args: config_dir + "/" + "/".join(args)
+    )
     adapter = SignalDeliveryAdapter(hass=hass)
     return adapter, hass
 
@@ -462,3 +477,161 @@ class TestSignalMetadataValidation:
         assert "verify_ssl must be boolean" in caplog.text
         data = hass.services.async_call.call_args.kwargs["service_data"].get("data", {})
         assert "verify_ssl" not in data
+
+
+# ---------------------------------------------------------------------------
+# Attachment path guard
+# ---------------------------------------------------------------------------
+
+
+class TestSignalAttachmentPathGuard:
+    """Verify that _validate_attachment_path rejects paths outside HA-allowed dirs."""
+
+    @pytest.mark.asyncio
+    async def test_valid_path_under_config_passes(self):
+        """A path inside the config dir is forwarded to the service call."""
+        adapter, hass = _make_adapter(config_dir="/config")
+        payload = _make_payload(
+            title="",
+            message="See attached",
+            metadata={"attachments": ["/config/www/snapshot.jpg"]},
+        )
+
+        result = await adapter.deliver(
+            payload=payload,
+            contact_info=_make_contact(),
+            idempotency_key="k-pg-ok",
+            job_id="job-pg",
+        )
+
+        assert result.status == DeliveryStatus.SUCCESS
+        data = hass.services.async_call.call_args.kwargs["service_data"]["data"]
+        assert data["attachments"] == ["/config/www/snapshot.jpg"]
+
+    @pytest.mark.asyncio
+    async def test_path_outside_allowed_dirs_dropped_with_warning(self, caplog):
+        """A path outside all allowed dirs is dropped and a warning is logged."""
+        adapter, hass = _make_adapter(config_dir="/config")
+        payload = _make_payload(
+            title="",
+            message="Sneaky",
+            metadata={"attachments": ["/etc/passwd"]},
+        )
+
+        result = await adapter.deliver(
+            payload=payload,
+            contact_info=_make_contact(),
+            idempotency_key="k-pg-out",
+            job_id="job-pg",
+        )
+
+        assert result.status == DeliveryStatus.SUCCESS
+        assert "path outside allowed directories" in caplog.text
+        data = hass.services.async_call.call_args.kwargs["service_data"].get("data", {})
+        assert "attachments" not in data
+
+    @pytest.mark.asyncio
+    async def test_traversal_attack_rejected(self, caplog):
+        """A path with ../ traversal sequences is rejected after Path.resolve().
+
+        Path.resolve(strict=False) collapses ``..`` sequences without requiring
+        the path to exist on the filesystem, so /config/www/../../etc/passwd
+        resolves to /etc/passwd and is correctly rejected.
+        """
+        adapter, hass = _make_adapter(config_dir="/config")
+        payload = _make_payload(
+            title="",
+            message="Traversal",
+            metadata={"attachments": ["/config/www/../../etc/passwd"]},
+        )
+
+        result = await adapter.deliver(
+            payload=payload,
+            contact_info=_make_contact(),
+            idempotency_key="k-pg-trav",
+            job_id="job-pg",
+        )
+
+        assert result.status == DeliveryStatus.SUCCESS
+        assert "path outside allowed directories" in caplog.text
+        data = hass.services.async_call.call_args.kwargs["service_data"].get("data", {})
+        assert "attachments" not in data
+
+    @pytest.mark.asyncio
+    async def test_symlink_outside_allowed_rejected(self, tmp_path, caplog):
+        """A symlink inside the allowed dir that points outside is rejected.
+
+        Path.resolve() follows symlinks, so a symlink inside config/ that points
+        to /etc/passwd resolves to /etc/passwd and is rejected.
+        """
+        allowed_dir = tmp_path / "config"
+        allowed_dir.mkdir()
+        outside_target = tmp_path / "secret.txt"
+        outside_target.write_text("secret")
+
+        symlink = allowed_dir / "evil_link.jpg"
+        symlink.symlink_to(outside_target)
+
+        adapter, hass = _make_adapter(config_dir=str(allowed_dir))
+        payload = _make_payload(
+            title="",
+            message="Symlink test",
+            metadata={"attachments": [str(symlink)]},
+        )
+
+        result = await adapter.deliver(
+            payload=payload,
+            contact_info=_make_contact(),
+            idempotency_key="k-pg-sym",
+            job_id="job-pg",
+        )
+
+        assert result.status == DeliveryStatus.SUCCESS
+        assert "path outside allowed directories" in caplog.text
+        data = hass.services.async_call.call_args.kwargs["service_data"].get("data", {})
+        assert "attachments" not in data
+
+    @pytest.mark.asyncio
+    async def test_mixed_attachments_only_valid_forwarded(self, caplog):
+        """When some paths are valid and some are not, only valid ones are forwarded."""
+        adapter, hass = _make_adapter(config_dir="/config")
+        payload = _make_payload(
+            title="",
+            message="Mixed",
+            metadata={"attachments": ["/config/valid.jpg", "/etc/passwd"]},
+        )
+
+        result = await adapter.deliver(
+            payload=payload,
+            contact_info=_make_contact(),
+            idempotency_key="k-pg-mix",
+            job_id="job-pg",
+        )
+
+        assert result.status == DeliveryStatus.SUCCESS
+        assert "path outside allowed directories" in caplog.text
+        data = hass.services.async_call.call_args.kwargs["service_data"]["data"]
+        assert data["attachments"] == ["/config/valid.jpg"]
+
+    @pytest.mark.asyncio
+    async def test_all_invalid_attachments_notification_still_delivered(self, caplog):
+        """When all attachment paths are invalid the notification is still sent."""
+        adapter, hass = _make_adapter(config_dir="/config")
+        payload = _make_payload(
+            title="",
+            message="No attachments",
+            metadata={"attachments": ["/etc/shadow", "/proc/self/environ"]},
+        )
+
+        result = await adapter.deliver(
+            payload=payload,
+            contact_info=_make_contact(),
+            idempotency_key="k-pg-all-inv",
+            job_id="job-pg",
+        )
+
+        assert result.status == DeliveryStatus.SUCCESS
+        assert "path outside allowed directories" in caplog.text
+        hass.services.async_call.assert_called_once()
+        data = hass.services.async_call.call_args.kwargs["service_data"].get("data", {})
+        assert "attachments" not in data

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from homeassistant.core import HomeAssistant
@@ -25,6 +26,33 @@ if TYPE_CHECKING:
     pass
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _validate_attachment_path(hass: HomeAssistant, path: str) -> bool:  # noqa: E501
+    """Return True if *path* is under an HA-allowed base directory.
+
+    Resolves the candidate path and each allowed base with
+    ``Path.resolve(strict=False)`` so that ``..`` traversal sequences are
+    collapsed and symlinks are followed without requiring the path to exist
+    on the filesystem.  A path that lands outside all allowed bases is
+    rejected to prevent arbitrary file access via the Signal attachment list.
+
+    Allowed bases
+    -------------
+    - ``hass.config.config_dir``  (the HA config root, e.g. ``/config``)
+    - ``hass.config.path("media")``  (``/config/media`` by default)
+    - ``hass.config.path("www")``    (``/config/www`` by default)
+    """
+    try:
+        candidate = Path(path).resolve(strict=False)
+        allowed_bases = [
+            Path(hass.config.config_dir).resolve(strict=False),
+            Path(hass.config.path("media")).resolve(strict=False),
+            Path(hass.config.path("www")).resolve(strict=False),
+        ]
+        return any(candidate.is_relative_to(base) for base in allowed_bases)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _mask_phone(number: str) -> str:
@@ -303,6 +331,25 @@ class SignalDeliveryAdapter(DeliveryAdapter):
 
         try:
             service_data = self._build_service_data(payload, contact_info)
+
+            # Attachment path guard: drop any paths outside the HA-allowed directories.
+            # This prevents arbitrary host-filesystem access via the Signal attachment list.
+            if "data" in service_data and "attachments" in service_data["data"]:
+                valid_attachments = []
+                for attachment_path in service_data["data"]["attachments"]:
+                    if _validate_attachment_path(self._hass, attachment_path):
+                        valid_attachments.append(attachment_path)
+                    else:
+                        _LOGGER.warning(
+                            "Signal attachment rejected (path outside allowed directories): "
+                            "path=%s notification_id=%s",
+                            attachment_path,
+                            payload.notification_id,
+                        )
+                if valid_attachments:
+                    service_data["data"]["attachments"] = valid_attachments
+                else:
+                    del service_data["data"]["attachments"]
 
             # Call signal_messenger notify service
             await self._hass.services.async_call(

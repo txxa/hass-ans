@@ -336,5 +336,41 @@
             "title": "Canal de notification indisponible : {channel_label}",
             "description": "Le canal de notification '{channel_id}' n'est plus disponible dans Home Assistant. Les notifications acheminées vers ce canal échoueront définitivement jusqu'à sa restauration.\n\nPour résoudre ce problème, exécutez le service `ans.refresh_channels` pour détecter à nouveau les canaux disponibles, ou reconfigurez les destinataires concernés pour utiliser un autre canal."
         }
+    },
+    "services": {
+        "send_notification": {
+            "name": "Envoyer une notification",
+            "description": "Envoie une notification via le système ANS (Advanced Notification System) avec une criticité et des canaux de livraison configurables.",
+            "fields": {
+                "source": {
+                    "name": "Source",
+                    "description": "La source ou l'origine de la notification (ex. : \"home_assistant\", \"alarm\", \"security_system\")."
+                },
+                "title": {
+                    "name": "Titre",
+                    "description": "Le titre ou l'objet de la notification."
+                },
+                "message": {
+                    "name": "Message",
+                    "description": "Le corps principal de la notification."
+                },
+                "type": {
+                    "name": "Type",
+                    "description": "Le type ou la catégorie de la notification."
+                },
+                "criticality": {
+                    "name": "Criticité",
+                    "description": "Le niveau de criticité ou de priorité de la notification."
+                },
+                "metadata": {
+                    "name": "Métadonnées",
+                    "description": "Métadonnées personnalisées facultatives associées à la notification (sous forme de dictionnaire clé-valeur)."
+                }
+            }
+        },
+        "refresh_channels": {
+            "name": "Actualiser les canaux",
+            "description": "Déclenche manuellement une nouvelle détection complète des services notify.* et des entités media_player.*. À utiliser comme solution de repli manuelle si la détection automatique n'a pas pris en compte une modification."
+        }
     }
 }

@@ -336,5 +336,41 @@
             "title": "Benachrichtigungskanal nicht verfügbar: {channel_label}",
             "description": "Der Benachrichtigungskanal '{channel_id}' ist in Home Assistant nicht mehr verfügbar. Benachrichtigungen, die an diesen Kanal geleitet werden, schlagen dauerhaft fehl, bis der Kanal wiederhergestellt ist.\n\nZur Behebung: Führen Sie den Dienst `ans.refresh_channels` aus, um verfügbare Kanäle erneut zu erkennen, oder konfigurieren Sie die betroffenen Empfänger so, dass sie einen anderen Kanal verwenden."
         }
+    },
+    "services": {
+        "send_notification": {
+            "name": "Benachrichtigung senden",
+            "description": "Sendet eine Benachrichtigung über das ANS (Advanced Notification System) mit konfigurierbarer Dringlichkeit und Übermittlungskanälen.",
+            "fields": {
+                "source": {
+                    "name": "Quelle",
+                    "description": "Die Quelle oder der Ursprung der Benachrichtigung (z. B. \"home_assistant\", \"alarm\", \"security_system\")."
+                },
+                "title": {
+                    "name": "Titel",
+                    "description": "Der Titel oder die Betreffzeile der Benachrichtigung."
+                },
+                "message": {
+                    "name": "Nachricht",
+                    "description": "Der Haupttext der Benachrichtigung."
+                },
+                "type": {
+                    "name": "Typ",
+                    "description": "Der Typ oder die Kategorie der Benachrichtigung."
+                },
+                "criticality": {
+                    "name": "Dringlichkeit",
+                    "description": "Die Dringlichkeit oder Prioritätsstufe der Benachrichtigung."
+                },
+                "metadata": {
+                    "name": "Metadaten",
+                    "description": "Optionale benutzerdefinierte Metadaten zur Benachrichtigung (als Schlüssel-Wert-Wörterbuch)."
+                }
+            }
+        },
+        "refresh_channels": {
+            "name": "Kanäle aktualisieren",
+            "description": "Löst eine vollständige Neuerkennung von notify.*-Diensten und media_player.*-Entitäten aus. Als manuellen Fallback verwenden, wenn die automatische Erkennung eine Änderung nicht erfasst hat."
+        }
     }
 }

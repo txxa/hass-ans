@@ -48,7 +48,8 @@ data:
 | `message` | Yes | string | Body of the notification. |
 | `type` | Yes | select | Notification category. Controls type-based filtering per recipient. |
 | `criticality` | Yes | select | Priority level. Determines which channels are used per recipient. |
-| `metadata` | No | dict | Optional key-value data. Passed to channel adapters for channel-specific features (e.g. Signal attachments, mobile app action buttons). |
+| `metadata` | No | dict | Optional key-value data. Passed to channel adapters for channel-specific features (e.g. Signal attachments, mobile app notification tags and images). |
+| `actions` | No | list | Optional list of up to 3 action button objects. Each object requires `action` (identifier string) and `title` (button label), with an optional `uri`. Forwarded to Mobile App only; ignored by all other channels. |
 
 ### Notification Types
 
@@ -185,7 +186,7 @@ ANS selects the live adapter for the target channel and calls `deliver()`. Each 
 Calls `persistent_notification.create` in HA. The notification appears in the sidebar immediately. Metadata key-value pairs are appended to the message body.
 
 **Mobile App**
-Calls `notify.mobile_app_{device_id}`. The `title` and `message` are sent as-is. The full `metadata` dict is passed through as the `data:` payload, so all standard [HA Companion App notification features](https://companion.home-assistant.io/docs/notifications/notifications-basic/) (action buttons, tags, channels, images) work via `metadata`.
+Calls `notify.mobile_app_{device_id}`. The `title` and `message` are sent as-is. The full `metadata` dict is passed through as the `data:` payload, so all standard [HA Companion App notification features](https://companion.home-assistant.io/docs/notifications/notifications-basic/) (tags, channels, images) work via `metadata`. If the `actions` field is non-empty, ANS also includes it in the `data:` payload, enabling action buttons on the notification. See [Actionable Notifications](usage-examples.md#actionable-notifications-mobile-app) for usage examples.
 
 **Signal Messenger**
 Calls `notify.signal` with the recipient's phone number. When `text_mode: styled` is set in metadata (or when a title is present without an explicit mode), the message is formatted with bold title (`**Title**`). Supports file attachments (`attachments:` list of local paths) and image URLs (`urls:` list) via metadata.

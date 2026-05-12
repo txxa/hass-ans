@@ -38,7 +38,7 @@ ANS decouples *what to send* from *how and to whom to send it*. Routing decision
 Route a single notification to any combination of:
 - **Persistent Notification** — HA frontend sidebar (always available)
 - **Mobile App** — Push notifications via the HA Companion App
-- **Signal Messenger** — Messages via the Signal integration, with support for styled text, file attachments, and image URLs
+- **Signal Messenger** — Messages via the Signal integration, with support for styled text, file attachments (restricted to HA-managed directories), and image URLs
 - **TTS via Media Player** — Spoken announcements through any media player entity that supports playback and volume control
 - **Extensible adapter architecture** — additional channels can be added without modifying core delivery logic
 

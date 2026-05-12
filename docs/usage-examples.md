@@ -409,8 +409,10 @@ data:
   criticality: MEDIUM
   metadata:
     attachments:
-      - "/media/snapshots/front_door.jpg"   # Local path accessible by HA
+      - "/media/snapshots/front_door.jpg"   # Must be inside config/, media/, or www/
 ```
+
+> **Note:** Only paths inside the HA `config/`, `media/`, or `www/` directories are accepted. Paths outside those directories are silently dropped. See [Signal Messenger — Metadata Reference](advanced.md#signal-messenger--metadata-reference).
 
 #### Image URL with SSL verification
 

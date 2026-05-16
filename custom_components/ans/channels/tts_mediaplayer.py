@@ -488,17 +488,42 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
             )
             return self.permanent_failure(error=f"Media player {entity_id} not found")
 
-        if state.state in (STATE_UNAVAILABLE, STATE_OFF):
+        if state.state == STATE_UNAVAILABLE:
             _LOGGER.warning(
-                "Media player %s is %s, delivery skipped: job_id=%s notification_id=%s "
+                "Media player %s is unavailable, delivery skipped: job_id=%s notification_id=%s "
                 "— will retry",
                 entity_id,
-                state.state,
                 job_id,
                 payload.notification_id,
             )
             return self.transient_failure(
-                error=f"Media player {entity_id} is {state.state}, delivery skipped; will retry"
+                error=f"Media player {entity_id} is unavailable, delivery skipped; will retry"
+            )
+
+        if state.state == STATE_OFF:
+            _LOGGER.info(
+                "Media player %s is off, requesting turn-on: job_id=%s notification_id=%s "
+                "— will retry after device wakes up",
+                entity_id,
+                job_id,
+                payload.notification_id,
+            )
+            try:
+                await self._hass.services.async_call(
+                    domain="media_player",
+                    service="turn_on",
+                    service_data={"entity_id": entity_id},
+                    blocking=False,
+                )
+            except Exception:  # noqa: BLE001
+                _LOGGER.warning(
+                    "Failed to request turn-on for media player %s: job_id=%s notification_id=%s",
+                    entity_id,
+                    job_id,
+                    payload.notification_id,
+                )
+            return self.transient_failure(
+                error=f"Media player {entity_id} is off, turn-on requested; will retry"
             )
 
         _LOGGER.debug(

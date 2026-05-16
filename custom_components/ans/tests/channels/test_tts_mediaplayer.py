@@ -245,7 +245,7 @@ async def test_media_player_not_found_returns_permanent_failure():
 
 
 async def test_media_player_off_returns_transient_failure():
-    """A media player in STATE_OFF must yield a transient failure (device may come back)."""
+    """A media player in STATE_OFF must request turn-on and yield a transient failure."""
     adapter, hass, _, volume_registry = _make_adapter()
     state = MagicMock()
     state.state = STATE_OFF
@@ -256,6 +256,29 @@ async def test_media_player_off_returns_transient_failure():
         contact_info=_make_contact(),
         idempotency_key="key-3",
         job_id="job-3",
+    )
+    assert result.status == DeliveryStatus.TRANSIENT_FAIL
+    # Verify that turn_on was requested so the device wakes up before retry
+    hass.services.async_call.assert_called_once()
+    call_kwargs = hass.services.async_call.call_args.kwargs
+    assert call_kwargs["domain"] == "media_player"
+    assert call_kwargs["service"] == "turn_on"
+    assert call_kwargs["service_data"] == {"entity_id": "media_player.living_room"}
+
+
+async def test_media_player_off_turn_on_error_still_returns_transient_failure():
+    """If turn-on request fails, delivery still returns transient failure without raising."""
+    adapter, hass, _, volume_registry = _make_adapter()
+    state = MagicMock()
+    state.state = STATE_OFF
+    hass.states.get.return_value = state
+    hass.services.async_call.side_effect = Exception("connection error")
+
+    result = await adapter.deliver(
+        payload=_make_payload(),
+        contact_info=_make_contact(),
+        idempotency_key="key-3b",
+        job_id="job-3b",
     )
     assert result.status == DeliveryStatus.TRANSIENT_FAIL
 

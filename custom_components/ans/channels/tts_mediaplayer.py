@@ -521,6 +521,7 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
                     entity_id,
                     job_id,
                     payload.notification_id,
+                    exc_info=True,
                 )
             return self.transient_failure(
                 error=f"Media player {entity_id} is off, turn-on requested; will retry"

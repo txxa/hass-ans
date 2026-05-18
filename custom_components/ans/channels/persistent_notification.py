@@ -159,7 +159,7 @@ class PersistentNotificationAdapter(DeliveryAdapter):
             data: dict[str, Any] = {
                 "title": payload.title,
                 "message": message,
-                "notification_id": idempotency_key,
+                "notification_id": str(payload.notification_id),
             }
 
             # Call persistent_notification.create service

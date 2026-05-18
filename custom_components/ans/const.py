@@ -20,6 +20,7 @@ EVENT_NOTIFICATION_FILTERED = "ans_notification_filtered"
 EVENT_NOTIFICATION_FAILED = "ans_notification_failed"
 EVENT_NOTIFICATION_RATE_LIMITED = "ans_notification_rate_limited"
 EVENT_NOTIFICATION_SETTLED = "ans_notification_settled"
+EVENT_NOTIFICATION_ACKNOWLEDGED = "ans_notification_acknowledged"
 
 # Max values for system configuration
 SYS_MAX_GLOBAL_RATE_LIMIT = 10000  # Max value configurable in system settings
@@ -56,6 +57,7 @@ SYS_STORAGE_DIR = ".storage"
 SYS_STORAGE_NOTIFICATIONS_FILE = "ans_notifications.json"
 SYS_STORAGE_ATTEMPTS_FILE = "ans_delivery_attempts.json"
 SYS_STORAGE_RETRIES_FILE = "ans_retry_queue.json"
+SYS_STORAGE_ACKNOWLEDGEMENTS_FILE = "ans_acknowledgements.json"
 SYS_STORAGE_HOUSEKEEPING_INTERVAL_HOURS = 1
 SYS_STORAGE_MAX_FILE_RETENTION_DAYS = 365
 SYS_STORAGE_DEFAULT_FILE_RETENTION_DAYS = 7

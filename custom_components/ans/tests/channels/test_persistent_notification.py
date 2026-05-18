@@ -83,12 +83,17 @@ class TestPersistentNotificationDelivery:
         sd = hass.services.async_call.call_args.kwargs["service_data"]
         assert "Test body" in sd["message"]
 
-    async def test_idempotency_key_as_notification_id(self):
-        """The idempotency key must be used as the notification_id for deduplication."""
+    async def test_payload_notification_id_used(self):
+        """The payload notification_id (ANS UUID) must be used as the HA notification_id.
+
+        This ensures that retries update the existing HA notification rather than
+        creating duplicates, and enables acknowledgement correlation (NH-3).
+        """
         adapter, hass = _make_adapter()
-        await _deliver(adapter, make_payload(), idempotency_key="unique-idem")
+        payload = make_payload()
+        await _deliver(adapter, payload, idempotency_key="some-attempt-key")
         sd = hass.services.async_call.call_args.kwargs["service_data"]
-        assert sd["notification_id"] == "unique-idem"
+        assert sd["notification_id"] == str(payload.notification_id)
 
     async def test_metadata_appended_to_message(self):
         """Payload metadata values must be appended to the message body."""

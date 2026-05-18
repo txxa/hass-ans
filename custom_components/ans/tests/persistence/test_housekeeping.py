@@ -173,3 +173,40 @@ async def test_run_loop_logs_exception_and_continues(caplog):
     )
     # And the loop continued running — _cleanup was called more than once
     assert call_count >= 2
+
+
+# ---------------------------------------------------------------------------
+# Acknowledgement registry cleanup (NH-3)
+# ---------------------------------------------------------------------------
+
+
+async def test_cleanup_calls_acknowledgement_registry_when_provided():
+    """When acknowledgement_registry is supplied, cleanup_old() is called on it during cleanup sweep."""
+    acknowledgement_registry = MagicMock()
+    acknowledgement_registry.cleanup_old = AsyncMock(return_value=0)
+
+    scheduler, *_ = _make_scheduler(acknowledgement_registry=acknowledgement_registry)
+    await scheduler._cleanup()
+
+    acknowledgement_registry.cleanup_old.assert_called_once()
+
+
+async def test_cleanup_skips_acknowledgement_registry_when_none():
+    """When acknowledgement_registry is None (default), no AttributeError is raised during cleanup."""
+    scheduler, *_ = _make_scheduler()
+    # Should not raise even though no acknowledgement_registry was provided
+    await scheduler._cleanup()
+
+
+async def test_cleanup_skipped_includes_acknowledgement_registry():
+    """When retention_age is timedelta(0), acknowledgement_registry.cleanup_old is also skipped."""
+    acknowledgement_registry = MagicMock()
+    acknowledgement_registry.cleanup_old = AsyncMock(return_value=0)
+
+    scheduler, *_ = _make_scheduler(
+        retention_age=timedelta(0),
+        acknowledgement_registry=acknowledgement_registry,
+    )
+    await scheduler._cleanup()
+
+    acknowledgement_registry.cleanup_old.assert_not_called()

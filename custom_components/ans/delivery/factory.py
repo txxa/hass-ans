@@ -26,7 +26,12 @@ from ..const import (
     SYS_STORAGE_HOUSEKEEPING_INTERVAL_HOURS,
 )
 from ..models import TaskOutcome
-from ..persistence.file import DeliveryAttemptLog, NotificationRegistry, RetryQueue
+from ..persistence.file import (
+    AcknowledgementRegistry,
+    DeliveryAttemptLog,
+    NotificationRegistry,
+    RetryQueue,
+)
 from ..persistence.housekeeping import HousekeepingScheduler
 from ..persistence.volume_restoration import VolumeRestorationRegistry
 from .deduplication import DeduplicationService
@@ -58,6 +63,7 @@ class ANSSystem:
     notification_registry: NotificationRegistry
     attempt_log: DeliveryAttemptLog
     retry_queue: RetryQueue
+    acknowledgement_registry: AcknowledgementRegistry
     housekeeping_scheduler: HousekeepingScheduler
     deduplication_service: DeduplicationService
 
@@ -229,6 +235,7 @@ def create_system(
     notification_registry = NotificationRegistry(hass, enabled=enable_audit_logging)
     attempt_log = DeliveryAttemptLog(hass, enabled=enable_audit_logging)
     retry_queue = RetryQueue(hass)
+    acknowledgement_registry = AcknowledgementRegistry(hass)
 
     _LOGGER.info(
         "ANS: Audit logging is %s",
@@ -322,6 +329,7 @@ def create_system(
         notification_registry=notification_registry,
         attempt_log=attempt_log,
         retry_queue=retry_queue,
+        acknowledgement_registry=acknowledgement_registry,
         interval=timedelta(hours=SYS_STORAGE_HOUSEKEEPING_INTERVAL_HOURS),
         retention_age=timedelta(days=system_config.storage_retention_days),
     )
@@ -336,6 +344,7 @@ def create_system(
         notification_registry=notification_registry,
         attempt_log=attempt_log,
         retry_queue=retry_queue,
+        acknowledgement_registry=acknowledgement_registry,
         housekeeping_scheduler=housekeeping_scheduler,
         deduplication_service=deduplication_service,
     )

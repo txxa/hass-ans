@@ -226,6 +226,14 @@ class MobileAppDeliveryAdapter(DeliveryAdapter):
             if payload.actions:
                 service_data["data"]["actions"] = list(payload.actions)
 
+            # Set tag for acknowledgement tracking (NH-3).
+            # Prefer an explicit override from channel_data; fall back to the
+            # ANS notification UUID so that mobile_app_notification_action
+            # events can be correlated back to the originating notification.
+            service_data["data"]["tag"] = payload.channel_data.get(
+                "mobile_app", {}
+            ).get("tag") or str(payload.notification_id)
+
             # Call mobile_app notify service
             await self._hass.services.async_call(
                 domain="notify",

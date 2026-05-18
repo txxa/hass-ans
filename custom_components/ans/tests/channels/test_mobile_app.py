@@ -87,10 +87,41 @@ class TestMobileAppDelivery:
     async def test_metadata_merged_into_data(self):
         """Payload metadata key-value pairs must be merged into the 'data' dict."""
         adapter, hass = _make_adapter()
-        payload = make_payload(metadata={"tag": "motion"})
+        payload = make_payload(metadata={"motion_sensor": "front_door"})
         await _deliver(adapter, payload)
         sd = hass.services.async_call.call_args.kwargs["service_data"]
-        assert sd["data"]["tag"] == "motion"
+        assert sd["data"]["motion_sensor"] == "front_door"
+
+
+# ── Acknowledgement tag (NH-3) ─────────────────────────────────────────────────
+
+
+class TestMobileAppAcknowledgementTag:
+    """Verify that data.tag is always set for acknowledgement tracking (NH-3)."""
+
+    async def test_tag_defaults_to_notification_id(self):
+        """Without channel_data override, tag must equal str(payload.notification_id)."""
+        adapter, hass = _make_adapter()
+        payload = make_payload()
+        await _deliver(adapter, payload)
+        sd = hass.services.async_call.call_args.kwargs["service_data"]
+        assert sd["data"]["tag"] == str(payload.notification_id)
+
+    async def test_tag_overridden_by_channel_data(self):
+        """channel_data['mobile_app']['tag'] takes priority over the notification_id default."""
+        adapter, hass = _make_adapter()
+        payload = make_payload(channel_data={"mobile_app": {"tag": "custom-tag"}})
+        await _deliver(adapter, payload)
+        sd = hass.services.async_call.call_args.kwargs["service_data"]
+        assert sd["data"]["tag"] == "custom-tag"
+
+    async def test_tag_present_without_metadata(self):
+        """tag must be present even when the payload has no metadata."""
+        adapter, hass = _make_adapter()
+        payload = make_payload()  # no metadata
+        await _deliver(adapter, payload)
+        sd = hass.services.async_call.call_args.kwargs["service_data"]
+        assert "tag" in sd["data"]
 
 
 # ── Error handling ─────────────────────────────────────────────────────────────
@@ -249,13 +280,22 @@ class TestMobileAppActions:
         assert sd["data"]["actions"] == actions
 
     async def test_actions_with_metadata(self):
-        """Actions and metadata both appear in service_data['data'] without conflict."""
+        """Actions appear in service_data['data'] alongside other metadata.
+
+        Note: the 'tag' field is reserved for acknowledgement tracking (NH-3).
+        When metadata contains 'tag', the ack-tracking tag (notification_id by default)
+        takes precedence and overwrites the metadata value.
+        """
         adapter, hass = _make_adapter()
         actions = [{"action": "ok", "title": "OK"}]
-        payload = make_payload(metadata={"tag": "motion"}, actions=actions)
+        payload = make_payload(
+            metadata={"tag": "motion", "sensor": "door"}, actions=actions
+        )
         await _deliver(adapter, payload)
         sd = hass.services.async_call.call_args.kwargs["service_data"]
-        assert sd["data"]["tag"] == "motion"
+        # tag is overwritten by ack-tracking logic (notification_id wins over metadata tag)
+        assert sd["data"]["tag"] == str(payload.notification_id)
+        assert sd["data"]["sensor"] == "door"
         assert sd["data"]["actions"] == actions
 
     async def test_actions_list_is_a_copy(self):

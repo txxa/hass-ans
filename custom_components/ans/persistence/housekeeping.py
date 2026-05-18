@@ -7,7 +7,12 @@ import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 
-from .file import DeliveryAttemptLog, NotificationRegistry, RetryQueue
+from .file import (
+    AcknowledgementRegistry,
+    DeliveryAttemptLog,
+    NotificationRegistry,
+    RetryQueue,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -20,6 +25,7 @@ class HousekeepingScheduler:
         notification_registry: NotificationRegistry,
         attempt_log: DeliveryAttemptLog,
         retry_queue: RetryQueue,
+        acknowledgement_registry: AcknowledgementRegistry | None = None,
         interval: timedelta = timedelta(hours=1),
         retention_age: timedelta = timedelta(days=30),
     ) -> None:
@@ -29,6 +35,7 @@ class HousekeepingScheduler:
             notification_registry: Notification registry to clean.
             attempt_log: Attempt log to clean.
             retry_queue: Retry queue to clean.
+            acknowledgement_registry: Acknowledgement registry to clean (optional).
             interval: How often to run cleanup (default: hourly).
             retention_age: Keep records younger than this (default: 30 days).
 
@@ -36,6 +43,7 @@ class HousekeepingScheduler:
         self._notification_registry = notification_registry
         self._attempt_log = attempt_log
         self._retry_queue = retry_queue
+        self._acknowledgement_registry = acknowledgement_registry
         self._interval = interval
         self._retention_age = retention_age
         self._task: asyncio.Task | None = None
@@ -81,10 +89,12 @@ class HousekeepingScheduler:
 
         cutoff = datetime.now(UTC) - self._retention_age
 
-        # Clean up old records from all three stores
+        # Clean up old records from all stores
         await self._notification_registry.cleanup_old(cutoff)
         await self._attempt_log.cleanup_old(cutoff)
         await self._retry_queue.cleanup_old(cutoff)
+        if self._acknowledgement_registry is not None:
+            await self._acknowledgement_registry.cleanup_old(cutoff)
 
         _LOGGER.debug(
             "Housekeeping cleanup completed for records older than %s",

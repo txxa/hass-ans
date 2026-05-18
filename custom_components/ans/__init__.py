@@ -8,11 +8,18 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+from homeassistant.components.persistent_notification import (
+    SIGNAL_PERSISTENT_NOTIFICATIONS_UPDATED,
+)
+from homeassistant.components.persistent_notification import (
+    UpdateType as PNUpdateType,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_SERVICE_REGISTERED
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_registry import (
     EVENT_ENTITY_REGISTRY_UPDATED,
     EventEntityRegistryUpdatedData,
@@ -24,6 +31,9 @@ from .channels.channel_manager import ChannelManager
 from .config.repository import ConfigRepository
 from .const import (
     DOMAIN,
+    EVENT_NOTIFICATION_ACKNOWLEDGED,
+    EVENT_NOTIFICATION_DELIVERED,
+    PERSISTENT_NOTIFICATION_CHANNEL,
     REPAIR_ISSUE_STALE_CHANNEL,
     REQUIRED_MP_FEATURES,
     SYS_CONFIG_RETRY_BACKOFF_FACTOR_KEY,
@@ -406,6 +416,150 @@ def _setup_listeners(
     )
 
 
+def _setup_acknowledgement_tracking(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    system: ANSSystem,
+) -> None:
+    """Register event listeners for notification acknowledgement tracking (NH-3).
+
+    Three listeners are registered:
+
+    1. ``ans_notification_delivered`` — when a mobile_app or
+       persistent_notification delivery succeeds, add the notification_id to
+       an in-memory ``_pending_acks`` set so subsequent acknowledgement events
+       can be correlated.
+
+    2. ``mobile_app_notification_action`` — fired by the HA mobile companion app
+       when the user taps any action button.  If the ``tag`` field matches a
+       pending notification_id the acknowledgement is recorded and
+       ``ans_notification_acknowledged`` is fired.
+
+    3. ``persistent_notification.removed`` — fired when a persistent notification
+       is dismissed in the HA frontend.  If ``notification_id`` matches a pending
+       entry the same acknowledgement flow runs.
+
+    All listeners are unloaded automatically when the config entry is unloaded.
+
+    Parameters
+    ----------
+    hass : HomeAssistant
+        Home Assistant instance.
+    entry : ConfigEntry
+        Config entry whose unload callbacks own the listener lifecycle.
+    system : ANSSystem
+        Active ANS system; provides ``acknowledgement_registry``.
+
+    """
+    acknowledgement_registry = system.acknowledgement_registry
+
+    # In-memory set of notification_ids that have been successfully delivered
+    # to a mobile_app or persistent_notification channel and are therefore
+    # eligible for acknowledgement.  Cleared on HA restart (acceptable for
+    # Phase 4 scope — persistent pending-acks are a future enhancement).
+    _pending_acks: set[str] = set()
+
+    async def _on_notification_delivered(event: Event[Any]) -> None:
+        """Populate pending-acks when a mobile_app or persistent_notification delivers."""
+        channel_id: str = event.data.get("channel_id", "")
+        notification_id: str = event.data.get("notification_id", "")
+        if not notification_id:
+            return
+        if (
+            channel_id.startswith("notify.mobile_app_")
+            or channel_id == PERSISTENT_NOTIFICATION_CHANNEL
+        ):
+            _pending_acks.add(notification_id)
+            _LOGGER.debug(
+                "Added notification_id '%s' to pending acks (channel=%s)",
+                notification_id,
+                channel_id,
+            )
+
+    entry.async_on_unload(
+        hass.bus.async_listen(EVENT_NOTIFICATION_DELIVERED, _on_notification_delivered)
+    )
+
+    async def _on_mobile_app_action(event: Event[Any]) -> None:
+        """Handle mobile_app_notification_action — any tap counts as acknowledgement."""
+        tag: str | None = event.data.get("tag")
+        if not tag or tag not in _pending_acks:
+            return
+
+        acknowledged_at = datetime.now(UTC)
+        recorded = await acknowledgement_registry.record_acknowledgement(
+            notification_id=tag,
+            channel_id="mobile_app",
+            acknowledged_at=acknowledged_at,
+        )
+        if recorded:
+            _pending_acks.discard(tag)
+            hass.bus.async_fire(
+                EVENT_NOTIFICATION_ACKNOWLEDGED,
+                {
+                    "notification_id": tag,
+                    "channel_id": "mobile_app",
+                    "acknowledged_at": acknowledged_at.isoformat(),
+                },
+            )
+            _LOGGER.debug("Notification '%s' acknowledged via mobile_app action", tag)
+
+    entry.async_on_unload(
+        hass.bus.async_listen("mobile_app_notification_action", _on_mobile_app_action)
+    )
+
+    def _on_persistent_notification_removed(
+        update_type: PNUpdateType, notifications: dict
+    ) -> None:
+        """Handle persistent notification dismissal — counts as acknowledgement.
+
+        Called by the HA dispatcher with UpdateType.REMOVED when the user dismisses
+        a persistent notification.  ``notifications`` is the dict of removed entries
+        keyed by notification_id.
+        """
+        if update_type != PNUpdateType.REMOVED:
+            return
+
+        for notification_id in notifications:
+            if notification_id not in _pending_acks:
+                continue
+
+            acknowledged_at = datetime.now(UTC)
+
+            async def _record(
+                nid: str = notification_id, acked_at: datetime = acknowledged_at
+            ) -> None:
+                recorded = await acknowledgement_registry.record_acknowledgement(
+                    notification_id=nid,
+                    channel_id=PERSISTENT_NOTIFICATION_CHANNEL,
+                    acknowledged_at=acked_at,
+                )
+                if recorded:
+                    _pending_acks.discard(nid)
+                    hass.bus.async_fire(
+                        EVENT_NOTIFICATION_ACKNOWLEDGED,
+                        {
+                            "notification_id": nid,
+                            "channel_id": PERSISTENT_NOTIFICATION_CHANNEL,
+                            "acknowledged_at": acked_at.isoformat(),
+                        },
+                    )
+                    _LOGGER.debug(
+                        "Notification '%s' acknowledged via persistent_notification dismissal",
+                        nid,
+                    )
+
+            hass.async_create_task(_record())
+
+    entry.async_on_unload(
+        async_dispatcher_connect(
+            hass,
+            SIGNAL_PERSISTENT_NOTIFICATIONS_UPDATED,
+            _on_persistent_notification_removed,
+        )
+    )
+
+
 # ---------------------------------------------------------------------------
 # Config entry lifecycle
 # ---------------------------------------------------------------------------
@@ -461,6 +615,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         # Phase 5 — HA services
         await _setup_services(hass, system)
+
+        # Acknowledgement tracking (NH-3): listen for mobile_app actions and
+        # persistent_notification dismissals to fire ans_notification_acknowledged.
+        _setup_acknowledgement_tracking(hass, entry, system)
 
         # Finalize setup: clear suppression flag and flush any deferred resync.
         await system.channel_manager.finalize_setup()

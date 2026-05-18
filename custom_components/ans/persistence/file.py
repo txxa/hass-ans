@@ -22,6 +22,7 @@ from uuid import UUID
 from homeassistant.core import HomeAssistant
 
 from custom_components.ans.const import (
+    SYS_STORAGE_ACKNOWLEDGEMENTS_FILE,
     SYS_STORAGE_ATTEMPTS_FILE,
     SYS_STORAGE_NOTIFICATIONS_FILE,
     SYS_STORAGE_RETRIES_FILE,
@@ -420,5 +421,160 @@ class RetryQueue:
         if removed > 0:
             await self._save()
             _LOGGER.debug("Cleaned up %d stale retries", removed)
+
+        return removed
+
+
+class AcknowledgementRegistry:
+    """Registry of notification acknowledgements.
+
+    Stores one entry per notification_id with:
+    - notification_id: ANS UUID string
+    - channel_id: channel through which acknowledgement arrived
+    - acknowledged_at: ISO-format UTC timestamp
+
+    record_acknowledgement() is idempotent: a second call for the same
+    notification_id returns False and does not overwrite the original record.
+    """
+
+    def __init__(self, hass: HomeAssistant, enabled: bool = True) -> None:
+        """Initialize the acknowledgement registry.
+
+        Args:
+            hass: Home Assistant instance.
+            enabled: When False all methods are no-ops (no file I/O).
+
+        """
+        self._hass = hass
+        self._enabled = enabled
+        self._storage_path = Path(
+            hass.config.path(".storage", SYS_STORAGE_ACKNOWLEDGEMENTS_FILE)
+        )
+        self._acks: list[dict] = []
+        self._loaded = False
+
+    async def _load(self) -> None:
+        """Load acknowledgements from JSON file."""
+        if self._loaded:
+            return
+
+        try:
+            if self._storage_path.exists():
+
+                def _read():
+                    with open(self._storage_path, encoding="utf-8") as f:
+                        return json.load(f)
+
+                self._acks = await self._hass.async_add_executor_job(_read)
+                _LOGGER.debug("Loaded %d acknowledgements", len(self._acks))
+        except (OSError, json.JSONDecodeError) as e:
+            _LOGGER.error("Failed to load acknowledgements: %s", e)
+            self._acks = []
+
+        self._loaded = True
+
+    async def _save(self) -> None:
+        """Save acknowledgements to JSON file."""
+        try:
+            self._storage_path.parent.mkdir(parents=True, exist_ok=True)
+
+            def _write():
+                with open(self._storage_path, "w", encoding="utf-8") as f:
+                    json.dump(self._acks, f, indent=2)
+
+            await self._hass.async_add_executor_job(_write)
+        except OSError as e:
+            _LOGGER.error("Failed to save acknowledgements: %s", e)
+
+    async def record_acknowledgement(
+        self,
+        notification_id: str,
+        channel_id: str,
+        acknowledged_at: datetime,
+    ) -> bool:
+        """Record that a notification was acknowledged.
+
+        Args:
+            notification_id: ANS notification UUID (string).
+            channel_id: Channel through which the acknowledgement arrived.
+            acknowledged_at: UTC datetime when the acknowledgement was received.
+
+        Returns:
+            True if the acknowledgement was newly recorded; False if it was
+            already recorded (idempotency guard — no overwrite occurs).
+
+        """
+        if not self._enabled:
+            return False
+
+        await self._load()
+
+        if any(a["notification_id"] == notification_id for a in self._acks):
+            return False
+
+        self._acks.append(
+            {
+                "notification_id": notification_id,
+                "channel_id": channel_id,
+                "acknowledged_at": acknowledged_at.isoformat(),
+            }
+        )
+        await self._save()
+        return True
+
+    async def is_acknowledged(self, notification_id: str) -> bool:
+        """Return True if the notification has been acknowledged.
+
+        Args:
+            notification_id: ANS notification UUID (string).
+
+        """
+        if not self._enabled:
+            return False
+
+        await self._load()
+        return any(a["notification_id"] == notification_id for a in self._acks)
+
+    async def get_acknowledgement(self, notification_id: str) -> dict | None:
+        """Return the acknowledgement record for the given notification, or None.
+
+        Args:
+            notification_id: ANS notification UUID (string).
+
+        """
+        if not self._enabled:
+            return None
+
+        await self._load()
+        return next(
+            (a for a in self._acks if a["notification_id"] == notification_id), None
+        )
+
+    async def cleanup_old(self, before: datetime) -> int:
+        """Remove acknowledgements older than *before*.
+
+        Args:
+            before: UTC cutoff; records with acknowledged_at < before are removed.
+
+        Returns:
+            Number of records removed.
+
+        """
+        if not self._enabled:
+            return 0
+
+        await self._load()
+
+        original_count = len(self._acks)
+        self._acks = [
+            a
+            for a in self._acks
+            if datetime.fromisoformat(a["acknowledged_at"]) >= before
+        ]
+
+        removed = original_count - len(self._acks)
+        if removed > 0:
+            await self._save()
+            _LOGGER.debug("Cleaned up %d old acknowledgements", removed)
 
         return removed

@@ -22,6 +22,9 @@ Practical `ans.send_notification` examples covering every channel type, common h
 - [Actionable Notifications (Mobile App)](#actionable-notifications-mobile-app)
   - [Primary Example: Garage Door — Tap to Close](#primary-example-garage-door--tap-to-close)
   - [Secondary Example: Unknown Person at Door — Unlock or Ignore](#secondary-example-unknown-person-at-door--unlock-or-ignore)
+- [Acknowledgement Tracking](#acknowledgement-tracking)
+  - [Example 1 — Cancel escalation on acknowledgement](#example-1--cancel-escalation-on-acknowledgement)
+  - [Example 2 — Override the mobile tag via channel_data](#example-2--override-the-mobile-tag-via-channel_data)
 - [Do Not Disturb Patterns](#do-not-disturb-patterns)
   - [Pattern 1 — Basic Quiet Hours (REMINDER silenced at midnight)](#pattern-1--basic-quiet-hours-reminder-silenced-at-midnight)
   - [Pattern 2 — Security Always Gets Through](#pattern-2--security-always-gets-through)
@@ -508,10 +511,17 @@ data:
   type: INFO
   criticality: MEDIUM
   metadata:
-    tag: "ha_update"           # Replace previous notification with same tag
     channel: "updates"         # Android notification channel
     importance: low            # Android importance level
 ```
+
+> **Note:** ANS always sets `data.tag` on every Mobile App notification for acknowledgement tracking. The tag defaults to the `notification_id` UUID and can be customised via `channel_data.mobile_app.tag`. Because `data.tag` is set after the metadata merge, any `tag` key in `metadata` will be overwritten. Use `channel_data.mobile_app.tag` when you need to control the tag for notification grouping or replacement:
+>
+> ```yaml
+> channel_data:
+>   mobile_app:
+>     tag: "ha_update"   # Used for notification grouping/replacement and acknowledgement
+> ```
 
 
 ### Persistent Notification — Metadata in Sidebar
@@ -567,8 +577,9 @@ ANS supports HA Companion App action buttons via the top-level `actions` field. 
         message: "The garage door has been open for 10 minutes. Close it?"
         type: WARNING
         criticality: HIGH
-        metadata:
-          tag: "garage_door_open"     # Used to clear the notification on close
+        channel_data:
+          mobile_app:
+            tag: "garage_door_open"     # Used for ack tracking AND to clear the notification
         actions:
           - action: "CLOSE_GARAGE"
             title: "Close Garage"
@@ -617,8 +628,10 @@ ANS supports HA Companion App action buttons via the top-level `actions` field. 
         type: SECURITY
         criticality: HIGH
         metadata:
-          tag: "front_door_unknown"
           image: "/api/camera_proxy/camera.front_door"
+        channel_data:
+          mobile_app:
+            tag: "front_door_unknown"
         actions:
           - action: "UNLOCK_FRONT_DOOR"
             title: "Unlock"
@@ -638,6 +651,85 @@ ANS supports HA Companion App action buttons via the top-level `actions` field. 
       target:
         entity_id: lock.front_door
 ```
+
+
+## Acknowledgement Tracking
+
+ANS fires `ans_notification_acknowledged` when the user taps any action button on a mobile push notification, or dismisses a persistent notification from the HA sidebar. The event payload includes `notification_id`, `channel_id`, and `acknowledged_at`.
+
+For the architectural details, see [How It Works → Acknowledgement Tracking](how-it-works.md#acknowledgement-tracking) and [Advanced → `ans_acknowledgements.json`](advanced.md#ans_acknowledgementsjson).
+
+### Example 1 — Cancel escalation on acknowledgement
+
+Send an alert; if the user acknowledges within 5 minutes, skip the escalation:
+
+```yaml
+- alias: "Back door open — alert with ack check"
+  trigger:
+    - platform: state
+      entity_id: binary_sensor.back_door
+      to: "on"
+      for: "00:02:00"
+  action:
+    - action: ans.send_notification
+      data:
+        source: "automation.back_door_open"
+        title: "Back Door Open"
+        message: "The back door has been open for 2 minutes."
+        type: SECURITY
+        criticality: HIGH
+      response_variable: ans_result
+
+    # Wait up to 5 minutes for acknowledgement
+    - wait_for_trigger:
+        - platform: event
+          event_type: ans_notification_acknowledged
+          event_data:
+            notification_id: "{{ ans_result.notification_id }}"
+      timeout: "00:05:00"
+      continue_on_timeout: true
+
+    # Skip escalation if acknowledged
+    - condition: template
+      value_template: "{{ wait.trigger is none }}"
+
+    # Escalate — back door still unacknowledged after 5 minutes
+    - action: ans.send_notification
+      data:
+        source: "automation.back_door_open"
+        title: "Back Door Still Open"
+        message: "Back door has been open for 7 minutes with no response."
+        type: SECURITY
+        criticality: CRITICAL
+```
+
+### Example 2 — Override the mobile tag via channel_data
+
+When you want a stable custom tag for notification grouping or replacement (rather than the default UUID), use `channel_data.mobile_app.tag`. The HA Companion App then uses this tag both for grouping/replacement and for ANS acknowledgement tracking:
+
+```yaml
+- alias: "HA update notification with custom tag"
+  trigger:
+    - platform: state
+      entity_id: binary_sensor.updater
+      to: "on"
+  action:
+    - action: ans.send_notification
+      data:
+        source: "automation.ha_update_check"
+        title: "Update Available"
+        message: "Home Assistant {{ states('sensor.latest_version') }} is ready."
+        type: INFO
+        criticality: MEDIUM
+        metadata:
+          channel: "updates"        # Android notification channel
+          importance: low
+        channel_data:
+          mobile_app:
+            tag: "ha_update"        # Replaces any previous "ha_update" notification
+```
+
+When a subsequent update notification fires, the Companion App replaces the previous one (same tag). ANS acknowledgement tracking also uses this tag to correlate taps back to the correct `notification_id`.
 
 
 ## Do Not Disturb Patterns

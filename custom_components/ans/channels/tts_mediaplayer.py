@@ -500,33 +500,6 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
                 error=f"Media player {entity_id} is unavailable, delivery skipped; will retry"
             )
 
-        if state.state == STATE_OFF:
-            _LOGGER.info(
-                "Media player %s is off, requesting turn-on: job_id=%s notification_id=%s "
-                "— will retry after device wakes up",
-                entity_id,
-                job_id,
-                payload.notification_id,
-            )
-            try:
-                await self._hass.services.async_call(
-                    domain="media_player",
-                    service="turn_on",
-                    service_data={"entity_id": entity_id},
-                    blocking=False,
-                )
-            except Exception:  # noqa: BLE001
-                _LOGGER.warning(
-                    "Failed to request turn-on for media player %s: job_id=%s notification_id=%s",
-                    entity_id,
-                    job_id,
-                    payload.notification_id,
-                    exc_info=True,
-                )
-            return self.transient_failure(
-                error=f"Media player {entity_id} is off, turn-on requested; will retry"
-            )
-
         _LOGGER.debug(
             "Media player %s state: %s job_id=%s notification_id=%s",
             entity_id,
@@ -557,6 +530,22 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
         volume_change_needed = current_volume is None or (
             abs(target_volume - float(current_volume)) >= _VOLUME_CHANGE_THRESHOLD
         )
+
+        # When the device is off, skip volume management: the device may not
+        # respond to volume_set while off, and it will restore its own default
+        # volume on wakeup.  Many platforms (e.g. Google Cast) handle wakeup
+        # natively when play_media is called, so the tts.speak below will
+        # wake the device and deliver the audio in a single step.
+        if state.state == STATE_OFF and volume_change_needed:
+            _LOGGER.info(
+                "Media player %s is off — skipping volume management and attempting "
+                "direct TTS delivery (platform may handle wakeup natively): "
+                "job_id=%s notification_id=%s",
+                entity_id,
+                job_id,
+                payload.notification_id,
+            )
+            volume_change_needed = False
 
         # Respect the per-recipient volume management toggle.  When disabled,
         # TTS plays at the current device volume without any capture/set/restore

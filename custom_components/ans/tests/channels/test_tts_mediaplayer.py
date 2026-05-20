@@ -244,11 +244,16 @@ async def test_media_player_not_found_returns_permanent_failure():
     volume_registry.apply_volume.assert_not_called()
 
 
-async def test_media_player_off_returns_transient_failure():
-    """A media player in STATE_OFF must request turn-on and yield a transient failure."""
+async def test_media_player_off_attempts_tts_delivery_directly():
+    """A media player in STATE_OFF must attempt TTS delivery directly without turn_on.
+
+    Many platforms (e.g. Google Cast) wake the device natively when play_media is
+    called, so the adapter skips volume management and calls tts.speak immediately.
+    """
     adapter, hass, _, volume_registry = _make_adapter()
     state = MagicMock()
     state.state = STATE_OFF
+    state.attributes = {}  # no volume_level when off
     hass.states.get.return_value = state
 
     result = await adapter.deliver(
@@ -257,30 +262,31 @@ async def test_media_player_off_returns_transient_failure():
         idempotency_key="key-3",
         job_id="job-3",
     )
-    assert result.status == DeliveryStatus.TRANSIENT_FAIL
-    # Verify that turn_on was requested so the device wakes up before retry
+    assert result.status == DeliveryStatus.SUCCESS
+    # tts.speak must have been called — not media_player.turn_on
     hass.services.async_call.assert_called_once()
     call_kwargs = hass.services.async_call.call_args.kwargs
-    assert call_kwargs["domain"] == "media_player"
-    assert call_kwargs["service"] == "turn_on"
-    assert call_kwargs["service_data"] == {"entity_id": "media_player.living_room"}
+    assert call_kwargs["domain"] == "tts"
+    assert call_kwargs["service"] == "speak"
+    # Volume management must have been skipped entirely
+    volume_registry.apply_volume.assert_not_called()
 
 
-async def test_media_player_off_turn_on_error_still_returns_transient_failure():
-    """If turn-on request fails, delivery still returns transient failure without raising."""
+async def test_media_player_off_skips_volume_management():
+    """When device is off, volume management is bypassed to avoid failed volume_set calls."""
     adapter, hass, _, volume_registry = _make_adapter()
     state = MagicMock()
     state.state = STATE_OFF
+    state.attributes = {}
     hass.states.get.return_value = state
-    hass.services.async_call.side_effect = Exception("connection error")
 
-    result = await adapter.deliver(
+    await adapter.deliver(
         payload=_make_payload(),
         contact_info=_make_contact(),
         idempotency_key="key-3b",
         job_id="job-3b",
     )
-    assert result.status == DeliveryStatus.TRANSIENT_FAIL
+    volume_registry.apply_volume.assert_not_called()
 
 
 async def test_media_player_unavailable_returns_transient_failure():

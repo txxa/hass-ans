@@ -12,9 +12,10 @@ This section covers internals and extension points for users who want to underst
   - [`ans_notifications.json`](#ans_notificationsjson)
   - [`ans_delivery_attempts.json`](#ans_delivery_attemptsjson)
   - [`ans_retry_queue.json`](#ans_retry_queuejson)
+  - [`ans_acknowledgements.json`](#ans_acknowledgementsjson)
   - [Housekeeping](#housekeeping)
-- [Signal Messenger — Metadata Reference](#signal-messenger--metadata-reference)
 - [Mobile App — Actions Reference](#mobile-app--actions-reference)
+- [Signal Messenger — Metadata Reference](#signal-messenger--metadata-reference)
 - [TTS — SSML Mode](#tts--ssml-mode)
 - [TTS — Volume Restoration Registry](#tts--volume-restoration-registry)
 - [Rate Limiter — Token Bucket Details](#rate-limiter--token-bucket-details)
@@ -104,9 +105,30 @@ Pending retry tasks. Each entry includes the full serialized task snapshot so it
 }
 ```
 
+
+### `ans_acknowledgements.json`
+
+One entry per acknowledged `notification_id`. Written when ANS observes a mobile app button tap or a persistent notification dismissal.
+
+```json
+{
+  "notification_id": "a1b2c3d4-...",
+  "channel_id": "mobile_app",
+  "acknowledged_at": "2026-04-20T08:20:05+00:00"
+}
+```
+
+| Field | Description |
+|---|---|
+| `notification_id` | UUID of the acknowledged ANS notification. |
+| `channel_id` | `"mobile_app"` or `"notify.persistent_notification"` — the channel through which the acknowledgement was observed. |
+| `acknowledged_at` | ISO-8601 timestamp of the first acknowledgement. Subsequent taps or dismissals for the same `notification_id` do not update this record. |
+
+Records are removed by the hourly housekeeping task when they are older than `storage_retention_days`.
+
 ### Housekeeping
 
-ANS runs a housekeeping task hourly. It removes records older than the configured retention period (`storage_retention_days`, default 7). Setting retention to `0` disables automatic cleanup.
+ANS runs a housekeeping task hourly. It removes records older than the configured retention period (`storage_retention_days`, default 7) from all four storage files. Setting retention to `0` disables automatic cleanup.
 
 
 ## Mobile App — Actions Reference
@@ -124,6 +146,25 @@ Additional Companion App keys (e.g. `destructive: true` for iOS red buttons) can
 **Limits:**
 - Maximum **3** action buttons per notification (enforced by `SEND_NOTIFICATION_SCHEMA`).
 - Action buttons are forwarded **only** by `MobileAppDeliveryAdapter`. All other adapters (Signal, persistent notification, TTS) silently ignore the `actions` field.
+
+**`data.tag` and acknowledgement tracking**
+
+ANS always sets `data.tag` on every Mobile App notification. The tag is `str(notification_id)` by default, or the value of `channel_data.mobile_app.tag` when provided. This tag is the mechanism ANS uses for [acknowledgement tracking](how-it-works.md#acknowledgement-tracking): the HA Companion App includes the tag in every `mobile_app_notification_action` event it fires.
+
+> **Important:** `data.tag` is reserved for this purpose. If `metadata` also contains a `tag` key, the acknowledgement-tracking tag from `channel_data.mobile_app.tag` (or the `notification_id` UUID) will overwrite it. To group or replace mobile notifications via tag, use `channel_data.mobile_app.tag` instead of `metadata.tag`.
+
+```yaml
+service: ans.send_notification
+data:
+  source: "automation.ha_update"
+  title: "Update Ready"
+  message: "Home Assistant 2026.5.0 is available."
+  type: INFO
+  criticality: MEDIUM
+  channel_data:
+    mobile_app:
+      tag: "ha_update"   # Custom tag for notification grouping/replacement
+```
 
 **Receiving the action event:**
 ```yaml

@@ -10,6 +10,7 @@ An introduction to ANS: what it is, what problems it solves, and what you need t
 - [Key Features](#key-features)
   - [Multi-Channel Delivery](#multi-channel-delivery)
   - [Actionable Mobile Notifications](#actionable-mobile-notifications)
+  - [Acknowledgement Tracking](#acknowledgement-tracking)
   - [Criticality-Based Routing](#criticality-based-routing)
   - [Intelligent Filtering](#intelligent-filtering)
   - [Rate Limiting](#rate-limiting)
@@ -45,6 +46,16 @@ Route a single notification to any combination of:
 
 ### Actionable Mobile Notifications
 Mobile push notifications can include up to 3 action buttons defined in the top-level `actions` field of `ans.send_notification`. When a button is tapped, the HA Companion App fires a `mobile_app_notification_action` event on the HA bus. Automations can listen for that event and react — closing a garage door, unlocking a door, or acknowledging an alert. Action buttons are ignored by all other channels (Signal, TTS, persistent notification).
+
+### Acknowledgement Tracking
+ANS tracks whether a delivered notification was acknowledged by the recipient. Two acknowledgement sources are supported:
+
+- **Mobile App**: tapping any action button on a push notification counts as an acknowledgement. ANS correlates the tap via `data.tag` (set to the `notification_id` UUID automatically) and records it in the `AcknowledgementRegistry`.
+- **Persistent Notification**: dismissing a persistent notification in the HA sidebar counts as an acknowledgement. ANS listens for the dismissal signal from the HA dispatcher.
+
+When either source fires, ANS records the acknowledgement and fires an `ans_notification_acknowledged` HA bus event. Automations can correlate the `notification_id` (returned by `ans.send_notification` via `response_variable`) with this event to implement confirmed read receipts, automatic escalation cancellation, or acknowledgement dashboards.
+
+Acknowledgement state is stored in `ans_acknowledgements.json` in HA `.storage/` and survives restarts. Each notification can only be acknowledged once — the registry is idempotent.
 
 ### Criticality-Based Routing
 Every notification carries a criticality level (`LOW`, `MEDIUM`, `HIGH`, `CRITICAL`). Each recipient maps each level to a different set of channels. A LOW-criticality reminder might go only to the HA sidebar; a CRITICAL security alert goes to mobile, Signal, and every speaker in the house.

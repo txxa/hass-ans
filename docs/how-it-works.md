@@ -22,6 +22,7 @@ The `ans.send_notification` service reference and a stage-by-stage walkthrough o
   - [Stage 9 — Persistence](#stage-9--persistence)
 - [Deduplication](#deduplication)
 - [Delivery Outcome Events](#delivery-outcome-events)
+- [Acknowledgement Tracking](#acknowledgement-tracking)
 - [Channel Detection and the Refresh Service](#channel-detection-and-the-refresh-service)
   - [Stale Channel Repairs Issues](#stale-channel-repairs-issues)
 
@@ -50,6 +51,7 @@ data:
 | `criticality` | Yes | select | Priority level. Determines which channels are used per recipient. |
 | `metadata` | No | dict | Optional key-value data. Passed to channel adapters for channel-specific features (e.g. Signal attachments, mobile app notification tags and images). |
 | `actions` | No | list | Optional list of up to 3 action button objects. Each object requires `action` (identifier string) and `title` (button label), with an optional `uri`. Forwarded to Mobile App only; ignored by all other channels. |
+| `channel_data` | No | dict | Adapter-specific delivery overrides keyed by adapter name. Currently supports `mobile_app` key: `{"mobile_app": {"tag": "my-custom-tag"}}` overrides the default `data.tag` used for acknowledgement tracking. When omitted, the `notification_id` UUID is used as the tag. |
 
 ### Notification Types
 
@@ -186,7 +188,7 @@ ANS selects the live adapter for the target channel and calls `deliver()`. Each 
 Calls `persistent_notification.create` in HA. The notification appears in the sidebar immediately. Metadata key-value pairs are appended to the message body.
 
 **Mobile App**
-Calls `notify.mobile_app_{device_id}`. The `title` and `message` are sent as-is. The full `metadata` dict is passed through as the `data:` payload, so all standard [HA Companion App notification features](https://companion.home-assistant.io/docs/notifications/notifications-basic/) (tags, channels, images) work via `metadata`. If the `actions` field is non-empty, ANS also includes it in the `data:` payload, enabling action buttons on the notification. See [Actionable Notifications](usage-examples.md#actionable-notifications-mobile-app) for usage examples.
+Calls `notify.mobile_app_{device_id}`. The `title` and `message` are sent as-is. The full `metadata` dict is passed through as the `data:` payload, so all standard [HA Companion App notification features](https://companion.home-assistant.io/docs/notifications/notifications-basic/) (channels, images) work via `metadata`. If the `actions` field is non-empty, ANS also includes it in the `data:` payload, enabling action buttons on the notification. ANS always sets `data.tag` to the `notification_id` UUID (or to `channel_data.mobile_app.tag` when provided) for acknowledgement tracking — this means tapping any action button can be correlated back to the original notification. Note that if `metadata` also contains a `tag` key, the acknowledgement-tracking tag wins. See [Actionable Notifications](usage-examples.md#actionable-notifications-mobile-app) for usage examples.
 
 **Signal Messenger**
 Calls `notify.signal` with the recipient's phone number. When `text_mode: styled` is set in metadata (or when a title is present without an explicit mode), the message is formatted with bold title (`**Title**`). Supports file attachments (`attachments:` list of local paths) and image URLs (`urls:` list) via metadata.
@@ -311,6 +313,46 @@ response_variable: ans_result
 ```
 
 Events fire after persistence, so the audit log already contains the matching record by the time your automation reacts. See [Usage Examples](usage-examples.md#reacting-to-delivery-outcomes) for full automation patterns and [Payload Reference](advanced.md#delivery-outcome-events--payload-reference) for exact field definitions.
+
+---
+
+## Acknowledgement Tracking
+
+After a notification is delivered, ANS monitors for user acknowledgement and fires an `ans_notification_acknowledged` HA bus event when one is detected.
+
+### Trigger Sources
+
+**Mobile App — button tap**
+When a push notification is delivered via `MobileAppDeliveryAdapter`, ANS always sets `data.tag` on the notification to the `notification_id` UUID (the `channel_data.mobile_app.tag` field can override this). The HA Companion App includes the tag in every `mobile_app_notification_action` event it fires, regardless of which button was tapped. ANS listens for this event and checks whether the tag matches a pending delivery — if it does, the notification is acknowledged.
+
+**Persistent Notification — sidebar dismissal**
+When a persistent notification is dismissed from the HA sidebar, the HA dispatcher sends `SIGNAL_PERSISTENT_NOTIFICATIONS_UPDATED` with `UpdateType.REMOVED`. ANS connects to this signal via `async_dispatcher_connect` and checks whether the dismissed notification's ID corresponds to a pending ANS delivery.
+
+### Event Payload
+
+```json
+{
+    "notification_id": "<uuid-v4>",
+    "channel_id": "mobile_app" | "notify.persistent_notification",
+    "acknowledged_at": "2026-05-20T10:30:00+00:00"
+}
+```
+
+### Idempotency
+
+Each `notification_id` can be acknowledged only once. The first acknowledgement wins; subsequent acknowledgements for the same notification are silently discarded. `AcknowledgementRegistry` persists acknowledgements to `ans_acknowledgements.json` in HA `.storage/`, and they survive HA restarts. Housekeeping removes records older than the configured retention period.
+
+### Pending-Acks Scope
+
+The in-memory pending-acks set is populated by `ans_notification_delivered` events. It is not persisted — HA restarts clear it. Notifications delivered before the last restart will not fire `ans_notification_acknowledged` even if the user taps or dismisses after restart. This is expected behaviour for the current scope.
+
+### Limitations
+
+- Acknowledgement tracking is only supported for **Mobile App** and **Persistent Notification** channels.
+- Signal, TTS, and other adapters have no interaction model that ANS can observe.
+- Acknowledgement requires the delivery event to have been observed in the current HA session.
+
+See [Usage Examples → Acknowledgement Tracking](usage-examples.md#acknowledgement-tracking) for automation patterns and [Advanced → Storage Files](advanced.md#ans_acknowledgementsJSON) for storage details.
 
 ---
 

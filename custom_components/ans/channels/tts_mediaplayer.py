@@ -536,7 +536,7 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
         # volume on wakeup.  Many platforms (e.g. Google Cast) handle wakeup
         # natively when play_media is called, so the tts.speak below will
         # wake the device and deliver the audio in a single step.
-        if state.state == STATE_OFF and volume_change_needed:
+        if state.state == STATE_OFF:
             _LOGGER.info(
                 "Media player %s is off — skipping volume management and attempting "
                 "direct TTS delivery (platform may handle wakeup natively): "

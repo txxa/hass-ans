@@ -273,11 +273,13 @@ async def test_media_player_off_attempts_tts_delivery_directly():
 
 
 async def test_media_player_off_skips_volume_management():
-    """When device is off, volume management is bypassed to avoid failed volume_set calls."""
+    """When device is off, volume management is bypassed even when target differs from current."""
     adapter, hass, _, volume_registry = _make_adapter()
     state = MagicMock()
     state.state = STATE_OFF
-    state.attributes = {}
+    # Provide a volume_level that differs from the target so volume_change_needed
+    # would normally be True — but the off-device bypass should still suppress it.
+    state.attributes = {"volume_level": 0.1}
     hass.states.get.return_value = state
 
     await adapter.deliver(

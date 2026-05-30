@@ -344,11 +344,11 @@
             "fields": {
                 "source": {
                     "name": "Source",
-                    "description": "La source ou l'origine de la notification (ex. : \"home_assistant\", \"alarm\", \"security_system\")."
+                    "description": "Origine de la notification (ex. : \"home_assistant\", \"security_system\"). Utilisé pour le filtrage et la journalisation."
                 },
                 "title": {
                     "name": "Titre",
-                    "description": "Le titre ou l'objet de la notification."
+                    "description": "L'objet de la notification."
                 },
                 "message": {
                     "name": "Message",
@@ -356,19 +356,39 @@
                 },
                 "type": {
                     "name": "Type",
-                    "description": "Le type ou la catégorie de la notification."
+                    "description": "Catégorie de la notification, utilisée pour le filtrage de livraison et le routage."
                 },
                 "criticality": {
                     "name": "Criticité",
-                    "description": "Le niveau de criticité ou de priorité de la notification."
+                    "description": "Niveau de priorité de la notification, utilisé pour le filtrage de livraison et la sélection de canal."
                 },
-                "metadata": {
-                    "name": "Métadonnées",
-                    "description": "Métadonnées personnalisées facultatives associées à la notification (sous forme de dictionnaire clé-valeur)."
+                "image": {
+                    "name": "Image",
+                    "description": "Image à inclure dans la notification. Accepte une URL http/https ou un chemin HA-relatif commençant par / (ex. : /local/snapshot.jpg, /api/camera_proxy/camera.front_door). Application mobile : http/https uniquement — les chemins locaux ne sont pas transmis aux serveurs push. Notification persistante : une URL http/https est rendue comme lien cliquable vers le nom de fichier ; un chemin local comme image Markdown intégrée. Signal : transmis comme pièce jointe ou URL. Les URL sans segment de chemin de fichier sont ignorées avec un avertissement."
+                },
+                "video": {
+                    "name": "Vidéo",
+                    "description": "Fichier vidéo à inclure dans la notification. Accepte une URL http/https ou un chemin HA-relatif commençant par /. Rendu comme lien cliquable vers le nom de fichier dans les notifications persistantes. Transmis comme pièce jointe ou URL dans Signal. Non pris en charge par l'adaptateur application mobile. Les URL sans segment de chemin de fichier sont ignorées avec un avertissement."
+                },
+                "file": {
+                    "name": "Fichier",
+                    "description": "Fichier à inclure dans la notification. Accepte une URL http/https ou un chemin HA-relatif commençant par /. Rendu comme lien cliquable vers le nom de fichier dans les notifications persistantes. Transmis comme pièce jointe ou URL dans Signal. Non pris en charge par l'adaptateur application mobile. Les URL sans segment de chemin de fichier sont ignorées avec un avertissement."
+                },
+                "link": {
+                    "name": "Lien",
+                    "description": "URL HTTP/HTTPS pour l'action de tap de la notification. Application mobile : définit data.url (iOS/macOS) et data.clickAction (Android). Notification persistante : rendu comme lien [Details] dans le corps du message. Signal : ajouté au message. Prioritaire sur context.entity pour la destination de tap mobile."
+                },
+                "context": {
+                    "name": "Contexte",
+                    "description": "Métadonnées sémantiques à joindre à cette notification. Utilisez la clé entity pour associer une entité HA (ex. : binary_sensor.front_door) : l'application mobile l'utilise comme destination de tap (deep-link entityId) quand aucun lien n'est défini, et les notifications persistantes lient automatiquement toute valeur de contexte correspondant à un identifiant d'entité connu. Les clés supplémentaires (camera, zone, device, ...) sont ajoutées au corps de la notification."
                 },
                 "actions": {
-                    "name": "Actions",
-                    "description": "Liste optionnelle de boutons d'action (application mobile uniquement, max. 3). Chaque entrée nécessite un identifiant `action` et un `title` ; `uri` est facultatif. Appuyer sur une action déclenche un événement `mobile_app_notification_action`. Ignoré par les canaux non mobiles."
+                    "name": "Boutons d'action",
+                    "description": "Boutons d'action à afficher sur la notification (application mobile uniquement, maximum 3). Chaque entrée nécessite un identifiant action et un title ; uri est facultatif. Appuyer déclenche un événement mobile_app_notification_action que les automatisations peuvent écouter. Ignoré par les canaux Signal, TTS et notifications persistantes."
+                },
+                "channel_data": {
+                    "name": "Données de canal (Avancé)",
+                    "description": "Dictionnaire plat de remplacements de livraison spécifiques à l'adaptateur, fusionné sur les champs standard. Chaque adaptateur ne lit que les clés qu'il reconnaît et ignore silencieusement les autres. Clés application mobile : tag, importance, channel, vibrationPattern, sound, badge, sticky, persistent, alert_once, car_ui, subtitle. Clés Signal : text_mode (\"normal\"/\"styled\"), attachments (liste de chemins locaux), urls (liste d'URL en pièces jointes), verify_ssl (bool)."
                 }
             }
         },

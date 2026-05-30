@@ -36,7 +36,7 @@ from ..conftest import make_channel_info, make_payload, make_policy, make_task
 
 
 class TestNotificationPayload:
-    """Verify NotificationPayload is frozen, all fields are accessible, and metadata defaults to an empty dict."""
+    """Verify NotificationPayload is frozen, all fields are accessible, and context defaults to an empty dict."""
 
     def test_frozen(self):
         """NotificationPayload is frozen — mutating a field raises AttributeError or TypeError."""
@@ -55,18 +55,18 @@ class TestNotificationPayload:
             type=NotificationType.ALERT,
             criticality=NotificationCriticality.HIGH,
             created_at=ts,
-            metadata={"key": "val"},
+            context={"key": "val"},
         )
         assert p.notification_id == "nid-1"
         assert p.source == "ha.automation"
         assert p.type == NotificationType.ALERT
         assert p.criticality == NotificationCriticality.HIGH
-        assert p.metadata == {"key": "val"}
+        assert p.context == {"key": "val"}
 
-    def test_metadata_defaults_to_empty_dict(self):
-        """When metadata is not supplied, it defaults to an empty dict."""
+    def test_context_defaults_to_empty_dict(self):
+        """When context is not supplied, it defaults to an empty dict."""
         p = make_payload()
-        assert isinstance(p.metadata, dict)
+        assert isinstance(p.context, dict)
 
 
 # ---------------------------------------------------------------------------

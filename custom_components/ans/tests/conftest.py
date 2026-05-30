@@ -36,7 +36,7 @@ def make_payload(**overrides) -> NotificationPayload:
         "type": NotificationType.INFO,
         "criticality": NotificationCriticality.LOW,
         "created_at": datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC),
-        "metadata": {},
+        "context": {},
     }
     defaults.update(overrides)
     return NotificationPayload(**defaults)

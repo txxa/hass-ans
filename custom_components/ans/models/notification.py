@@ -43,12 +43,21 @@ class NotificationPayload:
     criticality: NotificationCriticality
     created_at: datetime
     # --- optional payload fields ---
-    # metadata:     user-supplied semantic data (entity_id, camera name, …)
-    # actions:      interactive response options — notification content consumed by
-    #               capable adapters (e.g. MobileAppDeliveryAdapter); ignored by others
-    # channel_data: adapter-specific delivery directives keyed by adapter type
-    #               (e.g. {"mobile_app": {"tag": "..."}}); reserved for future items
-    #               such as NH-3 (acknowledgement tracking) — not yet in service schema
-    metadata: dict[str, Any] = field(default_factory=dict)
+    # context:      semantic correlation data (entity_id, camera name, zone, …)
+    #               never interpreted by delivery adapters — ANS-internal only
+    # link:         URL to open when the notification is tapped (http/https only)
+    # image:        URL or local HA path to an image attachment
+    # video:        URL or local HA path to a video attachment
+    # file:         URL or local HA path to a file attachment
+    # Use context["entity"] for the subject entity (e.g. binary_sensor.front_door).
+    # actions:      interactive response options — consumed by capable adapters
+    #               (e.g. MobileAppDeliveryAdapter); ignored by others
+    # channel_data: flat adapter-specific delivery overrides (tag, importance, …)
+    #               each adapter reads only its known keys and ignores the rest
+    context: dict[str, Any] = field(default_factory=dict)
+    link: str | None = None
+    image: str | None = None
+    video: str | None = None
+    file: str | None = None
     actions: list[dict[str, Any]] = field(default_factory=list)
     channel_data: dict[str, Any] = field(default_factory=dict)

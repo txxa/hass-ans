@@ -22,6 +22,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import voluptuous as vol
 
 from ..const import DOMAIN, RCPT_MAX_RATE_LIMIT
 from ..exceptions import ConfigEntryNotFoundError
@@ -30,9 +31,12 @@ from ..helper import (
     channel_info_to_select_options,
     check_recipient_name_availability,
     dict_to_select_options,
+    entity_url_path,
     get_main_entry,
     get_not_configured_ha_users,
     get_subentries,
+    media_label,
+    validate_media_path,
 )
 from ..models import ChannelInfo, ChannelScope
 
@@ -72,6 +76,107 @@ def _make_ha_user(uid: str, name: str | None = "Alice") -> MagicMock:
     user.id = uid
     user.name = name
     return user
+
+
+# ---------------------------------------------------------------------------
+# entity_url_path
+# ---------------------------------------------------------------------------
+
+
+class TestEntityUrlPath:
+    """Verify entity_url_path() returns the correct HA-relative history URL."""
+
+    def test_returns_history_url_for_entity(self):
+        """Standard entity ID produces the expected history page path."""
+        assert entity_url_path("binary_sensor.front_door") == (
+            "/history?entity_id=binary_sensor.front_door"
+        )
+
+    def test_path_starts_with_slash(self):
+        """Path must start with / so it works as a relative URL in both web and app contexts."""
+        assert entity_url_path("sensor.temperature").startswith("/")
+
+    def test_entity_id_preserved_verbatim(self):
+        """Entity ID is embedded verbatim — no encoding or transformation applied."""
+        entity_id = "light.living_room_lamp_1"
+        assert entity_id in entity_url_path(entity_id)
+
+
+# ---------------------------------------------------------------------------
+# media_label
+# ---------------------------------------------------------------------------
+
+
+class TestMediaLabel:
+    """Verify media_label() returns the filename portion of a URL or local path."""
+
+    def test_http_url_returns_filename(self):
+        """A standard http URL yields just the filename."""
+        assert media_label("http://example.com/img.jpg") == "img.jpg"
+
+    def test_https_url_returns_filename(self):
+        """A standard https URL yields just the filename."""
+        assert media_label("https://example.com/clip.mp4") == "clip.mp4"
+
+    def test_local_path_returns_filename(self):
+        """A local HA-relative path yields just the filename."""
+        assert media_label("/local/snapshot.jpg") == "snapshot.jpg"
+
+    def test_bare_domain_url_returns_full_url(self):
+        """A URL with no path segment returns the original URL (sentinel for 'no filename')."""
+        url = "https://example.com"
+        assert media_label(url) == url
+
+    def test_trailing_slash_url_returns_full_url(self):
+        """A URL whose path is only a trailing slash returns the original URL."""
+        url = "https://example.com/"
+        assert media_label(url) == url
+
+    def test_path_without_extension_returns_last_segment(self):
+        """A path without a file extension returns the last path segment."""
+        assert (
+            media_label("https://example.com/api/camera_proxy/camera.front")
+            == "camera.front"
+        )
+
+
+# ---------------------------------------------------------------------------
+# validate_media_path
+# ---------------------------------------------------------------------------
+
+
+class TestValidateMediaPath:
+    """Verify validate_media_path() accepts http/https URLs and local HA paths."""
+
+    def test_accepts_http_url(self):
+        """An http:// URL is passed through unchanged."""
+        result = validate_media_path("http://example.com/image.jpg")
+        assert result == "http://example.com/image.jpg"
+
+    def test_accepts_https_url(self):
+        """An https:// URL is passed through unchanged."""
+        result = validate_media_path("https://example.com/image.jpg")
+        assert result == "https://example.com/image.jpg"
+
+    def test_accepts_local_path(self):
+        """A /local/ path (served by HA's www/ folder) is accepted."""
+        result = validate_media_path("/local/snapshot.jpg")
+        assert result == "/local/snapshot.jpg"
+
+    def test_accepts_api_path(self):
+        """A /api/ camera proxy path is accepted."""
+        result = validate_media_path("/api/camera_proxy/camera.front")
+        assert result == "/api/camera_proxy/camera.front"
+
+    def test_rejects_plain_string(self):
+        """A bare string with no scheme or leading slash raises vol.Invalid."""
+        with pytest.raises(vol.Invalid):
+            validate_media_path("image.jpg")
+
+    def test_rejects_ftp_url(self):
+        """An ftp:// URL raises vol.Invalid (only http/https allowed)."""
+        with pytest.raises(vol.Invalid):
+            validate_media_path("ftp://files.example.com/image.jpg")
 
 
 # ---------------------------------------------------------------------------

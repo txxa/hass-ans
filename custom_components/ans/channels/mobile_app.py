@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -15,6 +14,7 @@ from homeassistant.exceptions import (
 )
 
 from ..models import DeliveryResult, NotificationPayload, RecipientContactInfo
+from ..helper import media_label
 from .base import (
     AdapterFactory,
     AdapterMetadata,
@@ -213,26 +213,52 @@ class MobileAppDeliveryAdapter(DeliveryAdapter):
                 "message": payload.message,
             }
 
-            # Add metadata as data payload if present
-            if payload.metadata:
-                service_data["data"] = copy.deepcopy(payload.metadata)
-                # Add idempotency key to data for tracking
-                service_data["data"]["idempotency_key"] = idempotency_key
-            else:
-                service_data["data"] = {"idempotency_key": idempotency_key}
+            # Build the nested data dict starting from empty.
+            # Explicit rich-content fields are added first; channel_data keys
+            # override them if present; idempotency_key is always forced last.
+            data: dict[str, Any] = {}
+
+            # Rich-content fields
+            if payload.image and payload.image.startswith(("http://", "https://")):
+                if media_label(payload.image) == payload.image:
+                    _LOGGER.warning(
+                        "Skipping image URL with no filename segment for "
+                        "notification_id=%s: %s",
+                        payload.notification_id,
+                        payload.image,
+                    )
+                else:
+                    data["image"] = payload.image
+
+            # Tap action URL — set on both iOS (url) and Android (clickAction).
+            # Both keys accept the same values: full URLs, relative HA paths,
+            # and companion-app schemes such as entityId:<entity_id>.
+            _tap_url: str | None = None
+            if payload.link:
+                _tap_url = payload.link
+            elif _entity := payload.context.get("entity"):
+                _tap_url = f"entityId:{_entity}"
+            if _tap_url:
+                data["url"] = _tap_url  # iOS / macOS
+                data["clickAction"] = _tap_url  # Android
+
+            # channel_data flat merge — overrides image/url set above
+            data.update(payload.channel_data)
+
+            # Set tag for acknowledgement tracking (NH-3).
+            # channel_data may have supplied 'tag'; fall back to the ANS UUID.
+            if "tag" not in data:
+                data["tag"] = str(payload.notification_id)
 
             # Forward action buttons if the notification defines any.
             # Non-mobile-app adapters silently ignore payload.actions.
             if payload.actions:
-                service_data["data"]["actions"] = list(payload.actions)
+                data["actions"] = list(payload.actions)
 
-            # Set tag for acknowledgement tracking (NH-3).
-            # Prefer an explicit override from channel_data; fall back to the
-            # ANS notification UUID so that mobile_app_notification_action
-            # events can be correlated back to the originating notification.
-            service_data["data"]["tag"] = payload.channel_data.get(
-                "mobile_app", {}
-            ).get("tag") or str(payload.notification_id)
+            # idempotency_key is always set last — cannot be overridden
+            data["idempotency_key"] = idempotency_key
+
+            service_data["data"] = data
 
             # Call mobile_app notify service
             await self._hass.services.async_call(

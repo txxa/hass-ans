@@ -344,11 +344,11 @@
             "fields": {
                 "source": {
                     "name": "Quelle",
-                    "description": "Die Quelle oder der Ursprung der Benachrichtigung (z. B. \"home_assistant\", \"alarm\", \"security_system\")."
+                    "description": "Ursprung der Benachrichtigung (z. B. \"home_assistant\", \"security_system\"). Wird für Filterung und Protokollierung verwendet."
                 },
                 "title": {
                     "name": "Titel",
-                    "description": "Der Titel oder die Betreffzeile der Benachrichtigung."
+                    "description": "Die Betreffzeile der Benachrichtigung."
                 },
                 "message": {
                     "name": "Nachricht",
@@ -356,19 +356,39 @@
                 },
                 "type": {
                     "name": "Typ",
-                    "description": "Der Typ oder die Kategorie der Benachrichtigung."
+                    "description": "Kategorie der Benachrichtigung, wird für Zustellungsfilterung und Routing verwendet."
                 },
                 "criticality": {
                     "name": "Dringlichkeit",
-                    "description": "Die Dringlichkeit oder Prioritätsstufe der Benachrichtigung."
+                    "description": "Prioritätsstufe der Benachrichtigung, wird für Zustellungsfilterung und Kanalauswahl verwendet."
                 },
-                "metadata": {
-                    "name": "Metadaten",
-                    "description": "Optionale benutzerdefinierte Metadaten zur Benachrichtigung (als Schlüssel-Wert-Wörterbuch)."
+                "image": {
+                    "name": "Bild",
+                    "description": "Bild zur Benachrichtigung. Akzeptiert eine http/https-URL oder einen HA-relativen Pfad ab / (z. B. /local/snapshot.jpg, /api/camera_proxy/camera.front_door). Mobile App: nur http/https — lokale Pfade werden nicht an Push-Server weitergeleitet. Persistente Benachrichtigung: eine http/https-URL wird als anklickbarer Dateiname-Link gerendert; ein lokaler Pfad als eingebettetes Markdown-Bild. Signal: wird als Anhang oder URL weitergeleitet. URLs ohne Dateipfad-Segment werden mit einer Warnung ignoriert."
+                },
+                "video": {
+                    "name": "Video",
+                    "description": "Videodatei zur Benachrichtigung. Akzeptiert eine http/https-URL oder einen HA-relativen Pfad ab /. Wird als anklickbarer Dateiname-Link in persistenten Benachrichtigungen gerendert. Wird als Anhang oder URL in Signal weitergeleitet. Nicht unterstützt vom Mobile-App-Adapter. URLs ohne Dateipfad-Segment werden mit einer Warnung ignoriert."
+                },
+                "file": {
+                    "name": "Datei",
+                    "description": "Datei zur Benachrichtigung. Akzeptiert eine http/https-URL oder einen HA-relativen Pfad ab /. Wird als anklickbarer Dateiname-Link in persistenten Benachrichtigungen gerendert. Wird als Anhang oder URL in Signal weitergeleitet. Nicht unterstützt vom Mobile-App-Adapter. URLs ohne Dateipfad-Segment werden mit einer Warnung ignoriert."
+                },
+                "link": {
+                    "name": "Link",
+                    "description": "HTTP/HTTPS-URL für die Tipp-Aktion der Benachrichtigung. Mobile App: setzt data.url (iOS/macOS) und data.clickAction (Android). Persistente Benachrichtigung: wird als [Details]-Link im Nachrichtentext gerendert. Signal: wird der Nachricht angehängt. Hat Vorrang vor context.entity als mobiles Tipp-Ziel."
+                },
+                "context": {
+                    "name": "Kontext",
+                    "description": "Semantische Metadaten zur Benachrichtigung. Mit dem Schlüssel entity wird eine HA-Entität verknüpft (z. B. binary_sensor.front_door): Die Mobile App nutzt diese als Tipp-Ziel (entityId-Deep-Link), wenn kein Link gesetzt ist, und persistente Benachrichtigungen verlinken automatisch Kontextwerte, die einer bekannten Entitäts-ID entsprechen. Weitere Schlüssel (camera, zone, device, ...) werden dem Benachrichtigungstext angehängt."
                 },
                 "actions": {
-                    "name": "Aktionen",
-                    "description": "Optionale Liste von Aktionsschaltflächen (nur Mobile App, max. 3). Jeder Eintrag erfordert einen `action`-Bezeichner und einen `title`-Label; `uri` ist optional. Beim Antippen einer Aktion wird ein `mobile_app_notification_action`-Ereignis ausgelöst. Wird von Nicht-Mobile-App-Kanälen ignoriert."
+                    "name": "Aktionsschaltflächen",
+                    "description": "Aktionsschaltflächen für die Benachrichtigung (nur Mobile App, maximal 3). Jeder Eintrag erfordert einen action-Bezeichner und einen title-Label; uri ist optional. Beim Antippen wird ein mobile_app_notification_action-Ereignis ausgelöst, auf das Automationen reagieren können. Wird von Signal-, TTS- und persistenten Benachrichtigungskanälen ignoriert."
+                },
+                "channel_data": {
+                    "name": "Kanaldaten (Erweitert)",
+                    "description": "Flaches Dict mit adapterspezifischen Zustellungsüberschreibungen, das über die Standardfelder gemergt wird. Jeder Adapter liest nur die ihm bekannten Schlüssel und ignoriert den Rest. Mobile-App-Schlüssel: tag, importance, channel, vibrationPattern, sound, badge, sticky, persistent, alert_once, car_ui, subtitle. Signal-Schlüssel: text_mode (\"normal\"/\"styled\"), attachments (Liste lokaler Pfade), urls (Liste von URL-Anhängen), verify_ssl (bool)."
                 }
             }
         },

@@ -274,7 +274,7 @@ class NotificationOrchestrator:
                     "message": payload.message,
                     "type": payload.type.value,
                     "criticality": payload.criticality.value,
-                    "metadata": payload.metadata,
+                    "context": payload.context,
                 },
                 recipients=recipients_data,
             )

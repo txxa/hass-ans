@@ -26,7 +26,8 @@ from ...models.recipient import RecipientContactInfo
 def _make_payload(
     title: str = "",
     message: str = "Hello world",
-    metadata: dict | None = None,
+    channel_data: dict | None = None,
+    **kwargs,
 ) -> NotificationPayload:
     """Build a minimal NotificationPayload for use in signal adapter tests."""
     return NotificationPayload(
@@ -37,7 +38,8 @@ def _make_payload(
         type=NotificationType.INFO,
         criticality=NotificationCriticality.LOW,
         created_at=datetime.now(UTC),
-        metadata=metadata or {},
+        channel_data=channel_data or {},
+        **kwargs,
     )
 
 
@@ -103,7 +105,7 @@ async def test_title_explicit_styled_bold():
     payload = _make_payload(
         title="Alert",
         message="Body text",
-        metadata={"text_mode": "styled"},
+        channel_data={"text_mode": "styled"},
     )
 
     result = await adapter.deliver(
@@ -126,7 +128,7 @@ async def test_title_explicit_normal_no_bold():
     payload = _make_payload(
         title="Alert",
         message="Body text",
-        metadata={"text_mode": "normal"},
+        channel_data={"text_mode": "normal"},
     )
 
     result = await adapter.deliver(
@@ -168,7 +170,7 @@ async def test_no_title_with_metadata_normal_mode():
     payload = _make_payload(
         title="",
         message="Body only",
-        metadata={"text_mode": "normal"},
+        channel_data={"text_mode": "normal"},
     )
 
     result = await adapter.deliver(
@@ -196,7 +198,7 @@ async def test_invalid_text_mode_falls_back_to_normal(caplog):
     payload = _make_payload(
         title="",
         message="Test",
-        metadata={"text_mode": "fancy"},
+        channel_data={"text_mode": "fancy"},
     )
 
     result = await adapter.deliver(
@@ -241,12 +243,12 @@ async def test_missing_phone_permanent_failure():
 
 @pytest.mark.asyncio
 async def test_attachments_and_urls_passed_through():
-    """Attachments and urls in metadata are forwarded to the service call."""
+    """channel_data attachments and urls are forwarded to the service call."""
     adapter, hass = _make_adapter()
     payload = _make_payload(
         title="",
         message="See attached",
-        metadata={
+        channel_data={
             "text_mode": "normal",
             "attachments": ["/config/www/image.jpg"],
             "urls": ["http://example.com/pic.jpg"],
@@ -405,21 +407,141 @@ class TestMaskPhone:
 
 
 # ---------------------------------------------------------------------------
-# Metadata validation warnings
+# Rich content fields (image, video, file, link)
 # ---------------------------------------------------------------------------
 
 
-class TestSignalMetadataValidation:
-    """Verify that invalid metadata field types log warnings and are silently dropped."""
+@pytest.mark.asyncio
+async def test_image_url_goes_to_urls():
+    """payload.image with http(s) URL is placed in service_data['data']['urls']."""
+    adapter, hass = _make_adapter()
+    payload = _make_payload(message="Look", image="https://example.com/photo.jpg")
+
+    result = await adapter.deliver(
+        payload=payload, contact_info=_make_contact(), idempotency_key="k", job_id="j"
+    )
+
+    assert result.status == DeliveryStatus.SUCCESS
+    data = hass.services.async_call.call_args.kwargs["service_data"]["data"]
+    assert "https://example.com/photo.jpg" in data["urls"]
+
+
+@pytest.mark.asyncio
+async def test_image_local_path_goes_to_attachments():
+    """payload.image with local path is placed in service_data['data']['attachments']."""
+    adapter, hass = _make_adapter(config_dir="/config")
+    payload = _make_payload(message="Look", image="/config/www/photo.jpg")
+
+    result = await adapter.deliver(
+        payload=payload, contact_info=_make_contact(), idempotency_key="k", job_id="j"
+    )
+
+    assert result.status == DeliveryStatus.SUCCESS
+    data = hass.services.async_call.call_args.kwargs["service_data"]["data"]
+    assert "/config/www/photo.jpg" in data["attachments"]
+
+
+@pytest.mark.asyncio
+async def test_video_url_goes_to_urls():
+    """payload.video with http(s) URL is placed in service_data['data']['urls']."""
+    adapter, hass = _make_adapter()
+    payload = _make_payload(message="Clip", video="https://example.com/clip.mp4")
+
+    result = await adapter.deliver(
+        payload=payload, contact_info=_make_contact(), idempotency_key="k", job_id="j"
+    )
+
+    assert result.status == DeliveryStatus.SUCCESS
+    data = hass.services.async_call.call_args.kwargs["service_data"]["data"]
+    assert "https://example.com/clip.mp4" in data["urls"]
+
+
+@pytest.mark.asyncio
+async def test_file_url_goes_to_urls():
+    """payload.file with http(s) URL is placed in service_data['data']['urls']."""
+    adapter, hass = _make_adapter()
+    payload = _make_payload(message="Doc", file="https://example.com/report.pdf")
+
+    result = await adapter.deliver(
+        payload=payload, contact_info=_make_contact(), idempotency_key="k", job_id="j"
+    )
+
+    assert result.status == DeliveryStatus.SUCCESS
+    data = hass.services.async_call.call_args.kwargs["service_data"]["data"]
+    assert "https://example.com/report.pdf" in data["urls"]
+
+
+@pytest.mark.asyncio
+async def test_link_appended_to_message_body():
+    """payload.link is appended as a plain text line to the message body."""
+    adapter, hass = _make_adapter()
+    payload = _make_payload(message="See details", link="https://example.com/dash")
+
+    result = await adapter.deliver(
+        payload=payload, contact_info=_make_contact(), idempotency_key="k", job_id="j"
+    )
+
+    assert result.status == DeliveryStatus.SUCCESS
+    msg = hass.services.async_call.call_args.kwargs["service_data"]["message"]
+    assert "https://example.com/dash" in msg
+    assert msg.startswith("See details")
+
+
+@pytest.mark.asyncio
+async def test_link_with_title_appended_after_body():
+    """link appears after the message body even when a title is present."""
+    adapter, hass = _make_adapter()
+    payload = _make_payload(
+        title="Alert", message="Body text", link="https://example.com"
+    )
+
+    result = await adapter.deliver(
+        payload=payload, contact_info=_make_contact(), idempotency_key="k", job_id="j"
+    )
+
+    assert result.status == DeliveryStatus.SUCCESS
+    msg = hass.services.async_call.call_args.kwargs["service_data"]["message"]
+    # title first, then body+link
+    assert msg.index("Body text") < msg.index("https://example.com")
+
+
+@pytest.mark.asyncio
+async def test_multiple_rich_fields_combined():
+    """image, file, and link can all be set simultaneously."""
+    adapter, hass = _make_adapter()
+    payload = _make_payload(
+        message="See below",
+        image="https://example.com/img.jpg",
+        file="https://example.com/doc.pdf",
+        link="https://example.com/dash",
+    )
+
+    result = await adapter.deliver(
+        payload=payload, contact_info=_make_contact(), idempotency_key="k", job_id="j"
+    )
+
+    assert result.status == DeliveryStatus.SUCCESS
+    data = hass.services.async_call.call_args.kwargs["service_data"]["data"]
+    assert "https://example.com/img.jpg" in data["urls"]
+    assert "https://example.com/doc.pdf" in data["urls"]
+
+
+# ---------------------------------------------------------------------------
+# channel_data validation warnings
+# ---------------------------------------------------------------------------
+
+
+class TestSignalChannelDataValidation:
+    """Verify that invalid channel_data field types log warnings and are silently dropped."""
 
     @pytest.mark.asyncio
     async def test_attachments_non_list_logs_warning(self, caplog):
-        """Non-list 'attachments' value logs a warning and is not forwarded."""
+        """Non-list channel_data.attachments logs a warning and is not forwarded."""
         adapter, hass = _make_adapter()
         payload = _make_payload(
             title="",
             message="Test",
-            metadata={"attachments": "/single/path.jpg"},
+            channel_data={"attachments": "/single/path.jpg"},
         )
 
         result = await adapter.deliver(
@@ -430,18 +552,18 @@ class TestSignalMetadataValidation:
         )
 
         assert result.status == DeliveryStatus.SUCCESS
-        assert "attachments must be a list" in caplog.text
+        assert "channel_data.attachments must be a list" in caplog.text
         data = hass.services.async_call.call_args.kwargs["service_data"].get("data", {})
         assert "attachments" not in data
 
     @pytest.mark.asyncio
     async def test_urls_non_list_logs_warning(self, caplog):
-        """Non-list 'urls' value logs a warning and is not forwarded."""
+        """Non-list channel_data.urls logs a warning and is not forwarded."""
         adapter, hass = _make_adapter()
         payload = _make_payload(
             title="",
             message="Test",
-            metadata={"urls": "http://example.com/img.jpg"},
+            channel_data={"urls": "http://example.com/img.jpg"},
         )
 
         result = await adapter.deliver(
@@ -452,18 +574,18 @@ class TestSignalMetadataValidation:
         )
 
         assert result.status == DeliveryStatus.SUCCESS
-        assert "urls must be a list" in caplog.text
+        assert "channel_data.urls must be a list" in caplog.text
         data = hass.services.async_call.call_args.kwargs["service_data"].get("data", {})
         assert "urls" not in data
 
     @pytest.mark.asyncio
     async def test_verify_ssl_non_bool_logs_warning(self, caplog):
-        """Non-boolean 'verify_ssl' value logs a warning and is not forwarded."""
+        """Non-boolean channel_data.verify_ssl logs a warning and is not forwarded."""
         adapter, hass = _make_adapter()
         payload = _make_payload(
             title="",
             message="Test",
-            metadata={"verify_ssl": "yes"},
+            channel_data={"verify_ssl": "yes"},
         )
 
         result = await adapter.deliver(
@@ -474,7 +596,7 @@ class TestSignalMetadataValidation:
         )
 
         assert result.status == DeliveryStatus.SUCCESS
-        assert "verify_ssl must be boolean" in caplog.text
+        assert "channel_data.verify_ssl must be boolean" in caplog.text
         data = hass.services.async_call.call_args.kwargs["service_data"].get("data", {})
         assert "verify_ssl" not in data
 
@@ -494,7 +616,7 @@ class TestSignalAttachmentPathGuard:
         payload = _make_payload(
             title="",
             message="See attached",
-            metadata={"attachments": ["/config/www/snapshot.jpg"]},
+            channel_data={"attachments": ["/config/www/snapshot.jpg"]},
         )
 
         result = await adapter.deliver(
@@ -515,7 +637,7 @@ class TestSignalAttachmentPathGuard:
         payload = _make_payload(
             title="",
             message="Sneaky",
-            metadata={"attachments": ["/etc/passwd"]},
+            channel_data={"attachments": ["/etc/passwd"]},
         )
 
         result = await adapter.deliver(
@@ -542,7 +664,7 @@ class TestSignalAttachmentPathGuard:
         payload = _make_payload(
             title="",
             message="Traversal",
-            metadata={"attachments": ["/config/www/../../etc/passwd"]},
+            channel_data={"attachments": ["/config/www/../../etc/passwd"]},
         )
 
         result = await adapter.deliver(
@@ -576,7 +698,7 @@ class TestSignalAttachmentPathGuard:
         payload = _make_payload(
             title="",
             message="Symlink test",
-            metadata={"attachments": [str(symlink)]},
+            channel_data={"attachments": [str(symlink)]},
         )
 
         result = await adapter.deliver(
@@ -598,7 +720,7 @@ class TestSignalAttachmentPathGuard:
         payload = _make_payload(
             title="",
             message="Mixed",
-            metadata={"attachments": ["/config/valid.jpg", "/etc/passwd"]},
+            channel_data={"attachments": ["/config/valid.jpg", "/etc/passwd"]},
         )
 
         result = await adapter.deliver(
@@ -620,7 +742,7 @@ class TestSignalAttachmentPathGuard:
         payload = _make_payload(
             title="",
             message="No attachments",
-            metadata={"attachments": ["/etc/shadow", "/proc/self/environ"]},
+            channel_data={"attachments": ["/etc/shadow", "/proc/self/environ"]},
         )
 
         result = await adapter.deliver(
@@ -635,3 +757,32 @@ class TestSignalAttachmentPathGuard:
         hass.services.async_call.assert_called_once()
         data = hass.services.async_call.call_args.kwargs["service_data"].get("data", {})
         assert "attachments" not in data
+
+
+# ---------------------------------------------------------------------------
+# Media URL validation (bare-domain URLs)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_bare_domain_image_url_skipped_with_warning(caplog):
+    """An image URL with no filename path segment is not added to urls and a warning is logged."""
+    import logging
+
+    adapter, hass = _make_adapter()
+    payload = _make_payload(message="Look", image="https://example.com")
+
+    with caplog.at_level(
+        logging.WARNING, logger="custom_components.ans.channels.signal"
+    ):
+        result = await adapter.deliver(
+            payload=payload,
+            contact_info=_make_contact(),
+            idempotency_key="k",
+            job_id="j",
+        )
+
+    assert result.status == DeliveryStatus.SUCCESS
+    data = hass.services.async_call.call_args.kwargs["service_data"].get("data", {})
+    assert "urls" not in data
+    assert any("no filename" in r.message for r in caplog.records)

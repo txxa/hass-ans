@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import AsyncMock, MagicMock
 
 from homeassistant.exceptions import (
@@ -95,13 +96,99 @@ class TestPersistentNotificationDelivery:
         sd = hass.services.async_call.call_args.kwargs["service_data"]
         assert sd["notification_id"] == str(payload.notification_id)
 
-    async def test_metadata_appended_to_message(self):
-        """Payload metadata values must be appended to the message body."""
+    async def test_context_appended_to_message(self):
+        """Payload context values must be appended to the message body."""
         adapter, hass = _make_adapter()
-        payload = make_payload(message="Base body", metadata={"sensor": "door"})
+        payload = make_payload(message="Base body", context={"sensor": "door"})
         await _deliver(adapter, payload)
         sd = hass.services.async_call.call_args.kwargs["service_data"]
         assert "door" in sd["message"]
+
+    async def test_image_rendered_as_markdown(self):
+        """payload.image with an http(s) URL is rendered as a [filename] Markdown link."""
+        adapter, hass = _make_adapter()
+        payload = make_payload(image="https://example.com/img.jpg")
+        await _deliver(adapter, payload)
+        sd = hass.services.async_call.call_args.kwargs["service_data"]
+        assert "[img.jpg](https://example.com/img.jpg)" in sd["message"]
+        assert "![image]" not in sd["message"]
+        assert "[View image]" not in sd["message"]
+
+    async def test_video_rendered_as_markdown_link(self):
+        """payload.video is rendered as a [filename] Markdown link in the message."""
+        adapter, hass = _make_adapter()
+        payload = make_payload(video="https://example.com/clip.mp4")
+        await _deliver(adapter, payload)
+        sd = hass.services.async_call.call_args.kwargs["service_data"]
+        assert "[clip.mp4](https://example.com/clip.mp4)" in sd["message"]
+        assert "[Video]" not in sd["message"]
+
+    async def test_file_rendered_as_markdown_link(self):
+        """payload.file is rendered as a [filename] Markdown link in the message."""
+        adapter, hass = _make_adapter()
+        payload = make_payload(file="https://example.com/doc.pdf")
+        await _deliver(adapter, payload)
+        sd = hass.services.async_call.call_args.kwargs["service_data"]
+        assert "[doc.pdf](https://example.com/doc.pdf)" in sd["message"]
+        assert "[File]" not in sd["message"]
+
+    async def test_link_rendered_as_markdown(self):
+        """payload.link is rendered as a [Details] Markdown link in the message."""
+        adapter, hass = _make_adapter()
+        payload = make_payload(link="https://example.com")
+        await _deliver(adapter, payload)
+        sd = hass.services.async_call.call_args.kwargs["service_data"]
+        assert "[Details](https://example.com)" in sd["message"]
+
+    async def test_entity_rendered_as_deep_link(self):
+        """context value matching a known entity ID is auto-linked in the Context section."""
+        adapter, hass = _make_adapter()
+        payload = make_payload(context={"entity": "binary_sensor.door"})
+        await _deliver(adapter, payload)
+        sd = hass.services.async_call.call_args.kwargs["service_data"]
+        assert (
+            "- entity: [binary_sensor.door](/history?entity_id=binary_sensor.door)"
+            in sd["message"]
+        )
+
+    async def test_image_local_path_rendered_as_embed(self):
+        """A /local/ path image is rendered inline as a Markdown image embed."""
+        adapter, hass = _make_adapter()
+        payload = make_payload(image="/local/snapshot.jpg")
+        await _deliver(adapter, payload)
+        sd = hass.services.async_call.call_args.kwargs["service_data"]
+        assert "![image](/local/snapshot.jpg)" in sd["message"]
+        assert "[View image]" not in sd["message"]
+
+    async def test_entity_not_in_ha_states_not_linked(self):
+        """A context value that looks like an entity ID but doesn't exist in HA renders as plain text."""
+        adapter, hass = _make_adapter()
+        hass.states.get.return_value = None
+        payload = make_payload(context={"entity": "binary_sensor.door"})
+        await _deliver(adapter, payload)
+        sd = hass.services.async_call.call_args.kwargs["service_data"]
+        assert "- entity: binary_sensor.door" in sd["message"]
+        assert "/history?entity_id=" not in sd["message"]
+
+    async def test_camera_entity_auto_linked_in_context(self):
+        """Any context value matching a known entity ID is auto-linked, not just 'entity' key."""
+        adapter, hass = _make_adapter()
+        payload = make_payload(context={"camera": "camera.front"})
+        await _deliver(adapter, payload)
+        sd = hass.services.async_call.call_args.kwargs["service_data"]
+        assert (
+            "- camera: [camera.front](/history?entity_id=camera.front)" in sd["message"]
+        )
+
+    async def test_non_entity_context_value_not_linked(self):
+        """Context values that don't match the entity ID pattern render as plain text."""
+        adapter, hass = _make_adapter()
+        payload = make_payload(context={"zone": "home", "count": "5"})
+        await _deliver(adapter, payload)
+        sd = hass.services.async_call.call_args.kwargs["service_data"]
+        assert "- zone: home" in sd["message"]
+        assert "- count: 5" in sd["message"]
+        assert "/history?entity_id=" not in sd["message"]
 
 
 # ── Error handling ─────────────────────────────────────────────────────────────
@@ -186,3 +273,24 @@ class TestPersistentNotificationClassAPI:
             )
             is None
         )
+
+
+# ── Media URL validation ───────────────────────────────────────────────────────
+
+
+class TestMediaUrlValidation:
+    """Verify that image/video/file URLs without a filename segment are skipped with a warning."""
+
+    async def test_bare_domain_image_url_skipped_with_warning(self, caplog):
+        """An image URL with no filename path segment is omitted from the message and a warning is logged."""
+        adapter, hass = _make_adapter()
+        payload = make_payload(image="https://example.com")
+        with caplog.at_level(
+            logging.WARNING,
+            logger="custom_components.ans.channels.persistent_notification",
+        ):
+            await _deliver(adapter, payload)
+        sd = hass.services.async_call.call_args.kwargs["service_data"]
+        assert "https://example.com" not in sd["message"]
+        assert "example.com" not in sd["message"] or "![" not in sd["message"]
+        assert any("no filename" in r.message for r in caplog.records)

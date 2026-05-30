@@ -14,6 +14,7 @@ from homeassistant.exceptions import (
 )
 
 from ..models import DeliveryResult, NotificationPayload, RecipientContactInfo
+from ..helper import media_label
 from .base import (
     AdapterMetadata,
     AdapterType,
@@ -195,76 +196,104 @@ class SignalDeliveryAdapter(DeliveryAdapter):
         """
         data_payload: dict[str, Any] = {}
 
-        if payload.metadata:
-            # Text mode: "normal" or "styled" for formatting.
-            # When a title is present and no explicit text_mode is set,
-            # default to "styled" so the title can be visually highlighted.
-            explicit_text_mode = payload.metadata.get("text_mode")
-            if explicit_text_mode is None:
-                text_mode = "styled" if payload.title else "normal"
-            elif explicit_text_mode in ("normal", "styled"):
-                text_mode = explicit_text_mode
+        # Text mode from channel_data or auto-detect based on title presence.
+        # When a title is present and no explicit text_mode is set, default to
+        # "styled" so the title can be visually highlighted.
+        explicit_text_mode = payload.channel_data.get("text_mode")
+        if explicit_text_mode is None:
+            text_mode = "styled" if payload.title else "normal"
+        elif explicit_text_mode in ("normal", "styled"):
+            text_mode = explicit_text_mode
+        else:
+            _LOGGER.warning(
+                "Invalid text_mode '%s' for notification_id=%s; using 'normal'. "
+                "Valid values: 'normal', 'styled'",
+                explicit_text_mode,
+                payload.notification_id,
+            )
+            text_mode = "normal"
+        data_payload["text_mode"] = text_mode
+
+        # Collect attachments and URLs from the rich-content fields.
+        # Path/URL detection: values starting with http:// or https:// are
+        # treated as URLs; anything else is a local file path and is passed
+        # through _validate_attachment_path() in deliver() before use.
+        attachments: list[str] = []
+        urls: list[str] = []
+
+        for field_value in (payload.image, payload.video, payload.file):
+            if field_value is None:
+                continue
+            if field_value.startswith(("http://", "https://")):
+                if media_label(field_value) == field_value:
+                    _LOGGER.warning(
+                        "Skipping media URL with no filename segment for "
+                        "notification_id=%s: %s",
+                        payload.notification_id,
+                        field_value,
+                    )
+                else:
+                    urls.append(field_value)
+            else:
+                attachments.append(field_value)
+
+        # channel_data extra attachments (additional local paths)
+        cd_attachments = payload.channel_data.get("attachments")
+        if cd_attachments is not None:
+            if isinstance(cd_attachments, list):
+                attachments.extend(cd_attachments)
             else:
                 _LOGGER.warning(
-                    "Invalid text_mode '%s' for notification_id=%s; using 'normal'. "
-                    "Valid values: 'normal', 'styled'",
-                    explicit_text_mode,
+                    "channel_data.attachments must be a list of file paths "
+                    "for notification_id=%s, got: %s",
                     payload.notification_id,
+                    type(cd_attachments).__name__,
                 )
-                text_mode = "normal"
-            data_payload["text_mode"] = text_mode
 
-            # File attachments: list of local file paths
-            if "attachments" in payload.metadata:
-                attachments = payload.metadata["attachments"]
-                if isinstance(attachments, list):
-                    data_payload["attachments"] = attachments
-                else:
-                    _LOGGER.warning(
-                        "attachments must be a list of file paths for notification_id=%s, got: %s",
-                        payload.notification_id,
-                        type(attachments).__name__,
-                    )
+        # channel_data extra URL attachments
+        cd_urls = payload.channel_data.get("urls")
+        if cd_urls is not None:
+            if isinstance(cd_urls, list):
+                urls.extend(cd_urls)
+            else:
+                _LOGGER.warning(
+                    "channel_data.urls must be a list of URLs "
+                    "for notification_id=%s, got: %s",
+                    payload.notification_id,
+                    type(cd_urls).__name__,
+                )
 
-            # URL attachments: list of URLs for remote files
-            if "urls" in payload.metadata:
-                urls = payload.metadata["urls"]
-                if isinstance(urls, list):
-                    data_payload["urls"] = urls
-                else:
-                    _LOGGER.warning(
-                        "urls must be a list of URLs for notification_id=%s, got: %s",
-                        payload.notification_id,
-                        type(urls).__name__,
-                    )
+        if attachments:
+            data_payload["attachments"] = attachments
+        if urls:
+            data_payload["urls"] = urls
 
-            # SSL verification for URL attachments
-            if "verify_ssl" in payload.metadata:
-                verify_ssl = payload.metadata["verify_ssl"]
-                if isinstance(verify_ssl, bool):
-                    data_payload["verify_ssl"] = verify_ssl
-                else:
-                    _LOGGER.warning(
-                        "verify_ssl must be boolean for notification_id=%s, got: %s",
-                        payload.notification_id,
-                        type(verify_ssl).__name__,
-                    )
-        else:
-            # No metadata: auto-upgrade to styled when a title is present so
-            # it is visually highlighted; fall back to plain for body-only messages.
-            text_mode = "styled" if payload.title else "normal"
-            data_payload["text_mode"] = text_mode
+        # SSL verification override from channel_data
+        cd_verify_ssl = payload.channel_data.get("verify_ssl")
+        if cd_verify_ssl is not None:
+            if isinstance(cd_verify_ssl, bool):
+                data_payload["verify_ssl"] = cd_verify_ssl
+            else:
+                _LOGGER.warning(
+                    "channel_data.verify_ssl must be boolean "
+                    "for notification_id=%s, got: %s",
+                    payload.notification_id,
+                    type(cd_verify_ssl).__name__,
+                )
 
-        # Build message string.  Signal has no native title field, so the
-        # title is prepended to the body.  In styled mode the title is
-        # wrapped in **...** to render as bold in the Signal client.
+        # Build message body.  Signal has no native title field, so the title
+        # is prepended.  Append link as a plain text line when set.
+        body = payload.message
+        if payload.link:
+            body = f"{body}\n{payload.link}"
+
         if payload.title:
             if text_mode == "styled":
-                message = f"**{payload.title}**\n\n{payload.message}"
+                message = f"**{payload.title}**\n\n{body}"
             else:
-                message = f"{payload.title}\n\n{payload.message}"
+                message = f"{payload.title}\n\n{body}"
         else:
-            message = payload.message
+            message = body
 
         # Build service data structure
         service_data: dict[str, Any] = {
@@ -289,13 +318,15 @@ class SignalDeliveryAdapter(DeliveryAdapter):
     ) -> DeliveryResult:
         """Deliver notification via Signal messenger notify service.
 
-        Supports all Signal Messenger features through metadata:
-        - text_mode: "normal" or "styled" (enables *italic*, **bold**, ~strikethrough~).
+        Supports rich content via payload fields and channel_data:
+        - image/video/file: URL (http/https) or local path attachment
+        - link: appended as plain text line to the message body
+        - channel_data.text_mode: "normal" or "styled" (enables **bold**, etc.).
           Defaults to "styled" when a title is present so the title is highlighted
           in bold automatically.  Set explicitly to "normal" to opt out.
-        - attachments: list of file paths
-        - urls: list of URLs for remote attachments
-        - verify_ssl: boolean for SSL verification (default: true)
+        - channel_data.attachments: additional local file paths
+        - channel_data.urls: additional URL attachments
+        - channel_data.verify_ssl: boolean for SSL verification (default: true)
 
         Parameters
         ----------

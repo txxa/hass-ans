@@ -40,7 +40,7 @@ def _make_payload(title="Alert", message="Test message") -> NotificationPayload:
         type=NotificationType.INFO,
         criticality=NotificationCriticality.LOW,
         created_at=datetime.now(UTC),
-        metadata={},
+        context={},
     )
 
 

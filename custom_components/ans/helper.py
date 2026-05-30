@@ -13,7 +13,9 @@ module-level functions (``detect_notification_channels``, ``detect_media_players
 from __future__ import annotations
 
 import logging
+import urllib.parse
 
+import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.selector import SelectOptionDict
@@ -27,6 +29,89 @@ _LOGGER = logging.getLogger(__name__)
 # Key names used inside subentry data dictionaries.
 _SUBENTRY_DATA_ID_KEY = "id"
 _SUBENTRY_DATA_NAME_KEY = "name"
+
+# Schemes allowed in user-supplied URL fields (link, image, video, file).
+# javascript:, data:, file://, vbscript:, etc. are rejected at the schema boundary.
+_ALLOWED_URL_SCHEMES: frozenset[str] = frozenset({"http", "https"})
+
+
+def entity_url_path(entity_id: str) -> str:
+    """Return the HA-relative URL path for an entity's history page.
+
+    Used by the persistent-notification adapter to generate in-notification
+    links.  To change the destination, update only this function.
+
+    Args:
+        entity_id: The Home Assistant entity ID (e.g. ``binary_sensor.front_door``).
+
+    Returns:
+        A HA-relative path string, e.g. ``/history?entity_id=binary_sensor.front_door``.
+
+    """
+    return f"/history?entity_id={entity_id}"
+
+
+def validate_url_scheme(value: str) -> str:
+    """Voluptuous validator: accept only http/https URLs.
+
+    Parses the scheme with ``urllib.parse.urlsplit`` and raises
+    ``vol.Invalid`` for any scheme that is not ``http`` or ``https``.
+    Returns *value* unchanged on success.
+
+    Raises:
+        vol.Invalid: When the scheme is absent or not in the allowed set.
+
+    """
+    parsed = urllib.parse.urlsplit(value)
+    if parsed.scheme not in _ALLOWED_URL_SCHEMES:
+        raise vol.Invalid(
+            f"URL scheme '{parsed.scheme}' is not allowed. "
+            f"Only {sorted(_ALLOWED_URL_SCHEMES)} are permitted."
+        )
+    return value
+
+
+def validate_media_path(value: str) -> str:
+    """Voluptuous validator: accept http/https URLs or local HA paths.
+
+    Used for ``image``, ``video``, and ``file`` payload fields that can be
+    either publicly accessible URLs or HA-relative paths
+    (e.g. ``/local/snapshot.jpg``, ``/api/camera_proxy/camera.front``).
+    The ``link`` field uses :func:`validate_url_scheme` (http/https only).
+
+    Raises:
+        vol.Invalid: When the value is neither an http/https URL nor a path
+            starting with ``/``.
+
+    """
+    if value.startswith("/"):
+        return value
+    return validate_url_scheme(value)
+
+
+def media_label(url_or_path: str) -> str:
+    """Return the filename portion of a URL or local path.
+
+    Extracts the last non-empty path segment from *url_or_path* and returns it
+    as a human-readable label for Markdown links.  Works for both remote URLs
+    (``https://example.com/img.jpg`` → ``img.jpg``) and HA-relative local paths
+    (``/local/snapshot.jpg`` → ``snapshot.jpg``).
+
+    When no filename segment can be found (e.g. a bare-domain URL such as
+    ``https://example.com`` or a trailing-slash URL), the original
+    *url_or_path* string is returned unchanged.  Callers can detect this
+    "no filename" sentinel by checking ``media_label(url) == url``.
+
+    Args:
+        url_or_path: An http/https URL or a local path string.
+
+    Returns:
+        The filename component, or *url_or_path* itself when no filename is present.
+
+    """
+    path = urllib.parse.urlparse(url_or_path).path
+    name = path.rstrip("/").rsplit("/", 1)[-1]
+    return name or url_or_path
 
 
 def get_main_entry(hass: HomeAssistant) -> ConfigEntry | None:

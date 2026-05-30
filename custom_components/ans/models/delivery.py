@@ -131,7 +131,13 @@ class NotificationDeliveryTask:
                     )
                 ),
                 created_at=datetime.fromisoformat(payload_data["timestamp"]),
-                metadata=payload_data.get("metadata", {}),
+                context=payload_data.get("context", payload_data.get("metadata", {})),
+                link=payload_data.get("link"),
+                image=payload_data.get("image"),
+                video=payload_data.get("video"),
+                file=payload_data.get("file"),
+                actions=payload_data.get("actions", []),
+                channel_data=payload_data.get("channel_data", {}),
             )
 
             # Reconstruct RecipientNotificationPolicy
@@ -202,7 +208,13 @@ class NotificationDeliveryTask:
                 "type": self.payload.type.value,
                 "criticality": self.payload.criticality.value,
                 "timestamp": self.payload.created_at.isoformat(),
-                "metadata": self.payload.metadata,
+                "context": self.payload.context,
+                "link": self.payload.link,
+                "image": self.payload.image,
+                "video": self.payload.video,
+                "file": self.payload.file,
+                "actions": self.payload.actions,
+                "channel_data": self.payload.channel_data,
             },
             "policy": {
                 "rate_limit": self.policy.rate_limit,

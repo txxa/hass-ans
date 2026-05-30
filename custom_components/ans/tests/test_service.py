@@ -133,8 +133,8 @@ def test_build_payload_invalid_type_raises():
         _build_payload(call)
 
 
-def test_build_payload_with_metadata():
-    """_build_payload() preserves an optional 'metadata' dict as-is in the returned NotificationPayload."""
+def test_build_payload_with_context():
+    """_build_payload() preserves an optional 'context' dict as-is in the returned NotificationPayload."""
 
     call = _make_service_call(
         {
@@ -143,15 +143,15 @@ def test_build_payload_with_metadata():
             "message": "M",
             "type": "INFO",
             "criticality": "LOW",
-            "metadata": {"key": "value"},
+            "context": {"key": "value"},
         }
     )
     payload = _build_payload(call)
-    assert payload.metadata == {"key": "value"}
+    assert payload.context == {"key": "value"}
 
 
-def test_build_payload_without_metadata_defaults_empty():
-    """When 'metadata' is absent from the service call, NotificationPayload.metadata defaults to an empty dict."""
+def test_build_payload_without_context_defaults_empty():
+    """When 'context' is absent from the service call, NotificationPayload.context defaults to an empty dict."""
 
     call = _make_service_call(
         {
@@ -163,7 +163,7 @@ def test_build_payload_without_metadata_defaults_empty():
         }
     )
     payload = _build_payload(call)
-    assert payload.metadata == {}
+    assert payload.context == {}
 
 
 # ---------------------------------------------------------------------------
@@ -208,7 +208,7 @@ class TestBuildPayloadActions:
         assert payload.actions == []
 
     def test_build_payload_channel_data_defaults_empty(self):
-        """channel_data always defaults to an empty dict (not in service schema yet)."""
+        """channel_data defaults to {} when omitted from service call."""
         call = _make_service_call(
             {
                 "source": "test",
@@ -220,6 +220,123 @@ class TestBuildPayloadActions:
         )
         payload = _build_payload(call)
         assert payload.channel_data == {}
+
+    def test_build_payload_channel_data_passthrough(self):
+        """channel_data supplied in the service call is passed through as-is."""
+        call = _make_service_call(
+            {
+                "source": "test",
+                "title": "T",
+                "message": "M",
+                "type": "INFO",
+                "criticality": "LOW",
+                "channel_data": {"tag": "my-tag", "importance": "high"},
+            }
+        )
+        payload = _build_payload(call)
+        assert payload.channel_data == {"tag": "my-tag", "importance": "high"}
+
+
+# ---------------------------------------------------------------------------
+# _build_payload — rich content fields
+# ---------------------------------------------------------------------------
+
+
+class TestBuildPayloadRichContent:
+    """Verify that _build_payload() handles link, image, video, file, and entity."""
+
+    _BASE = {
+        "source": "test",
+        "title": "T",
+        "message": "M",
+        "type": "INFO",
+        "criticality": "LOW",
+    }
+
+    def test_link_is_passed_through(self):
+        call = _make_service_call({**self._BASE, "link": "https://example.com"})
+        payload = _build_payload(call)
+        assert payload.link == "https://example.com"
+
+    def test_image_is_passed_through(self):
+        call = _make_service_call(
+            {**self._BASE, "image": "https://example.com/img.jpg"}
+        )
+        payload = _build_payload(call)
+        assert payload.image == "https://example.com/img.jpg"
+
+    def test_video_is_passed_through(self):
+        call = _make_service_call(
+            {**self._BASE, "video": "https://example.com/clip.mp4"}
+        )
+        payload = _build_payload(call)
+        assert payload.video == "https://example.com/clip.mp4"
+
+    def test_file_is_passed_through(self):
+        call = _make_service_call({**self._BASE, "file": "https://example.com/doc.pdf"})
+        payload = _build_payload(call)
+        assert payload.file == "https://example.com/doc.pdf"
+
+    def test_entity_is_passed_through(self):
+        call = _make_service_call(
+            {**self._BASE, "context": {"entity": "binary_sensor.door"}}
+        )
+        payload = _build_payload(call)
+        assert payload.context.get("entity") == "binary_sensor.door"
+
+    def test_all_optional_fields_default_to_none(self):
+        call = _make_service_call(self._BASE)
+        payload = _build_payload(call)
+        assert payload.link is None
+        assert payload.image is None
+        assert payload.video is None
+        assert payload.file is None
+        assert payload.context.get("entity") is None
+
+
+# ---------------------------------------------------------------------------
+# SEND_NOTIFICATION_SCHEMA — URL scheme validation
+# ---------------------------------------------------------------------------
+
+
+class TestUrlSchemeValidation:
+    """Verify that the schema rejects dangerous URL schemes for link/image/video/file."""
+
+    _BASE = {
+        "source": "test",
+        "title": "T",
+        "message": "M",
+        "type": "INFO",
+        "criticality": "LOW",
+    }
+
+    @pytest.mark.parametrize("field", ["link", "image", "video", "file"])
+    def test_http_accepted(self, field):
+        data = {**self._BASE, field: "http://example.com/resource"}
+        result = SEND_NOTIFICATION_SCHEMA(data)
+        assert result[field] == "http://example.com/resource"
+
+    @pytest.mark.parametrize("field", ["link", "image", "video", "file"])
+    def test_https_accepted(self, field):
+        data = {**self._BASE, field: "https://example.com/resource"}
+        result = SEND_NOTIFICATION_SCHEMA(data)
+        assert result[field] == "https://example.com/resource"
+
+    @pytest.mark.parametrize("field", ["link", "image", "video", "file"])
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "javascript:alert(1)",
+            "data:text/html,<script>alert(1)</script>",
+            "file:///etc/passwd",
+            "vbscript:msgbox(1)",
+        ],
+    )
+    def test_dangerous_schemes_rejected(self, field, url):
+        """Schema must reject non-http/https URL schemes."""
+        data = {**self._BASE, field: url}
+        with pytest.raises(vol.Invalid):
+            SEND_NOTIFICATION_SCHEMA(data)
 
 
 # ---------------------------------------------------------------------------
@@ -247,7 +364,7 @@ class TestSendNotificationSchema:
                 {
                     "action": "dismiss",
                     "title": "Dismiss",
-                    "uri": "homeassistant://navigate/lovelace",
+                    "url": "homeassistant://navigate/lovelace",
                 },
             ],
         }

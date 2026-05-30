@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -84,13 +85,117 @@ class TestMobileAppDelivery:
         sd = hass.services.async_call.call_args.kwargs["service_data"]
         assert sd["data"]["idempotency_key"] == "idem-xyz"
 
-    async def test_metadata_merged_into_data(self):
-        """Payload metadata key-value pairs must be merged into the 'data' dict."""
+    async def test_context_not_forwarded_into_data(self):
+        """payload.context must NOT appear in service_data['data'] — it is ANS-internal only."""
         adapter, hass = _make_adapter()
-        payload = make_payload(metadata={"motion_sensor": "front_door"})
+        payload = make_payload(context={"camera": "front_door"})
         await _deliver(adapter, payload)
         sd = hass.services.async_call.call_args.kwargs["service_data"]
-        assert sd["data"]["motion_sensor"] == "front_door"
+        assert "camera" not in sd["data"]
+        assert "context" not in sd["data"]
+
+    async def test_link_mapped_to_url(self):
+        """payload.link is forwarded as service_data['data']['url']."""
+        adapter, hass = _make_adapter()
+        payload = make_payload(link="https://example.com")
+        await _deliver(adapter, payload)
+        sd = hass.services.async_call.call_args.kwargs["service_data"]
+        assert sd["data"]["url"] == "https://example.com"
+
+    async def test_image_mapped_to_image(self):
+        """payload.image is forwarded as service_data['data']['image']."""
+        adapter, hass = _make_adapter()
+        payload = make_payload(image="https://example.com/photo.jpg")
+        await _deliver(adapter, payload)
+        sd = hass.services.async_call.call_args.kwargs["service_data"]
+        assert sd["data"]["image"] == "https://example.com/photo.jpg"
+
+    async def test_entity_deep_link_when_no_link(self):
+        """context['entity'] is converted to a companion-app deep-link when link is not set."""
+        adapter, hass = _make_adapter()
+        payload = make_payload(context={"entity": "binary_sensor.door"})
+        await _deliver(adapter, payload)
+        sd = hass.services.async_call.call_args.kwargs["service_data"]
+        assert sd["data"]["url"] == "entityId:binary_sensor.door"
+
+    async def test_link_takes_priority_over_entity(self):
+        """When both link and entity are set, link wins for the 'url' field."""
+        adapter, hass = _make_adapter()
+        payload = make_payload(
+            link="https://example.com", context={"entity": "binary_sensor.door"}
+        )
+        await _deliver(adapter, payload)
+        sd = hass.services.async_call.call_args.kwargs["service_data"]
+        assert sd["data"]["url"] == "https://example.com"
+
+    async def test_channel_data_merged_into_data(self):
+        """All channel_data key-value pairs are merged into service_data['data']."""
+        adapter, hass = _make_adapter()
+        payload = make_payload(channel_data={"importance": "high", "sound": "alarm"})
+        await _deliver(adapter, payload)
+        sd = hass.services.async_call.call_args.kwargs["service_data"]
+        assert sd["data"]["importance"] == "high"
+        assert sd["data"]["sound"] == "alarm"
+
+    async def test_channel_data_overrides_image(self):
+        """channel_data keys override earlier-set rich-content fields."""
+        adapter, hass = _make_adapter()
+        payload = make_payload(
+            image="https://example.com/orig.jpg",
+            channel_data={"image": "https://example.com/override.jpg"},
+        )
+        await _deliver(adapter, payload)
+        sd = hass.services.async_call.call_args.kwargs["service_data"]
+        assert sd["data"]["image"] == "https://example.com/override.jpg"
+
+    async def test_idempotency_key_not_overridable_by_channel_data(self):
+        """channel_data cannot override the idempotency_key — it is always set last."""
+        adapter, hass = _make_adapter()
+        payload = make_payload(channel_data={"idempotency_key": "attacker-key"})
+        await _deliver(adapter, payload, idempotency_key="real-key")
+        sd = hass.services.async_call.call_args.kwargs["service_data"]
+        assert sd["data"]["idempotency_key"] == "real-key"
+
+    async def test_local_path_image_not_forwarded(self):
+        """A local-path image (starts with /) is NOT forwarded to the push service."""
+        adapter, hass = _make_adapter()
+        payload = make_payload(image="/local/snapshot.jpg")
+        await _deliver(adapter, payload)
+        sd = hass.services.async_call.call_args.kwargs["service_data"]
+        assert "image" not in sd["data"]
+
+    async def test_http_image_forwarded_to_mobile_app(self):
+        """An http(s) image URL is forwarded as service_data['data']['image']."""
+        adapter, hass = _make_adapter()
+        payload = make_payload(image="https://example.com/photo.jpg")
+        await _deliver(adapter, payload)
+        sd = hass.services.async_call.call_args.kwargs["service_data"]
+        assert sd["data"]["image"] == "https://example.com/photo.jpg"
+
+    async def test_link_sets_click_action_for_android(self):
+        """payload.link sets data['clickAction'] (Android tap action) alongside data['url']."""
+        adapter, hass = _make_adapter()
+        payload = make_payload(link="https://example.com")
+        await _deliver(adapter, payload)
+        sd = hass.services.async_call.call_args.kwargs["service_data"]
+        assert sd["data"]["clickAction"] == "https://example.com"
+
+    async def test_entity_sets_click_action_for_android(self):
+        """context['entity'] sets data['clickAction'] (Android) alongside data['url'] (iOS)."""
+        adapter, hass = _make_adapter()
+        payload = make_payload(context={"entity": "binary_sensor.door"})
+        await _deliver(adapter, payload)
+        sd = hass.services.async_call.call_args.kwargs["service_data"]
+        assert sd["data"]["clickAction"] == "entityId:binary_sensor.door"
+
+    async def test_no_tap_url_means_no_click_action(self):
+        """Without a link or entity, neither 'url' nor 'clickAction' appears in data."""
+        adapter, hass = _make_adapter()
+        payload = make_payload()
+        await _deliver(adapter, payload)
+        sd = hass.services.async_call.call_args.kwargs["service_data"]
+        assert "url" not in sd["data"]
+        assert "clickAction" not in sd["data"]
 
 
 # ── Acknowledgement tag (NH-3) ─────────────────────────────────────────────────
@@ -108,9 +213,9 @@ class TestMobileAppAcknowledgementTag:
         assert sd["data"]["tag"] == str(payload.notification_id)
 
     async def test_tag_overridden_by_channel_data(self):
-        """channel_data['mobile_app']['tag'] takes priority over the notification_id default."""
+        """channel_data['tag'] (flat) takes priority over the notification_id default."""
         adapter, hass = _make_adapter()
-        payload = make_payload(channel_data={"mobile_app": {"tag": "custom-tag"}})
+        payload = make_payload(channel_data={"tag": "custom-tag"})
         await _deliver(adapter, payload)
         sd = hass.services.async_call.call_args.kwargs["service_data"]
         assert sd["data"]["tag"] == "custom-tag"
@@ -270,32 +375,23 @@ class TestMobileAppActions:
         assert "actions" not in sd["data"]
 
     async def test_actions_with_no_metadata(self):
-        """Actions are added alongside idempotency_key when payload has no metadata."""
+        """Actions are added alongside idempotency_key when payload has no context."""
         adapter, hass = _make_adapter()
         actions = [{"action": "ok", "title": "OK"}]
-        payload = make_payload(metadata={}, actions=actions)
+        payload = make_payload(context={}, actions=actions)
         await _deliver(adapter, payload, idempotency_key="key-x")
         sd = hass.services.async_call.call_args.kwargs["service_data"]
         assert sd["data"]["idempotency_key"] == "key-x"
         assert sd["data"]["actions"] == actions
 
-    async def test_actions_with_metadata(self):
-        """Actions appear in service_data['data'] alongside other metadata.
-
-        Note: the 'tag' field is reserved for acknowledgement tracking (NH-3).
-        When metadata contains 'tag', the ack-tracking tag (notification_id by default)
-        takes precedence and overwrites the metadata value.
-        """
+    async def test_actions_with_channel_data(self):
+        """Actions appear in service_data['data'] alongside channel_data overrides."""
         adapter, hass = _make_adapter()
         actions = [{"action": "ok", "title": "OK"}]
-        payload = make_payload(
-            metadata={"tag": "motion", "sensor": "door"}, actions=actions
-        )
+        payload = make_payload(channel_data={"sound": "alarm"}, actions=actions)
         await _deliver(adapter, payload)
         sd = hass.services.async_call.call_args.kwargs["service_data"]
-        # tag is overwritten by ack-tracking logic (notification_id wins over metadata tag)
-        assert sd["data"]["tag"] == str(payload.notification_id)
-        assert sd["data"]["sensor"] == "door"
+        assert sd["data"]["sound"] == "alarm"
         assert sd["data"]["actions"] == actions
 
     async def test_actions_list_is_a_copy(self):
@@ -306,3 +402,22 @@ class TestMobileAppActions:
         await _deliver(adapter, payload)
         sd = hass.services.async_call.call_args.kwargs["service_data"]
         assert sd["data"]["actions"] is not payload.actions
+
+
+# ── Media URL validation ───────────────────────────────────────────────────────
+
+
+class TestMobileAppMediaUrlValidation:
+    """Verify that image URLs without a filename segment are skipped with a warning."""
+
+    async def test_bare_domain_image_url_skipped_with_warning(self, caplog):
+        """An image URL with no filename path segment is not forwarded and a warning is logged."""
+        adapter, hass = _make_adapter()
+        payload = make_payload(image="https://example.com")
+        with caplog.at_level(
+            logging.WARNING, logger="custom_components.ans.channels.mobile_app"
+        ):
+            await _deliver(adapter, payload)
+        sd = hass.services.async_call.call_args.kwargs["service_data"]
+        assert "image" not in sd["data"]
+        assert any("no filename" in r.message for r in caplog.records)

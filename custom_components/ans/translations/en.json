@@ -344,31 +344,51 @@
             "fields": {
                 "source": {
                     "name": "Source",
-                    "description": "The source or originator of the notification (e.g., \"home_assistant\", \"alarm\", \"security_system\")."
+                    "description": "Originator of the notification (e.g. \"home_assistant\", \"security_system\"). Used for filtering and logging."
                 },
                 "title": {
                     "name": "Title",
-                    "description": "The title or subject line of the notification."
+                    "description": "The subject line of the notification."
                 },
                 "message": {
                     "name": "Message",
-                    "description": "The main message body of the notification."
+                    "description": "The main body text of the notification."
                 },
                 "type": {
                     "name": "Type",
-                    "description": "The type or category of the notification."
+                    "description": "Category of the notification, used for delivery filtering and routing."
                 },
                 "criticality": {
                     "name": "Criticality",
-                    "description": "The criticality or priority level of the notification."
+                    "description": "Priority level of the notification, used for delivery filtering and channel selection."
                 },
-                "metadata": {
-                    "name": "Metadata",
-                    "description": "Optional custom metadata associated with the notification (as a key-value dictionary)."
+                "image": {
+                    "name": "Image",
+                    "description": "Image to include with the notification. Accepts an http/https URL or an HA-relative path starting with / (e.g. /local/snapshot.jpg, /api/camera_proxy/camera.front_door). Mobile app: http/https only — local paths are not forwarded to push servers. Persistent notification: an http/https URL renders as a clickable filename link; a local path renders as an inline Markdown image embed. Signal: forwarded as an attachment or URL. URLs without a file path segment are ignored with a warning."
+                },
+                "video": {
+                    "name": "Video",
+                    "description": "Video file to include with the notification. Accepts an http/https URL or an HA-relative path starting with /. Rendered as a clickable filename link in persistent notifications. Forwarded as an attachment or URL in Signal. Not supported by the mobile app adapter. URLs without a file path segment are ignored with a warning."
+                },
+                "file": {
+                    "name": "File",
+                    "description": "File to include with the notification. Accepts an http/https URL or an HA-relative path starting with /. Rendered as a clickable filename link in persistent notifications. Forwarded as an attachment or URL in Signal. Not supported by the mobile app adapter. URLs without a file path segment are ignored with a warning."
+                },
+                "link": {
+                    "name": "Link",
+                    "description": "HTTP/HTTPS URL for the notification tap action. Mobile app: sets data.url (iOS/macOS) and data.clickAction (Android). Persistent notification: rendered as a [Details] link in the message body. Signal: appended to the message. Takes priority over context.entity for the mobile tap destination."
+                },
+                "context": {
+                    "name": "Context",
+                    "description": "Semantic metadata to attach to this notification. Use the entity key to associate a subject HA entity (e.g. binary_sensor.front_door): the mobile app uses it as the tap destination (entityId deep-link) when no link is set, and persistent notifications auto-link any context value that matches a known entity ID. Additional keys (camera, zone, device, ...) are appended to the notification body."
                 },
                 "actions": {
-                    "name": "Actions",
-                    "description": "Optional list of action buttons (mobile app only, max 3). Each entry requires an `action` identifier and a `title` label; `uri` is optional. Tapping an action fires a `mobile_app_notification_action` event. Ignored by non-mobile-app channels."
+                    "name": "Action Buttons",
+                    "description": "Action buttons to display on the notification (mobile app only, maximum 3). Each entry requires an action identifier and a title label; uri is optional. When tapped, the companion app fires a mobile_app_notification_action event with the action value, which automations can listen for. Ignored by Signal, TTS, and persistent notification channels."
+                },
+                "channel_data": {
+                    "name": "Channel Data (Advanced)",
+                    "description": "Flat dict of adapter-specific delivery overrides merged on top of the standard fields. Each adapter reads only the keys it recognises and silently ignores the rest. Mobile app keys: tag, importance, channel, vibrationPattern, sound, badge, sticky, persistent, alert_once, car_ui, subtitle. Signal keys: text_mode (\"normal\"/\"styled\"), attachments (list of local paths), urls (list of URL attachments), verify_ssl (bool)."
                 }
             }
         },

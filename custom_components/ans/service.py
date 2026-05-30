@@ -18,6 +18,7 @@ from homeassistant.helpers import config_validation as cv
 
 from .const import DOMAIN, SERVICE_SEND
 from .delivery.orchestrator import NotificationOrchestrator
+from .helper import validate_media_path, validate_url_scheme
 from .models import (
     NotificationCriticality,
     NotificationPayload,
@@ -33,7 +34,7 @@ _ACTION_SCHEMA = vol.Schema(
     {
         vol.Required("action"): cv.string,
         vol.Required("title"): cv.string,
-        vol.Optional("uri"): cv.string,
+        vol.Optional("url"): cv.string,
     }
 )
 
@@ -45,7 +46,12 @@ SEND_NOTIFICATION_SCHEMA = vol.Schema(
         vol.Required("message"): cv.string,
         vol.Required("type"): vol.In([t.value for t in NotificationType]),
         vol.Required("criticality"): vol.In([c.value for c in NotificationCriticality]),
-        vol.Optional("metadata", default={}): dict,
+        vol.Optional("context", default={}): vol.Any(None, dict),
+        vol.Optional("link"): vol.All(cv.string, validate_url_scheme),
+        vol.Optional("image"): vol.All(cv.string, validate_media_path),
+        vol.Optional("video"): vol.All(cv.string, validate_media_path),
+        vol.Optional("file"): vol.All(cv.string, validate_media_path),
+        vol.Optional("channel_data", default={}): vol.Any(None, dict),
         vol.Optional("actions", default=[]): vol.All(
             [_ACTION_SCHEMA], vol.Length(max=3)
         ),
@@ -158,7 +164,12 @@ def _build_payload(call: ServiceCall) -> NotificationPayload:
             message=str(data["message"]),
             type=NotificationType(data["type"]),
             criticality=NotificationCriticality(data["criticality"]),
-            metadata=dict(data.get("metadata", {})),
+            context=dict(data.get("context") or {}),
+            link=data.get("link"),
+            image=data.get("image"),
+            video=data.get("video"),
+            file=data.get("file"),
+            channel_data=dict(data.get("channel_data") or {}),
             actions=list(data.get("actions", [])),
             created_at=datetime.now(UTC),
         )

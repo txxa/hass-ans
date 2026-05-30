@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from homeassistant.core import HomeAssistant
@@ -12,6 +13,7 @@ from homeassistant.exceptions import (
     ServiceValidationError,
 )
 
+from ..helper import entity_url_path, media_label
 from ..models import DeliveryResult, NotificationPayload, RecipientContactInfo
 from .base import (
     AdapterMetadata,
@@ -25,6 +27,7 @@ if TYPE_CHECKING:
     pass
 
 _LOGGER = logging.getLogger(__name__)
+_ENTITY_ID_RE = re.compile(r"^[a-z_][a-z0-9_]*\.[a-z0-9_]+$")
 
 
 class PersistentNotificationAdapter(DeliveryAdapter):
@@ -147,13 +150,64 @@ class PersistentNotificationAdapter(DeliveryAdapter):
         try:
             message = payload.message
 
-            # Metadata is appended verbatim to the notification body by design.
+            # Append rich content as markdown links/embeds so operators can
+            # see and navigate to attached media or linked resources directly
+            # from the HA frontend.
+            if payload.image:
+                if payload.image.startswith(("http://", "https://")):
+                    _label = media_label(payload.image)
+                    if _label == payload.image:
+                        _LOGGER.warning(
+                            "Skipping image URL with no filename segment for "
+                            "notification_id=%s: %s",
+                            payload.notification_id,
+                            payload.image,
+                        )
+                    else:
+                        message += f"\n\n[{_label}]({payload.image})"
+                else:
+                    message += f"\n\n![image]({payload.image})"
+            if payload.video:
+                _label = media_label(payload.video)
+                if _label == payload.video:
+                    _LOGGER.warning(
+                        "Skipping video URL with no filename segment for "
+                        "notification_id=%s: %s",
+                        payload.notification_id,
+                        payload.video,
+                    )
+                else:
+                    message += f"\n\n[{_label}]({payload.video})"
+            if payload.file:
+                _label = media_label(payload.file)
+                if _label == payload.file:
+                    _LOGGER.warning(
+                        "Skipping file URL with no filename segment for "
+                        "notification_id=%s: %s",
+                        payload.notification_id,
+                        payload.file,
+                    )
+                else:
+                    message += f"\n\n[{_label}]({payload.file})"
+            if payload.link:
+                message += f"\n\n[Details]({payload.link})"
+
+            # context is appended verbatim to the notification body by design.
             # Persistent notifications are a system-wide channel; the raw key=value
             # format is intentional for operator visibility and debugging.
-            if payload.metadata:
-                message += "\n\nMetadata:\n"
-                for key, value in payload.metadata.items():
-                    message += f"- {key}: {value}\n"
+            # Context values that match an existing HA entity ID are auto-linked.
+            if payload.context:
+                message += "\n\nContext:\n"
+                for key, value in payload.context.items():
+                    str_value = str(value)
+                    if _ENTITY_ID_RE.match(str_value) and self._hass.states.get(
+                        str_value
+                    ):
+                        message += (
+                            f"- {key}: [{str_value}]({entity_url_path(str_value)})\n"
+                        )
+                    else:
+                        message += f"- {key}: {str_value}\n"
 
             # Build notification data
             data: dict[str, Any] = {

@@ -15,7 +15,7 @@ This section covers internals and extension points for users who want to underst
   - [`ans_acknowledgements.json`](#ans_acknowledgementsjson)
   - [Housekeeping](#housekeeping)
 - [Mobile App — Actions Reference](#mobile-app--actions-reference)
-- [Signal Messenger — Metadata Reference](#signal-messenger--metadata-reference)
+- [Signal Messenger — `channel_data` Reference](#signal-messenger--channel_data-reference)
 - [TTS — SSML Mode](#tts--ssml-mode)
 - [TTS — Volume Restoration Registry](#tts--volume-restoration-registry)
 - [Rate Limiter — Token Bucket Details](#rate-limiter--token-bucket-details)
@@ -58,7 +58,12 @@ One entry per `send_notification` call. Written when audit logging is enabled.
     "message": "Front door camera triggered.",
     "type": "SECURITY",
     "criticality": "HIGH",
-    "metadata": {}
+    "image": null,
+    "video": null,
+    "file": null,
+    "link": null,
+    "context": {},
+    "channel_data": {}
   },
   "recipients": [
     {"recipient_id": "alice_id", "channels": ["notify.mobile_app_alice"]},
@@ -133,7 +138,7 @@ ANS runs a housekeeping task hourly. It removes records older than the configure
 
 ## Mobile App — Actions Reference
 
-Action buttons are defined in the top-level `actions` field of `ans.send_notification` (not under `metadata`). ANS forwards them to `notify.mobile_app_*` as the `actions` key inside the `data:` payload.
+Action buttons are defined in the top-level `actions` field of `ans.send_notification` (not under `channel_data`). ANS forwards them to `notify.mobile_app_*` as the `actions` key inside the `data:` payload.
 
 | Key | Required | Type | Description |
 |---|---|---|---|
@@ -149,9 +154,9 @@ Additional Companion App keys (e.g. `destructive: true` for iOS red buttons) can
 
 **`data.tag` and acknowledgement tracking**
 
-ANS always sets `data.tag` on every Mobile App notification. The tag is `str(notification_id)` by default, or the value of `channel_data.mobile_app.tag` when provided. This tag is the mechanism ANS uses for [acknowledgement tracking](how-it-works.md#acknowledgement-tracking): the HA Companion App includes the tag in every `mobile_app_notification_action` event it fires.
+ANS always sets `data.tag` on every Mobile App notification. The tag is `str(notification_id)` by default, or the value of `channel_data.tag` when provided. This tag is the mechanism ANS uses for [acknowledgement tracking](how-it-works.md#acknowledgement-tracking): the HA Companion App includes the tag in every `mobile_app_notification_action` event it fires.
 
-> **Important:** `data.tag` is reserved for this purpose. If `metadata` also contains a `tag` key, the acknowledgement-tracking tag from `channel_data.mobile_app.tag` (or the `notification_id` UUID) will overwrite it. To group or replace mobile notifications via tag, use `channel_data.mobile_app.tag` instead of `metadata.tag`.
+> **Important:** `data.tag` is reserved for this purpose. To control the tag for notification grouping or replacement, supply `tag` in `channel_data` (not as a bare field on the notification).
 
 ```yaml
 service: ans.send_notification
@@ -162,8 +167,7 @@ data:
   type: INFO
   criticality: MEDIUM
   channel_data:
-    mobile_app:
-      tag: "ha_update"   # Custom tag for notification grouping/replacement
+    tag: "ha_update"   # Custom tag for notification grouping/replacement
 ```
 
 **Receiving the action event:**
@@ -183,15 +187,15 @@ data:
 The response automation is standard Home Assistant — ANS is not involved after the notification is delivered.
 
 
-## Signal Messenger — Metadata Reference
+## Signal Messenger — `channel_data` Reference
 
-The Signal adapter (`channels/signal.py`) supports the following `metadata` keys:
+The Signal adapter (`channels/signal.py`) reads the following keys from `channel_data`. These keys are in addition to the top-level `image`, `video`, and `file` fields, which are automatically routed to Signal as URLs or local attachments.
 
 | Key | Type | Description |
 |---|---|---|
 | `text_mode` | `"styled"` \| `"normal"` | `styled` uses Signal's markdown-like formatting (`**bold**`, `_italic_`). When not set and a title is present, ANS automatically uses `styled`. |
-| `attachments` | `list[str]` | Local file paths to attach. Only files under the HA `config/`, `media/`, or `www/` directories are allowed (see note below). |
-| `urls` | `list[str]` | Image URLs to send as attachments. |
+| `attachments` | `list[str]` | Additional local file paths to attach. Only files under the HA `config/`, `media/`, or `www/` directories are allowed (see note below). |
+| `urls` | `list[str]` | Additional image URLs to send as attachments. Unlike the top-level `image`/`video`/`file` fields, URLs in this list are **not** validated for a filename path segment — use this for URLs that are intentionally bare-domain (advanced use only). |
 | `verify_ssl` | `bool` | Whether to verify SSL certificates when fetching image URLs. Default: `true`. Set to `false` for self-signed certificates. |
 
 > **Attachment path restriction**: ANS validates every path in `attachments` before forwarding it to Signal. Only paths that resolve to a location inside one of these HA directories are allowed:

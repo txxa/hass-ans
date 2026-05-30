@@ -38,9 +38,9 @@ ANS decouples *what to send* from *how and to whom to send it*. Routing decision
 
 ### Multi-Channel Delivery
 Route a single notification to any combination of:
-- **Persistent Notification** — HA frontend sidebar (always available)
+- **Persistent Notification** — HA frontend sidebar (always available); `image`, `video`, and `file` links render with the filename as the label; `context` key-value pairs appear as a `Context:` section with entity IDs auto-linked
 - **Mobile App** — Push notifications via the HA Companion App, with optional action buttons
-- **Signal Messenger** — Messages via the Signal integration, with support for styled text, file attachments (restricted to HA-managed directories), and image URLs
+- **Signal Messenger** — Messages via the Signal integration, with support for styled text, file attachments (restricted to HA-managed directories), and image URLs; top-level `image`, `video`, and `file` fields are automatically routed to Signal; media URLs without a filename path segment are silently ignored with a warning log
 - **TTS via Media Player** — Spoken announcements through any media player entity that supports playback and volume control
 - **Extensible adapter architecture** — additional channels can be added without modifying core delivery logic
 

@@ -192,7 +192,7 @@ Rate-limited tasks are automatically retried once the bucket refills (within the
 3. `notify.signal` is in the enabled channels list (system settings) and mapped to the relevant criticality levels for this recipient.
 
 **Attachments not arriving:**
-If the message delivers but an expected file attachment is missing, the path may have been rejected by the attachment path guard. ANS only allows paths inside the HA `config/`, `media/`, or `www/` directories. Check the HA log for a warning like `Signal attachment rejected (path outside allowed directories)`. Move the file to an allowed directory (e.g., `/media/snapshots/`) and update the automation. See [Signal Messenger — Metadata Reference](advanced.md#signal-messenger--metadata-reference).
+If the message delivers but an expected file attachment is missing, the path may have been rejected by the attachment path guard. ANS only allows paths inside the HA `config/`, `media/`, or `www/` directories. Check the HA log for a warning like `Signal attachment rejected (path outside allowed directories)`. Move the file to an allowed directory (e.g., `/media/snapshots/`) and update the automation. See [Signal Messenger — `channel_data` Reference](advanced.md#signal-messenger--channel_data-reference).
 
 ---
 

@@ -17,8 +17,8 @@ Practical `ans.send_notification` examples covering every channel type, common h
 - [Channel-Specific Examples](#channel-specific-examples)
   - [Signal Messenger](#signal-messenger)
   - [TTS via Media Player](#tts-via-media-player)
-  - [Mobile App — Metadata Pass-Through](#mobile-app--metadata-pass-through)
-  - [Persistent Notification — Metadata in Sidebar](#persistent-notification--metadata-in-sidebar)
+  - [Mobile App — Delivery Overrides](#mobile-app--delivery-overrides)
+  - [Persistent Notification — Context in Sidebar](#persistent-notification--context-in-sidebar)
 - [Actionable Notifications (Mobile App)](#actionable-notifications-mobile-app)
   - [Primary Example: Garage Door — Tap to Close](#primary-example-garage-door--tap-to-close)
   - [Secondary Example: Unknown Person at Door — Unlock or Ignore](#secondary-example-unknown-person-at-door--unlock-or-ignore)
@@ -152,13 +152,12 @@ data:
   message: "Motion was detected at the front door."
   type: SECURITY
   criticality: HIGH
-  metadata:
-    urls:
-      - "https://your-ha-instance/api/camera_proxy/camera.front_door"
+  image: "https://your-ha-instance/api/camera_proxy/camera.front_door"
+  channel_data:
     verify_ssl: true
 ```
 
-Signal recipients receive the image URL as an attachment. Mobile app recipients receive it as a rich notification image (pass `image` in metadata for mobile; see [Channel-Specific Examples](#channel-specific-examples)).
+Signal recipients receive the image URL as an attachment. Mobile app recipients receive it as a rich push notification image.
 
 
 #### Smoke / CO alarm triggered
@@ -231,13 +230,10 @@ data:
   message: "Motion detected at the front door camera."
   type: EVENT
   criticality: MEDIUM
-  metadata:
-    image: "/api/camera_proxy/camera.front_door"   # Mobile App inline image
-    urls:
-      - "/api/camera_proxy/camera.front_door"      # Signal image attachment
+  image: "/api/camera_proxy/camera.front_door"
 ```
 
-MEDIUM criticality → Alice gets a mobile push with the camera snapshot inline (`image` key). Bob gets a Signal message with the image as an attachment (`urls` key). The two metadata keys serve different channels: `image` is consumed by the Mobile App adapter; `urls` is consumed by the Signal adapter.
+MEDIUM criticality → Alice gets a mobile push with the camera snapshot inline (`image` field). Bob gets a Signal message with the image as an attachment. A single top-level `image` field serves all channels.
 
 
 #### Energy usage spike
@@ -394,7 +390,7 @@ data:
   message: "Home Assistant 2026.5.0 is ready to install."
   type: INFO
   criticality: MEDIUM
-  metadata:
+  channel_data:
     text_mode: "styled"   # Title rendered as **bold**, message in italic
 ```
 
@@ -410,12 +406,10 @@ data:
   message: "A snapshot was captured."
   type: EVENT
   criticality: MEDIUM
-  metadata:
-    attachments:
-      - "/media/snapshots/front_door.jpg"   # Must be inside config/, media/, or www/
+  file: "/media/snapshots/front_door.jpg"   # Must be inside config/, media/, or www/
 ```
 
-> **Note:** Only paths inside the HA `config/`, `media/`, or `www/` directories are accepted. Paths outside those directories are silently dropped. See [Signal Messenger — Metadata Reference](advanced.md#signal-messenger--metadata-reference).
+> **Note:** Only paths inside the HA `config/`, `media/`, or `www/` directories are accepted. Paths outside those directories are silently dropped. See [Signal Messenger — `channel_data` Reference](advanced.md#signal-messenger--channel_data-reference).
 
 #### Image URL with SSL verification
 
@@ -427,9 +421,8 @@ data:
   message: "Camera captured motion in the driveway."
   type: SECURITY
   criticality: HIGH
-  metadata:
-    urls:
-      - "https://your-ha-instance.local/api/camera_proxy/camera.driveway"
+  image: "https://your-ha-instance.local/api/camera_proxy/camera.driveway"
+  channel_data:
     verify_ssl: false   # Set true for publicly trusted certificates
 ```
 
@@ -498,9 +491,9 @@ data:
 No automation changes are needed when switching between levels — volume behavior is entirely driven by recipient configuration.
 
 
-### Mobile App — Metadata Pass-Through
+### Mobile App — Delivery Overrides
 
-ANS passes the `metadata` dict verbatim as the `data:` field to `notify.mobile_app_*`. All standard HA Companion App features work:
+ANS flat-merges the `channel_data` dict into the `data:` payload sent to `notify.mobile_app_*`. All standard HA Companion App features work:
 
 ```yaml
 service: ans.send_notification
@@ -510,23 +503,22 @@ data:
   message: "Home Assistant 2026.5.0 is ready to install."
   type: INFO
   criticality: MEDIUM
-  metadata:
+  channel_data:
     channel: "updates"         # Android notification channel
     importance: low            # Android importance level
 ```
 
-> **Note:** ANS always sets `data.tag` on every Mobile App notification for acknowledgement tracking. The tag defaults to the `notification_id` UUID and can be customised via `channel_data.mobile_app.tag`. Because `data.tag` is set after the metadata merge, any `tag` key in `metadata` will be overwritten. Use `channel_data.mobile_app.tag` when you need to control the tag for notification grouping or replacement:
+> **Note:** ANS always sets `data.tag` on every Mobile App notification for acknowledgement tracking. The tag defaults to the `notification_id` UUID and can be customised via `channel_data.tag`. Use `channel_data.tag` when you need to control the tag for notification grouping or replacement:
 >
 > ```yaml
 > channel_data:
->   mobile_app:
->     tag: "ha_update"   # Used for notification grouping/replacement and acknowledgement
+>   tag: "ha_update"   # Used for notification grouping/replacement and acknowledgement
 > ```
 
 
-### Persistent Notification — Metadata in Sidebar
+### Persistent Notification — Context in Sidebar
 
-For the HA Instance (persistent notification channel), ANS appends `metadata` key/value pairs directly to the message body as plain text. They do **not** go into a `data:` payload — they become part of the visible message in the HA sidebar.
+For the HA Instance (persistent notification channel), ANS appends `context` key/value pairs directly to the message body as a `Context:` section. They become part of the visible message in the HA sidebar.
 
 ```yaml
 service: ans.send_notification
@@ -536,7 +528,7 @@ data:
   message: "Motion at the front door."
   type: SECURITY
   criticality: HIGH
-  metadata:
+  context:
     camera: "camera.front_door"
     zone: "entrance"
 ```
@@ -546,12 +538,14 @@ The sidebar notification message will read:
 ```
 Motion at the front door.
 
-Metadata:
-- camera: camera.front_door
+Context:
+- camera: [camera.front_door](/history?entity_id=camera.front_door)
 - zone: entrance
 ```
 
-> **Note:** If you only want metadata to appear in the sidebar (not in mobile/Signal payloads), use it freely — Signal ignores unrecognised keys and mobile app passes only explicitly supported fields. The persistent notification is the only channel that renders metadata as human-readable text in the UI.
+Values that match a known HA entity ID are auto-linked to their entity history page.
+
+> **Note:** `context` is only rendered by the persistent notification channel. Signal and Mobile App ignore it.
 
 
 ## Actionable Notifications (Mobile App)
@@ -578,8 +572,7 @@ ANS supports HA Companion App action buttons via the top-level `actions` field. 
         type: WARNING
         criticality: HIGH
         channel_data:
-          mobile_app:
-            tag: "garage_door_open"     # Used for ack tracking AND to clear the notification
+          tag: "garage_door_open"     # Used for ack tracking AND to clear the notification
         actions:
           - action: "CLOSE_GARAGE"
             title: "Close Garage"
@@ -627,11 +620,9 @@ ANS supports HA Companion App action buttons via the top-level `actions` field. 
         message: "Unrecognised motion detected. Unlock door?"
         type: SECURITY
         criticality: HIGH
-        metadata:
-          image: "/api/camera_proxy/camera.front_door"
+        image: "/api/camera_proxy/camera.front_door"
         channel_data:
-          mobile_app:
-            tag: "front_door_unknown"
+          tag: "front_door_unknown"
         actions:
           - action: "UNLOCK_FRONT_DOOR"
             title: "Unlock"
@@ -705,7 +696,7 @@ Send an alert; if the user acknowledges within 5 minutes, skip the escalation:
 
 ### Example 2 — Override the mobile tag via channel_data
 
-When you want a stable custom tag for notification grouping or replacement (rather than the default UUID), use `channel_data.mobile_app.tag`. The HA Companion App then uses this tag both for grouping/replacement and for ANS acknowledgement tracking:
+When you want a stable custom tag for notification grouping or replacement (rather than the default UUID), set `tag` in `channel_data`. The HA Companion App then uses this tag both for grouping/replacement and for ANS acknowledgement tracking:
 
 ```yaml
 - alias: "HA update notification with custom tag"
@@ -721,12 +712,10 @@ When you want a stable custom tag for notification grouping or replacement (rath
         message: "Home Assistant {{ states('sensor.latest_version') }} is ready."
         type: INFO
         criticality: MEDIUM
-        metadata:
+        channel_data:
           channel: "updates"        # Android notification channel
           importance: low
-        channel_data:
-          mobile_app:
-            tag: "ha_update"        # Replaces any previous "ha_update" notification
+          tag: "ha_update"          # Replaces any previous "ha_update" notification
 ```
 
 When a subsequent update notification fires, the Companion App replaces the previous one (same tag). ANS acknowledgement tracking also uses this tag to correlate taps back to the correct `notification_id`.

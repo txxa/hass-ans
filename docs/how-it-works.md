@@ -49,9 +49,13 @@ data:
 | `message` | Yes | string | Body of the notification. |
 | `type` | Yes | select | Notification category. Controls type-based filtering per recipient. |
 | `criticality` | Yes | select | Priority level. Determines which channels are used per recipient. |
-| `metadata` | No | dict | Optional key-value data. Passed to channel adapters for channel-specific features (e.g. Signal attachments, mobile app notification tags and images). |
+| `image` | No | string | http/https URL or HA-relative path (e.g. `/local/img.jpg`, `/api/camera_proxy/camera.front`). Persistent notification: http/https renders as a clickable `[filename](url)` link; local path renders as an inline Markdown image embed. Mobile app: forwarded as push image (http/https only). Signal: forwarded as a URL or attachment. URLs without a file path segment (e.g. bare domains) are silently ignored with a warning log. |
+| `video` | No | string | http/https URL or HA-relative path. Persistent notification: rendered as a clickable `[filename](url)` link. Signal: forwarded as a URL or attachment. Not consumed by Mobile App or TTS. URLs without a file path segment are silently ignored with a warning log. |
+| `file` | No | string | http/https URL or HA-relative path. Persistent notification: rendered as a clickable `[filename](url)` link. Signal: forwarded as a URL or attachment. Not consumed by Mobile App or TTS. URLs without a file path segment are silently ignored with a warning log. |
+| `link` | No | string | http/https URL. Mobile app: sets `data.url` / `data.clickAction` (tap action). Persistent notification: rendered as a `[Details](url)` link. Signal: appended as plain text to the message body. |
+| `context` | No | dict | Key-value pairs. Persistent notification: appended to the message body as a `Context:` section; values that match a known HA entity ID are auto-linked to the entity history page. Mobile app: the `entity` key is used as a tap-action deep-link (`entityId:<entity_id>`) when `link` is not set; all other keys are ignored. Signal and TTS ignore all context keys. |
 | `actions` | No | list | Optional list of up to 3 action button objects. Each object requires `action` (identifier string) and `title` (button label), with an optional `uri`. Forwarded to Mobile App only; ignored by all other channels. |
-| `channel_data` | No | dict | Adapter-specific delivery overrides keyed by adapter name. Currently supports `mobile_app` key: `{"mobile_app": {"tag": "my-custom-tag"}}` overrides the default `data.tag` used for acknowledgement tracking. When omitted, the `notification_id` UUID is used as the tag. |
+| `channel_data` | No | dict | Adapter-specific delivery overrides (flat dict). Signal reads `text_mode`, `attachments`, `urls`, and `verify_ssl` from this dict. Mobile app flat-merges this dict into the `data:` payload; set `{"tag": "my-tag"}` to override the default acknowledgement-tracking tag (which defaults to the `notification_id` UUID). |
 
 ### Notification Types
 
@@ -185,15 +189,22 @@ Setting a rate limit to `0` disables that layer of limiting.
 ANS selects the live adapter for the target channel and calls `deliver()`. Each channel adapter handles the specifics:
 
 **Persistent Notification**
-Calls `persistent_notification.create` in HA. The notification appears in the sidebar immediately. Metadata key-value pairs are appended to the message body.
+Calls `persistent_notification.create` in HA. The notification appears in the sidebar immediately. Rich-content fields are rendered as follows:
+
+- `image` (http/https): rendered as a clickable Markdown link with the filename as the label, e.g. `[snapshot.jpg](https://…)`. A local path (e.g. `/local/img.jpg`) renders as an inline `![image](path)` embed.
+- `video`, `file` (http/https or local path): rendered as a clickable Markdown link with the filename as the label, e.g. `[clip.mp4](https://…)`.
+- `link`: rendered as a `[Details](url)` link.
+- `context`: key-value pairs appended as a `Context:` section; values that match a known HA entity ID are auto-linked to their history page.
+
+URLs for `image`, `video`, or `file` that have no filename path segment (e.g. `https://example.com` with no path) are silently skipped and a WARNING is written to the HA log.
 
 **Mobile App**
-Calls `notify.mobile_app_{device_id}`. The `title` and `message` are sent as-is. The full `metadata` dict is passed through as the `data:` payload, so all standard [HA Companion App notification features](https://companion.home-assistant.io/docs/notifications/notifications-basic/) (channels, images) work via `metadata`. If the `actions` field is non-empty, ANS also includes it in the `data:` payload, enabling action buttons on the notification. ANS always sets `data.tag` to the `notification_id` UUID (or to `channel_data.mobile_app.tag` when provided) for acknowledgement tracking — this means tapping any action button can be correlated back to the original notification. Note that if `metadata` also contains a `tag` key, the acknowledgement-tracking tag wins. See [Actionable Notifications](usage-examples.md#actionable-notifications-mobile-app) for usage examples.
+Calls `notify.mobile_app_{device_id}`. The `title` and `message` are sent as-is. If `image` is set to an http/https URL with a valid filename path segment, it is forwarded as `data.image` for inline display in the push notification; bare-domain URLs are silently ignored with a warning log. If `link` is set, it is forwarded as `data.url` (iOS/macOS) and `data.clickAction` (Android) for the tap action; if `link` is not set but `context.entity` is set to an HA entity ID, ANS uses `entityId:<entity_id>` as the tap URL instead. If the `actions` field is non-empty, ANS includes it in the `data:` payload, enabling action buttons on the notification. The `channel_data` dict is flat-merged into `data:`, so all standard [HA Companion App notification features](https://companion.home-assistant.io/docs/notifications/notifications-basic/) (channels, importance, etc.) work via `channel_data`. ANS always sets `data.tag` to the `notification_id` UUID (or to `channel_data.tag` when provided) for acknowledgement tracking — this means tapping any action button can be correlated back to the original notification. See [Actionable Notifications](usage-examples.md#actionable-notifications-mobile-app) for usage examples.
 
 **Signal Messenger**
-Calls `notify.signal` with the recipient's phone number. When `text_mode: styled` is set in metadata (or when a title is present without an explicit mode), the message is formatted with bold title (`**Title**`). Supports file attachments (`attachments:` list of local paths) and image URLs (`urls:` list) via metadata.
+Calls `notify.signal` with the recipient's phone number. When `text_mode: styled` is set in `channel_data` (or when a title is present without an explicit mode), the message is formatted with a bold title (`**Title**`). The top-level `image`, `video`, and `file` fields are automatically routed: http/https URLs with a valid filename path segment are added to the `urls` list; local paths are added to the `attachments` list. Additional signal-specific overrides (`attachments`, `urls`, `verify_ssl`) can be set in `channel_data`. http/https URLs without a filename path segment are silently ignored with a warning log.
 
-> **Security**: ANS validates every path in `attachments` before forwarding it to Signal. Only paths that resolve to inside the HA `config/`, `media/`, or `www/` directories are accepted. Paths outside those directories — including `../` traversal sequences and symlinks that point outside the allowed tree — are silently dropped with a warning log. The notification is still sent with any remaining valid attachments. See [Signal Messenger — Metadata Reference](advanced.md#signal-messenger--metadata-reference) for full details.
+> **Security**: ANS validates every path in `attachments` before forwarding it to Signal. Only paths that resolve to inside the HA `config/`, `media/`, or `www/` directories are accepted. Paths outside those directories — including `../` traversal sequences and symlinks that point outside the allowed tree — are silently dropped with a warning log. The notification is still sent with any remaining valid attachments. See [Signal Messenger — `channel_data` Reference](advanced.md#signal-messenger--channel_data-reference) for full details.
 
 **TTS via Media Player**
 Calls the configured TTS service targeting the media player entity. If volume management is enabled, ANS:

@@ -32,7 +32,7 @@ ANS is a custom Home Assistant integration that acts as a centralized notificati
 - **Retry with exponential backoff** — configurable attempts and delays, with crash recovery across HA restarts
 - **Deduplication** — idempotent delivery prevents duplicate notifications, including duplicate TTS playback
 - **TTS via media player** — time-based and criticality-based volume control, automatic volume restoration, and per-device delivery lock to prevent overlapping playback
-- **Mobile app, Signal Messenger, persistent notification** support out of the box; Signal attachments are restricted to HA-managed directories (`config/`, `media/`, `www/`) to prevent path-traversal access; extensible adapter architecture for additional channels
+- **Mobile app, Signal Messenger, persistent notification** support out of the box; Signal attachments are restricted to HA-managed directories (`config/`, `media/`, `www/`) to prevent path-traversal access; media URLs without a filename path segment (e.g. bare domains) are silently ignored with a warning log across all adapters; persistent notification image/video/file links use the filename as the label; extensible adapter architecture for additional channels
 - **Actionable mobile notifications** — include up to 3 action buttons in mobile push notifications via the `actions` field; button taps fire a `mobile_app_notification_action` HA bus event for automation response
 - **Acknowledgement tracking** — ANS tracks whether a delivered notification was acknowledged: tapping any action button on a mobile push, or dismissing a persistent notification in the HA sidebar, fires an `ans_notification_acknowledged` HA bus event and records the acknowledgement in a persistent `AcknowledgementRegistry`; automations can correlate the `notification_id` returned by `ans.send_notification` with this event to detect confirmed read receipts
 - **Audit log** — notification registry and delivery attempt logs with configurable retention (default 7 days, max 365 days) and hourly auto-purge
@@ -92,9 +92,13 @@ data:
 | `message` | ✅ | any string |
 | `type` | ✅ | `INFO` `WARNING` `ALERT` `REMINDER` `EVENT` `SECURITY` |
 | `criticality` | ✅ | `LOW` `MEDIUM` `HIGH` `CRITICAL` |
-| `metadata` | ❌ | key-value dict — passed through to channel adapters |
+| `image` | ❌ | http/https URL or HA-relative path (e.g. `/local/img.jpg`, `/api/camera_proxy/camera.front`). Persistent notification: http/https renders as a clickable filename link; local path renders as an inline Markdown image embed. Mobile app: forwarded as push image (http/https only). Signal: forwarded as URL or attachment. URLs without a file path segment are ignored with a warning. |
+| `video` | ❌ | http/https URL or HA-relative path. Persistent notification: clickable filename link. Signal: forwarded as URL or attachment. Not supported by Mobile App. URLs without a file path segment are ignored with a warning. |
+| `file` | ❌ | http/https URL or HA-relative path. Persistent notification: clickable filename link. Signal: forwarded as URL or attachment. Not supported by Mobile App. URLs without a file path segment are ignored with a warning. |
+| `link` | ❌ | http/https URL. Mobile app: sets tap action (`data.url` / `data.clickAction`). Persistent notification: rendered as a `[Details]` link. Signal: appended to the message body. |
+| `context` | ❌ | key-value dict. Persistent notification: appended to the message body as a `Context:` section; values matching a known HA entity ID are auto-linked to their history page. Mobile app: the `entity` key sets a tap-action deep-link (`entityId:<entity_id>`) when `link` is not set. Signal and TTS ignore all context keys. |
 | `actions` | ❌ | list of up to 3 action button dicts (`action`, `title`, optional `uri`) — forwarded to Mobile App only; ignored by other channels |
-| `channel_data` | ❌ | adapter-specific delivery overrides, e.g. `{"mobile_app": {"tag": "my-tag"}}` to set a custom acknowledgement tracking tag |
+| `channel_data` | ❌ | adapter-specific delivery overrides. Signal: supports `text_mode`, `attachments`, `urls`, `verify_ssl`. Mobile app: all keys are flat-merged into the `data:` payload (e.g. `{"tag": "my-tag"}` to control the notification tag for grouping or acknowledgement tracking). |
 
 For real-world automation patterns see [Usage Examples](docs/usage-examples.md). For the full service reference and delivery pipeline see [How It Works](docs/how-it-works.md).
 

@@ -215,6 +215,10 @@ Calls the configured TTS service targeting the media player entity. If volume ma
 
 A per-device delivery lock serializes concurrent TTS requests to the same media player.
 
+**Standby devices (`off` state):** Many media player platforms (e.g. Google Cast, Google Nest) report `off` in standby but wake up natively when a `tts.speak` command is received. ANS delivers directly to these devices without attempting to set volume first: volume management is skipped because a standby device may not respond to `volume_set` and it will restore its own wake-up volume. If the service call itself fails (e.g. the device is truly off and cannot receive commands), the error is caught and the task is retried with exponential backoff.
+
+**Unreachable devices (`unavailable` state):** ANS skips delivery and schedules a retry. This covers devices that are genuinely unreachable (network error, integration offline, entity removed).
+
 ### Stage 8 — Retry on Failure
 
 **Retryable failures (TRANSIENT_FAIL):** Network errors, service temporarily unavailable, TTS engine busy. ANS schedules a retry with exponential backoff:

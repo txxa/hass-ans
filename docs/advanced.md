@@ -231,6 +231,7 @@ The volume restoration registry (`persistence/volume_restoration.py`) handles th
 - **Timeout expiry** — restoration intents expire after 1 hour. If a media player never reaches IDLE within that window, the intent is discarded.
 - **120-second fallback** — a safety timer fires 120 seconds after playback starts as a fallback for players that don't reliably signal IDLE.
 - **Per-device lock** — concurrent TTS requests to the same media player are serialized via a per-entity async lock. Lock acquisition has a 60-second timeout to prevent deadlock if a previous delivery hung.
+- **Standby (`off`) devices** — volume management is bypassed entirely for devices in `off` state. These devices (e.g. Google Cast in standby) may not respond to `volume_set`, and they restore their own wake-up volume after playback. No capture/restore intent is created; the fallback timer is not scheduled.
 
 **Known limitation:** The time-of-day volume windows (06:00, 09:00, 19:00, 22:00) are fixed and not user-configurable. The volumes at each window are configurable; only the window boundaries are not.
 

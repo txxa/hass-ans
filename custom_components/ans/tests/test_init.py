@@ -1570,10 +1570,7 @@ class TestAcknowledgementTracking:
         )
         await listeners[EVENT_NOTIFICATION_DELIVERED](ev)
 
-        tasks = self._collect_tasks(hass)
-        dispatcher_cbs[0](PNUpdateType.REMOVED, {"pn-nid-1": {}})
-        for task in tasks:
-            await task
+        await dispatcher_cbs[0](PNUpdateType.REMOVED, {"pn-nid-1": {}})
 
         hass.bus.async_fire.assert_called_once()
         assert hass.bus.async_fire.call_args.args[0] == EVENT_NOTIFICATION_ACKNOWLEDGED
@@ -1629,10 +1626,7 @@ class TestAcknowledgementTracking:
         )
         await listeners[EVENT_NOTIFICATION_DELIVERED](ev)
 
-        tasks = self._collect_tasks(hass)
-        dispatcher_cbs[0](PNUpdateType.REMOVED, {"pn-1": {}})
-        for task in tasks:
-            await task
+        await dispatcher_cbs[0](PNUpdateType.REMOVED, {"pn-1": {}})
 
         hass.bus.async_fire.assert_called_once()
         event_name, payload = hass.bus.async_fire.call_args.args
@@ -1644,10 +1638,7 @@ class TestAcknowledgementTracking:
         """Dispatcher REMOVED signal for an unknown notification_id does nothing."""
         hass, entry, system, listeners, dispatcher_cbs = self._setup()
 
-        tasks = self._collect_tasks(hass)
-        dispatcher_cbs[0](PNUpdateType.REMOVED, {"not-pending": {}})
-        for task in tasks:
-            await task
+        await dispatcher_cbs[0](PNUpdateType.REMOVED, {"not-pending": {}})
 
         hass.bus.async_fire.assert_not_called()
 

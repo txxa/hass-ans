@@ -244,12 +244,19 @@ async def test_media_player_not_found_returns_permanent_failure():
     volume_registry.apply_volume.assert_not_called()
 
 
-async def test_media_player_off_returns_transient_failure():
-    """A media player in STATE_OFF must yield a transient failure (device may come back)."""
+async def test_media_player_off_attempts_tts_delivery_directly():
+    """A media player in STATE_OFF must attempt TTS delivery directly without turn_on.
+
+    Many platforms (e.g. Google Cast) wake the device natively when play_media is
+    called, so the adapter skips volume management and calls tts.speak immediately.
+    """
     adapter, hass, _, volume_registry = _make_adapter()
     state = MagicMock()
     state.state = STATE_OFF
+    state.attributes = {}  # no volume_level when off
     hass.states.get.return_value = state
+    hass.services.async_call = AsyncMock()
+    volume_registry.has_active_intent.return_value = False
 
     result = await adapter.deliver(
         payload=_make_payload(),
@@ -257,7 +264,58 @@ async def test_media_player_off_returns_transient_failure():
         idempotency_key="key-3",
         job_id="job-3",
     )
+    assert result.status == DeliveryStatus.SUCCESS
+    # tts.speak must have been called — not media_player.turn_on
+    hass.services.async_call.assert_called_once()
+    call_kwargs = hass.services.async_call.call_args.kwargs
+    assert call_kwargs["domain"] == "tts"
+    assert call_kwargs["service"] == "speak"
+    # Volume management must have been skipped entirely
+    volume_registry.apply_volume.assert_not_called()
+    volume_registry.set_fallback_task.assert_not_called()
+
+
+async def test_media_player_off_skips_volume_management():
+    """When device is off, volume management is bypassed even when target differs from current."""
+    adapter, hass, _, volume_registry = _make_adapter()
+    state = MagicMock()
+    state.state = STATE_OFF
+    # Provide a volume_level that differs from the target so volume_change_needed
+    # would normally be True — but the off-device bypass should still suppress it.
+    state.attributes = {"volume_level": 0.1}
+    hass.states.get.return_value = state
+    volume_registry.has_active_intent.return_value = False
+
+    await adapter.deliver(
+        payload=_make_payload(),
+        contact_info=_make_contact(),
+        idempotency_key="key-3b",
+        job_id="job-3b",
+    )
+    volume_registry.apply_volume.assert_not_called()
+
+
+async def test_media_player_off_tts_error_returns_transient_failure():
+    """When tts.speak fails on a standby device the error maps to a transient failure.
+
+    Cast-style devices may not be immediately ready after waking; the HomeAssistantError
+    is caught and converted to a transient failure so the job is retried.
+    """
+    adapter, hass, _, volume_registry = _make_adapter()
+    state = MagicMock()
+    state.state = STATE_OFF
+    state.attributes = {}
+    hass.states.get.return_value = state
+    hass.services.async_call.side_effect = HomeAssistantError("Cast device not ready")
+
+    result = await adapter.deliver(
+        payload=_make_payload(),
+        contact_info=_make_contact(),
+        idempotency_key="key-3c",
+        job_id="job-3c",
+    )
     assert result.status == DeliveryStatus.TRANSIENT_FAIL
+    volume_registry.apply_volume.assert_not_called()
 
 
 async def test_media_player_unavailable_returns_transient_failure():

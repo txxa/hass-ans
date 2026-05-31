@@ -150,6 +150,22 @@ Rate-limited tasks are automatically retried once the bucket refills (within the
 
 ---
 
+### TTS Notification Not Delivered to Standby Device
+
+**Symptom:** A TTS notification is not spoken on a Google Nest or Cast device that is in standby (the device reports `off` in HA).
+
+**What ANS does:** ANS delivers `tts.speak` directly to standby (`off`) devices without blocking on their state. Platforms like Google Cast handle wakeup natively when they receive a play command, so the device should wake up and announce. Volume management is skipped for standby devices — the announcement plays at the device's own wake-up volume.
+
+**If delivery still fails:** The attempt log will show `TRANSIENT_FAIL` with an error from the TTS service call (e.g. `TTS service call failed`). This means the device did not accept the command. Possible causes:
+
+- The device is fully powered off (not just standby) and cannot receive network commands.
+- The media player entity is `unavailable` in HA — check that the underlying integration (e.g. Google Cast) is running and the device is on the same network.
+- The TTS service itself failed (check the HA log for errors from your TTS engine).
+
+ANS will retry automatically with exponential backoff.
+
+---
+
 ### TTS Volume Not Restoring
 
 **Symptom:** After a TTS announcement, the media player's volume stays at the announcement level instead of returning to the original.
@@ -163,6 +179,8 @@ Rate-limited tasks are automatically retried once the bucket refills (within the
 3. **HA restarted during playback** — Volume restoration state is persisted across restarts. ANS will attempt restoration when it loads and detects the pending intent.
 
 4. **Volume management disabled** — Confirm **"Enable Volume Management"** is checked in the TTS recipient's TTS settings.
+
+5. **Device was in standby when notified** — Standby (`off`) devices skip volume management by design. Volume is not captured or restored for these devices — the announcement plays at the device's own wake-up level.
 
 ---
 

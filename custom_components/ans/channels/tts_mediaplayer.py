@@ -488,17 +488,16 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
             )
             return self.permanent_failure(error=f"Media player {entity_id} not found")
 
-        if state.state in (STATE_UNAVAILABLE, STATE_OFF):
+        if state.state == STATE_UNAVAILABLE:
             _LOGGER.warning(
-                "Media player %s is %s, delivery skipped: job_id=%s notification_id=%s "
-                "— will retry",
+                "Media player %s is unavailable, delivery skipped: "
+                "job_id=%s notification_id=%s — will retry",
                 entity_id,
-                state.state,
                 job_id,
                 payload.notification_id,
             )
             return self.transient_failure(
-                error=f"Media player {entity_id} is {state.state}, delivery skipped; will retry"
+                error=f"Media player {entity_id} is unavailable, delivery skipped; will retry"
             )
 
         _LOGGER.debug(
@@ -542,6 +541,23 @@ class TTSMediaPlayerAdapter(DeliveryAdapter):
         ):
             _LOGGER.debug(
                 "Volume management disabled for %s — skipping "
+                "job_id=%s notification_id=%s",
+                entity_id,
+                job_id,
+                payload.notification_id,
+            )
+            volume_change_needed = False
+
+        # When the device is off, skip volume management: the device may not
+        # respond to volume_set while in standby, and many platforms (e.g. Google
+        # Cast) handle wakeup natively when play_media is called.  The tts.speak
+        # call below will wake the device and deliver the audio in a single step.
+        # If the service call fails, the HomeAssistantError handler below converts
+        # it to a transient failure for retry.
+        if volume_change_needed and state.state == STATE_OFF:
+            _LOGGER.debug(
+                "Media player %s is off — skipping volume management and attempting "
+                "direct TTS delivery (platform may handle wakeup natively) "
                 "job_id=%s notification_id=%s",
                 entity_id,
                 job_id,

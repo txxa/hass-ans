@@ -508,7 +508,7 @@ def _setup_acknowledgement_tracking(
         hass.bus.async_listen("mobile_app_notification_action", _on_mobile_app_action)
     )
 
-    def _on_persistent_notification_removed(
+    async def _on_persistent_notification_removed(
         update_type: PNUpdateType, notifications: dict
     ) -> None:
         """Handle persistent notification dismissal — counts as acknowledgement.
@@ -525,31 +525,25 @@ def _setup_acknowledgement_tracking(
                 continue
 
             acknowledged_at = datetime.now(UTC)
-
-            async def _record(
-                nid: str = notification_id, acked_at: datetime = acknowledged_at
-            ) -> None:
-                recorded = await acknowledgement_registry.record_acknowledgement(
-                    notification_id=nid,
-                    channel_id=PERSISTENT_NOTIFICATION_CHANNEL,
-                    acknowledged_at=acked_at,
+            recorded = await acknowledgement_registry.record_acknowledgement(
+                notification_id=notification_id,
+                channel_id=PERSISTENT_NOTIFICATION_CHANNEL,
+                acknowledged_at=acknowledged_at,
+            )
+            if recorded:
+                _pending_acks.discard(notification_id)
+                hass.bus.async_fire(
+                    EVENT_NOTIFICATION_ACKNOWLEDGED,
+                    {
+                        "notification_id": notification_id,
+                        "channel_id": PERSISTENT_NOTIFICATION_CHANNEL,
+                        "acknowledged_at": acknowledged_at.isoformat(),
+                    },
                 )
-                if recorded:
-                    _pending_acks.discard(nid)
-                    hass.bus.async_fire(
-                        EVENT_NOTIFICATION_ACKNOWLEDGED,
-                        {
-                            "notification_id": nid,
-                            "channel_id": PERSISTENT_NOTIFICATION_CHANNEL,
-                            "acknowledged_at": acked_at.isoformat(),
-                        },
-                    )
-                    _LOGGER.debug(
-                        "Notification '%s' acknowledged via persistent_notification dismissal",
-                        nid,
-                    )
-
-            hass.async_create_task(_record())
+                _LOGGER.debug(
+                    "Notification '%s' acknowledged via persistent_notification dismissal",
+                    notification_id,
+                )
 
     entry.async_on_unload(
         async_dispatcher_connect(

@@ -57,6 +57,8 @@ When either source fires, ANS records the acknowledgement and fires an `ans_noti
 
 Acknowledgement state is stored in `ans_acknowledgements.json` in HA `.storage/` and survives restarts. Each notification can only be acknowledged once — the registry is idempotent.
 
+> **Note:** Acknowledgement tracking requires the notification to have been delivered in the **current HA session**. Notifications delivered before the last HA restart cannot be acknowledged — the pending-acks set is not persisted across restarts.
+
 ### Criticality-Based Routing
 Every notification carries a criticality level (`LOW`, `MEDIUM`, `HIGH`, `CRITICAL`). Each recipient maps each level to a different set of channels. A LOW-criticality reminder might go only to the HA sidebar; a CRITICAL security alert goes to mobile, Signal, and every speaker in the house.
 
@@ -130,7 +132,7 @@ TTS announcements through living room and bedroom speakers ensure notifications 
 
 | Channel | Prerequisite |
 |---|---|
-| Persistent Notification | None — always available |
+| Persistent Notification | None — always available. **Exclusive to the HA System recipient type** (`Home Assistant (System)`); cannot be assigned to HA User, Generic, or TTS recipients. |
 | Mobile App | [HA Companion App](https://companion.home-assistant.io/) installed and logged in on the device |
 | Signal Messenger | [Signal integration](https://www.home-assistant.io/integrations/signal_messenger/) configured in HA with a running Signal API server |
 | TTS via Media Player | A TTS integration (e.g., [Google Translate TTS](https://www.home-assistant.io/integrations/google_translate/), [Piper](https://www.home-assistant.io/integrations/wyoming/)) and at least one media player entity that supports both `PLAY_MEDIA` and `VOLUME_SET` |

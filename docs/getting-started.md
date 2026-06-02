@@ -155,6 +155,8 @@ Map each criticality level to the channels that should receive notifications at 
 - **Home Assistant User / Generic recipient:** `notify.*` services (e.g. `notify.mobile_app_phone`, `notify.signal`)
 - **Text-to-Speech recipient:** media player entities (e.g. `media_player.living_room_speaker`)
 
+> **Note:** `notify.persistent_notification` is exclusive to the **Home Assistant (System)** recipient type. It is not available for HA User, Generic, or TTS recipients.
+
 | Field | Description |
 |---|---|
 | **Channels for LOW criticality** | Leave empty to suppress low-criticality notifications entirely |

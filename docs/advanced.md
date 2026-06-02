@@ -2,7 +2,6 @@
 
 *Previous: [← Troubleshooting](troubleshooting.md)*
 
-
 This section covers internals and extension points for users who want to understand ANS more deeply, inspect its storage, or work around current limitations.
 
 ## Contents
@@ -14,16 +13,14 @@ This section covers internals and extension points for users who want to underst
   - [`ans_retry_queue.json`](#ans_retry_queuejson)
   - [`ans_acknowledgements.json`](#ans_acknowledgementsjson)
   - [Housekeeping](#housekeeping)
-- [Mobile App — Actions Reference](#mobile-app--actions-reference)
-- [Signal Messenger — `channel_data` Reference](#signal-messenger--channel_data-reference)
-- [TTS — SSML Mode](#tts--ssml-mode)
-- [TTS — Volume Restoration Registry](#tts--volume-restoration-registry)
 - [Rate Limiter — Token Bucket Details](#rate-limiter--token-bucket-details)
 - [Deduplication — LRU Cache Details](#deduplication--lru-cache-details)
 - [Delivery Outcome Events — Payload Reference](#delivery-outcome-events--payload-reference)
 - [Channel Manager — Adapter Lifecycle](#channel-manager--adapter-lifecycle)
   - [Stale Channel Repairs Issues](#stale-channel-repairs-issues)
 - [Extending ANS with a New Channel](#extending-ans-with-a-new-channel)
+
+> **Note:** Per-channel reference material (field handling, `channel_data` options, acknowledgement mechanics, limitations) has moved to [Channel Reference](channels.md).
 
 
 ## Delivery Snapshots and Crash Recovery
@@ -134,106 +131,6 @@ Records are removed by the hourly housekeeping task when they are older than `st
 ### Housekeeping
 
 ANS runs a housekeeping task hourly. It removes records older than the configured retention period (`storage_retention_days`, default 7) from all four storage files. Setting retention to `0` disables automatic cleanup.
-
-
-## Mobile App — Actions Reference
-
-Action buttons are defined in the top-level `actions` field of `ans.send_notification` (not under `channel_data`). ANS forwards them to `notify.mobile_app_*` as the `actions` key inside the `data:` payload.
-
-| Key | Required | Type | Description |
-|---|---|---|---|
-| `action` | Yes | `str` | Identifier returned in the `mobile_app_notification_action` event when the button is tapped. Must be a non-empty string. Convention: use uppercase with underscores (e.g. `CLOSE_GARAGE`). |
-| `title` | Yes | `str` | Button label displayed on the notification. |
-| `uri` | No | `str` | URI to open when the button is tapped. Accepts any URI scheme the Companion App supports: `https://`, `homeassistant://`, deep links, etc. |
-
-Additional Companion App keys (e.g. `destructive: true` for iOS red buttons) can be included alongside these and are forwarded as-is.
-
-**Limits:**
-- Maximum **3** action buttons per notification (enforced by `SEND_NOTIFICATION_SCHEMA`).
-- Action buttons are forwarded **only** by `MobileAppDeliveryAdapter`. All other adapters (Signal, persistent notification, TTS) silently ignore the `actions` field.
-
-**`data.tag` and acknowledgement tracking**
-
-ANS always sets `data.tag` on every Mobile App notification. The tag is `str(notification_id)` by default, or the value of `channel_data.tag` when provided. This tag is the mechanism ANS uses for [acknowledgement tracking](how-it-works.md#acknowledgement-tracking): the HA Companion App includes the tag in every `mobile_app_notification_action` event it fires.
-
-> **Important:** `data.tag` is reserved for this purpose. To control the tag for notification grouping or replacement, supply `tag` in `channel_data` (not as a bare field on the notification).
-
-```yaml
-service: ans.send_notification
-data:
-  source: "automation.ha_update"
-  title: "Update Ready"
-  message: "Home Assistant 2026.5.0 is available."
-  type: INFO
-  criticality: MEDIUM
-  channel_data:
-    tag: "ha_update"   # Custom tag for notification grouping/replacement
-```
-
-**Receiving the action event:**
-```yaml
-- alias: "Handle tapped action"
-  trigger:
-    - platform: event
-      event_type: mobile_app_notification_action
-      event_data:
-        action: "CLOSE_GARAGE"   # matches the 'action' key you defined
-  action:
-    - service: cover.close_cover
-      target:
-        entity_id: cover.garage_door
-```
-
-The response automation is standard Home Assistant — ANS is not involved after the notification is delivered.
-
-
-## Signal Messenger — `channel_data` Reference
-
-The Signal adapter (`channels/signal.py`) reads the following keys from `channel_data`. These keys are in addition to the top-level `image`, `video`, and `file` fields, which are automatically routed to Signal as URLs or local attachments.
-
-| Key | Type | Description |
-|---|---|---|
-| `text_mode` | `"styled"` \| `"normal"` | `styled` uses Signal's markdown-like formatting (`**bold**`, `_italic_`). When not set and a title is present, ANS automatically uses `styled`. |
-| `attachments` | `list[str]` | Additional local file paths to attach. Only files under the HA `config/`, `media/`, or `www/` directories are allowed (see note below). |
-| `urls` | `list[str]` | Additional image URLs to send as attachments. Unlike the top-level `image`/`video`/`file` fields, URLs in this list are **not** validated for a filename path segment — use this for URLs that are intentionally bare-domain (advanced use only). |
-| `verify_ssl` | `bool` | Whether to verify SSL certificates when fetching image URLs. Default: `true`. Set to `false` for self-signed certificates. |
-
-> **Attachment path restriction**: ANS validates every path in `attachments` before forwarding it to Signal. Only paths that resolve to a location inside one of these HA directories are allowed:
-> - `config/` (the HA configuration root)
-> - `config/media/`
-> - `config/www/`
->
-> Paths outside these directories — including traversal attempts (`../../etc/passwd`) and symlinks that point outside the allowed tree — are silently dropped and a warning is written to the HA log. The notification is still delivered with the remaining valid attachments. If all paths are invalid, the notification is sent without attachments.
-
-Phone number masking: ANS logs only the last 4 digits of phone numbers at debug level (`****1234`). Full numbers are never written to logs.
-
-
-## TTS — SSML Mode
-
-When **Enable SSML Mode** is on in TTS recipient settings, ANS wraps the message in an SSML `<speak>` document and XML-escapes all user content before sending. This enables prosody markup, pauses, and emphasis in TTS engines that support SSML.
-
-**Enable only for SSML-capable engines:**
-- Google Cloud TTS
-- Amazon Polly
-- Azure TTS
-- edge-tts
-- Piper (in SSML mode)
-
-Do **not** enable for plain-text engines (Google Translate TTS, built-in macOS/Windows TTS via HA). Plain-text engines will speak the raw XML tags aloud.
-
-
-## TTS — Volume Restoration Registry
-
-The volume restoration registry (`persistence/volume_restoration.py`) handles the restore-after-playback lifecycle. Key behaviors:
-
-- **State persisted across restarts** — stored under the `ans_volume_restoration` key in HA storage. If HA restarts between the TTS call and the IDLE event, restoration is still attempted on the next startup.
-- **User-change detection** — if the volume is manually adjusted within 5 seconds of ANS setting it (echo-guard window), ANS treats it as intentional and aborts restoration.
-- **Timeout expiry** — restoration intents expire after 1 hour. If a media player never reaches IDLE within that window, the intent is discarded.
-- **120-second fallback** — a safety timer fires 120 seconds after playback starts as a fallback for players that don't reliably signal IDLE.
-- **Per-device lock** — concurrent TTS requests to the same media player are serialized via a per-entity async lock. Lock acquisition has a 60-second timeout to prevent deadlock if a previous delivery hung.
-- **Standby (`off`) devices** — volume management is bypassed entirely for devices in `off` state. These devices (e.g. Google Cast in standby) may not respond to `volume_set`, and they restore their own wake-up volume after playback. No capture/restore intent is created; the fallback timer is not scheduled.
-
-**Known limitation:** The time-of-day volume windows (06:00, 09:00, 19:00, 22:00) are fixed and not user-configurable. The volumes at each window are configurable; only the window boundaries are not.
 
 
 ## Rate Limiter — Token Bucket Details

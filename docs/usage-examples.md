@@ -1,6 +1,6 @@
 # Usage Examples
 
-*Previous: [← How It Works](how-it-works.md) | Next: [Troubleshooting →](troubleshooting.md)*
+*Previous: [← Channel Reference](channels.md) | Next: [Troubleshooting →](troubleshooting.md)*
 
 Practical `ans.send_notification` examples covering every channel type, common household scenarios, DND patterns, and source blocking.
 
@@ -409,7 +409,7 @@ data:
   file: "/media/snapshots/front_door.jpg"   # Must be inside config/, media/, or www/
 ```
 
-> **Note:** Only paths inside the HA `config/`, `media/`, or `www/` directories are accepted. Paths outside those directories are silently dropped. See [Signal Messenger — `channel_data` Reference](advanced.md#signal-messenger--channel_data-reference).
+> **Note:** Only paths inside the HA `config/`, `media/`, or `www/` directories are accepted. Paths outside those directories are silently dropped. See [Signal Messenger — Attachment Path Restriction](channels.md#attachment-path-restriction).
 
 #### Image URL with SSL verification
 
@@ -647,6 +647,8 @@ ANS supports HA Companion App action buttons via the top-level `actions` field. 
 ## Acknowledgement Tracking
 
 ANS fires `ans_notification_acknowledged` when the user taps any action button on a mobile push notification, or dismisses a persistent notification from the HA sidebar. The event payload includes `notification_id`, `channel_id`, and `acknowledged_at`.
+
+> **Note:** Acknowledgement tracking only works for notifications delivered in the **current HA session**. If HA restarts between delivery and the user's tap or dismissal, the `ans_notification_acknowledged` event will not fire and any `wait_for_trigger` listening for it will time out.
 
 For the architectural details, see [How It Works → Acknowledgement Tracking](how-it-works.md#acknowledgement-tracking) and [Advanced → `ans_acknowledgements.json`](advanced.md#ans_acknowledgementsjson).
 
@@ -945,4 +947,4 @@ This ensures channels added during the HA startup sequence (e.g., a slow-loading
 
 ---
 
-*Previous: [← How It Works](how-it-works.md) | Next: [Troubleshooting →](troubleshooting.md)*
+*Previous: [← Channel Reference](channels.md) | Next: [Troubleshooting →](troubleshooting.md)*

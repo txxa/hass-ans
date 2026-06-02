@@ -100,7 +100,7 @@ data:
 | `actions` | ❌ | list of up to 3 action button dicts (`action`, `title`, optional `uri`) — forwarded to Mobile App only; ignored by other channels |
 | `channel_data` | ❌ | adapter-specific delivery overrides. Signal: supports `text_mode`, `attachments`, `urls`, `verify_ssl`. Mobile app: all keys are flat-merged into the `data:` payload (e.g. `{"tag": "my-tag"}` to control the notification tag for grouping or acknowledgement tracking). |
 
-For real-world automation patterns see [Usage Examples](docs/usage-examples.md). For the full service reference and delivery pipeline see [How It Works](docs/how-it-works.md).
+For real-world automation patterns see [Usage Examples](docs/usage-examples.md). For the full service reference and delivery pipeline see [How It Works](docs/how-it-works.md). For per-channel field handling, `channel_data` options, and acknowledgement mechanics see [Channel Reference](docs/channels.md).
 
 ## Troubleshooting
 
@@ -108,7 +108,7 @@ If something isn't working as expected, the built-in diagnostics panel (**Settin
 
 ## Advanced Topics
 
-For storage internals, crash recovery details, channel adapter lifecycle, and extension points see [Advanced Topics](docs/advanced.md).
+For per-channel adapter reference (field handling, `channel_data`, acknowledgement) see [Channel Reference](docs/channels.md). For storage internals, crash recovery details, channel adapter lifecycle, and extension points see [Advanced Topics](docs/advanced.md).
 
 ## Development and Maintenance
 

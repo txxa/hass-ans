@@ -1,6 +1,6 @@
 # How It Works
 
-*Previous: [← Installation & Configuration](getting-started.md) | Next: [Usage Examples →](usage-examples.md)*
+*Previous: [← Installation & Configuration](getting-started.md) | Next: [Channel Reference →](channels.md)*
 
 The `ans.send_notification` service reference and a stage-by-stage walkthrough of the delivery pipeline.
 
@@ -186,36 +186,17 @@ Setting a rate limit to `0` disables that layer of limiting.
 
 ### Stage 7 — Delivery
 
-ANS selects the live adapter for the target channel and calls `deliver()`. Each channel adapter handles the specifics:
+ANS selects the live adapter for the target channel and calls `deliver()`. Each channel adapter handles field rendering, attachment routing, and acknowledgement setup differently. For the full per-channel reference — field handling, `channel_data` options, acknowledgement mechanics, and limitations — see [Channel Reference](channels.md).
 
-**Persistent Notification**
-Calls `persistent_notification.create` in HA. The notification appears in the sidebar immediately. Rich-content fields are rendered as follows:
+**Persistent Notification** — calls `persistent_notification.create`. Rich-content fields (`image`, `video`, `file`, `link`, `context`) are rendered as Markdown in the sidebar. See [Persistent Notification → Field Handling](channels.md#field-handling-persistent-notification).
 
-- `image` (http/https): rendered as a clickable Markdown link with the filename as the label, e.g. `[snapshot.jpg](https://…)`. A local path (e.g. `/local/img.jpg`) renders as an inline `![image](path)` embed.
-- `video`, `file` (http/https or local path): rendered as a clickable Markdown link with the filename as the label, e.g. `[clip.mp4](https://…)`.
-- `link`: rendered as a `[Details](url)` link.
-- `context`: key-value pairs appended as a `Context:` section; values that match a known HA entity ID are auto-linked to their history page.
+**Mobile App** — calls `notify.mobile_app_{device_id}`. `channel_data` is flat-merged into the `data:` payload, giving access to all Companion App features. `data.tag` is always set for acknowledgement tracking. See [Mobile App → Field Handling](channels.md#field-handling-mobile-app).
 
-URLs for `image`, `video`, or `file` that have no filename path segment (e.g. `https://example.com` with no path) are silently skipped and a WARNING is written to the HA log.
+**Signal Messenger** — calls `notify.signal` with the recipient's phone number. Top-level `image`, `video`, and `file` fields are automatically routed to `urls` or `attachments` based on whether they are remote URLs or local paths. Attachment paths are validated against the HA-managed directory allowlist before forwarding. See [Signal Messenger → Field Handling](channels.md#field-handling-signal).
 
-**Mobile App**
-Calls `notify.mobile_app_{device_id}`. The `title` and `message` are sent as-is. If `image` is set to an http/https URL with a valid filename path segment, it is forwarded as `data.image` for inline display in the push notification; bare-domain URLs are silently ignored with a warning log. If `link` is set, it is forwarded as `data.url` (iOS/macOS) and `data.clickAction` (Android) for the tap action; if `link` is not set but `context.entity` is set to an HA entity ID, ANS uses `entityId:<entity_id>` as the tap URL instead. If the `actions` field is non-empty, ANS includes it in the `data:` payload, enabling action buttons on the notification. The `channel_data` dict is flat-merged into `data:`, so all standard [HA Companion App notification features](https://companion.home-assistant.io/docs/notifications/notifications-basic/) (channels, importance, etc.) work via `channel_data`. ANS always sets `data.tag` to the `notification_id` UUID (or to `channel_data.tag` when provided) for acknowledgement tracking — this means tapping any action button can be correlated back to the original notification. See [Actionable Notifications](usage-examples.md#actionable-notifications-mobile-app) for usage examples.
+**TTS via Media Player** — calls the configured TTS service targeting the media player entity. If volume management is enabled, ANS captures the current volume, sets the time-of-day or criticality-override level, speaks the message, then restores the original volume when the player reaches IDLE. A per-device delivery lock prevents overlapping playback. See [TTS via Media Player](channels.md#tts-via-media-player).
 
-**Signal Messenger**
-Calls `notify.signal` with the recipient's phone number. When `text_mode: styled` is set in `channel_data` (or when a title is present without an explicit mode), the message is formatted with a bold title (`**Title**`). The top-level `image`, `video`, and `file` fields are automatically routed: http/https URLs with a valid filename path segment are added to the `urls` list; local paths are added to the `attachments` list. Additional signal-specific overrides (`attachments`, `urls`, `verify_ssl`) can be set in `channel_data`. http/https URLs without a filename path segment are silently ignored with a warning log.
-
-> **Security**: ANS validates every path in `attachments` before forwarding it to Signal. Only paths that resolve to inside the HA `config/`, `media/`, or `www/` directories are accepted. Paths outside those directories — including `../` traversal sequences and symlinks that point outside the allowed tree — are silently dropped with a warning log. The notification is still sent with any remaining valid attachments. See [Signal Messenger — `channel_data` Reference](advanced.md#signal-messenger--channel_data-reference) for full details.
-
-**TTS via Media Player**
-Calls the configured TTS service targeting the media player entity. If volume management is enabled, ANS:
-1. Reads the current media player volume
-2. Sets volume to the time-of-day level (or criticality override level)
-3. Speaks the message
-4. Restores the original volume when playback ends (IDLE state detected)
-
-A per-device delivery lock serializes concurrent TTS requests to the same media player.
-
-**Standby devices (`off` state):** Many media player platforms (e.g. Google Cast, Google Nest) report `off` in standby but wake up natively when a `tts.speak` command is received. ANS delivers directly to these devices without attempting to set volume first: volume management is skipped because a standby device may not respond to `volume_set` and it will restore its own wake-up volume. If the service call itself fails (e.g. the device is truly off and cannot receive commands), the error is caught and the task is retried with exponential backoff.
+**Standby devices (`off` state):** Platforms like Google Cast report `off` in standby but wake up natively when a play command is received. ANS delivers directly without attempting to set volume first. If the service call fails, the task is retried with exponential backoff.
 
 **Unreachable devices (`unavailable` state):** ANS skips delivery and schedules a retry. This covers devices that are genuinely unreachable (network error, integration offline, entity removed).
 
@@ -252,7 +233,7 @@ These files are stored in `<config>/.storage/` and cleaned up automatically base
 
 ## Deduplication
 
-ANS maintains an LRU cache (max 1 000 entries, 60-second TTL) keyed on `(notification_id, channel_id)`. If the same notification is delivered to the same channel twice within 60 seconds — for example due to a race condition or misconfigured automation — the second delivery is silently dropped. After 60 seconds, delivery to the same `(notification, channel)` pair is permitted again.
+ANS maintains an in-memory LRU cache keyed on `(notification_id, channel_id)`. If the same notification is delivered to the same channel twice within the TTL window — for example due to a race condition or misconfigured automation — the second delivery is silently dropped. For cache size, TTL, and restart-boundary behavior see [Advanced Topics → Deduplication — LRU Cache Details](advanced.md#deduplication--lru-cache-details).
 
 ---
 
@@ -293,20 +274,16 @@ Extra fields per event:
 
 ### The Settled Event
 
-`ans_notification_settled` fires once **all** fan-out tasks for a notification reach a terminal state. It provides an aggregate view across all recipients and channels:
+`ans_notification_settled` fires once **all** fan-out tasks for a notification reach a terminal state. It provides an aggregate view across all recipients and channels. Key fields:
 
-| Field | Type | Description |
-|---|---|---|
-| `notification_id` | `str` | UUID v4 identifying the notification |
-| `total_tasks` | `int` | Total channel tasks dispatched |
-| `total_recipients` | `int` | Number of unique recipients addressed |
-| `delivered` | `int` | Tasks that reached `SUCCESS` |
-| `failed` | `int` | Tasks that reached `PERMANENT_FAIL` |
-| `filtered` | `int` | Tasks dropped by a filter |
-| `recipients_delivered` | `int` | Recipients with at least one channel delivered |
-| `recipients` | `dict` | Per-recipient channel breakdown (see [Payload Reference](advanced.md#delivery-outcome-events--payload-reference)) |
+| Field | Description |
+|---|---|
+| `notification_id` | UUID v4 identifying the notification |
+| `recipients_delivered` | Recipients with at least one channel delivered — the key field for "did anyone receive this?" escalation logic. If `0`, no channel delivered successfully for any recipient. |
+| `total_tasks`, `delivered`, `failed`, `filtered` | Aggregate task counts |
+| `recipients` | Per-recipient channel breakdown |
 
-The `recipients_delivered` field is the key field for "did anyone receive this?" escalation logic: if it is `0`, no channel delivered successfully for any recipient.
+For the full JSON schema and complete field definitions see [Payload Reference](advanced.md#delivery-outcome-events--payload-reference).
 
 ### Service Response and Event Correlation
 
@@ -335,10 +312,19 @@ Events fire after persistence, so the audit log already contains the matching re
 
 After a notification is delivered, ANS monitors for user acknowledgement and fires an `ans_notification_acknowledged` HA bus event when one is detected.
 
+**End-to-end flow:**
+1. `ans.send_notification` delivers the notification and returns a `notification_id` UUID.
+2. For Mobile App: ANS sets `data.tag` to the `notification_id` on the push notification (or to `channel_data.tag` when provided — ANS records whichever tag was used at delivery time).
+3. For Persistent Notification: ANS embeds the `notification_id` so the sidebar dismissal can be correlated.
+4. The user taps an action button (Mobile App) or dismisses the notification from the sidebar (Persistent Notification).
+5. ANS observes the event, matches it to a pending delivery, fires `ans_notification_acknowledged`, and records the acknowledgement in the `AcknowledgementRegistry`.
+
+Automations can use the `notification_id` returned by `response_variable` to correlate service calls with this event. See [Usage Examples → Acknowledgement Tracking](usage-examples.md#acknowledgement-tracking) for full automation patterns.
+
 ### Trigger Sources
 
 **Mobile App — button tap**
-When a push notification is delivered via `MobileAppDeliveryAdapter`, ANS always sets `data.tag` on the notification to the `notification_id` UUID (the `channel_data.mobile_app.tag` field can override this). The HA Companion App includes the tag in every `mobile_app_notification_action` event it fires, regardless of which button was tapped. ANS listens for this event and checks whether the tag matches a pending delivery — if it does, the notification is acknowledged.
+When a push notification is delivered via `MobileAppDeliveryAdapter`, ANS always sets `data.tag` on the notification to the `notification_id` UUID (the `channel_data.tag` field can override this — ANS records the active tag at delivery time so correlation is maintained regardless of which tag value is used). The HA Companion App includes the tag in every `mobile_app_notification_action` event it fires, regardless of which button was tapped. ANS listens for this event and checks whether the tag matches a pending delivery — if it does, the notification is acknowledged.
 
 **Persistent Notification — sidebar dismissal**
 When a persistent notification is dismissed from the HA sidebar, the HA dispatcher sends `SIGNAL_PERSISTENT_NOTIFICATIONS_UPDATED` with `UpdateType.REMOVED`. ANS connects to this signal via `async_dispatcher_connect` and checks whether the dismissed notification's ID corresponds to a pending ANS delivery.
@@ -359,7 +345,9 @@ Each `notification_id` can be acknowledged only once. The first acknowledgement 
 
 ### Pending-Acks Scope
 
-The in-memory pending-acks set is populated by `ans_notification_delivered` events. It is not persisted — HA restarts clear it. Notifications delivered before the last restart will not fire `ans_notification_acknowledged` even if the user taps or dismisses after restart. This is expected behaviour for the current scope.
+The in-memory pending-acks set is populated by `ans_notification_delivered` events. It is not persisted — HA restarts clear it.
+
+> **Note:** Notifications delivered before the last HA restart will not fire `ans_notification_acknowledged` even if the user taps or dismisses after restart. If your automation uses `wait_for_trigger` on `ans_notification_acknowledged`, it will hang indefinitely for pre-restart notifications. This is expected behaviour for the current scope.
 
 ### Limitations
 
@@ -367,7 +355,7 @@ The in-memory pending-acks set is populated by `ans_notification_delivered` even
 - Signal, TTS, and other adapters have no interaction model that ANS can observe.
 - Acknowledgement requires the delivery event to have been observed in the current HA session.
 
-See [Usage Examples → Acknowledgement Tracking](usage-examples.md#acknowledgement-tracking) for automation patterns and [Advanced → Storage Files](advanced.md#ans_acknowledgementsJSON) for storage details.
+See [Channel Reference → Mobile App → `data.tag` and Acknowledgement Tracking](channels.md#datatag-and-acknowledgement-tracking) for the tag mechanism details and [Advanced → Storage Files](advanced.md#ans_acknowledgementsJSON) for storage details.
 
 ---
 
@@ -402,4 +390,4 @@ See [Advanced Topics → Channel Manager — Adapter Lifecycle](advanced.md#chan
 
 ---
 
-*Previous: [← Installation & Configuration](getting-started.md) | Next: [Usage Examples →](usage-examples.md)*
+*Previous: [← Installation & Configuration](getting-started.md) | Next: [Channel Reference →](channels.md)*

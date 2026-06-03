@@ -156,6 +156,29 @@ def _build_payload(call: ServiceCall) -> NotificationPayload:
 
     data: dict[str, Any] = call.data
 
+    # --- backwards-compatibility shim for the deprecated `metadata` field ---
+    # Prior to the payload redesign, `metadata` was a single flat dict that
+    # adapters read directly (Signal: text_mode/attachments/urls/verify_ssl,
+    # Mobile App: entire dict forwarded as push data, Persistent: appended to body).
+    # It has been split into `channel_data` (adapter overrides) and `context`
+    # (correlation data). When `metadata` is supplied without the new fields,
+    # its contents are used as a fallback for both so existing automations
+    # continue to work. Explicit `context` / `channel_data` always take priority.
+    context = dict(data.get("context") or {})
+    channel_data = dict(data.get("channel_data") or {})
+    raw_metadata = data.get("metadata")
+    if raw_metadata and isinstance(raw_metadata, dict):
+        _LOGGER.warning(
+            "ANS: 'metadata' is deprecated and will be removed in a future version. "
+            "Replace it with 'channel_data' (adapter-specific options such as text_mode, "
+            "tag, attachments) and/or 'context' (correlation data such as entity, camera). "
+            "See the ANS Advanced Topics documentation for migration details."
+        )
+        if not context:
+            context = dict(raw_metadata)
+        if not channel_data:
+            channel_data = dict(raw_metadata)
+
     try:
         payload = NotificationPayload(
             notification_id=str(uuid4()),
@@ -164,12 +187,12 @@ def _build_payload(call: ServiceCall) -> NotificationPayload:
             message=str(data["message"]),
             type=NotificationType(data["type"]),
             criticality=NotificationCriticality(data["criticality"]),
-            context=dict(data.get("context") or {}),
+            context=context,
             link=data.get("link"),
             image=data.get("image"),
             video=data.get("video"),
             file=data.get("file"),
-            channel_data=dict(data.get("channel_data") or {}),
+            channel_data=channel_data,
             actions=list(data.get("actions", [])),
             created_at=datetime.now(UTC),
         )

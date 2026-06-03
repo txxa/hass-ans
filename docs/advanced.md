@@ -19,6 +19,7 @@ This section covers internals and extension points for users who want to underst
 - [Channel Manager — Adapter Lifecycle](#channel-manager--adapter-lifecycle)
   - [Stale Channel Repairs Issues](#stale-channel-repairs-issues)
 - [Extending ANS with a New Channel](#extending-ans-with-a-new-channel)
+- [Backwards Compatibility](#backwards-compatibility)
 
 > **Note:** Per-channel reference material (field handling, `channel_data` options, acknowledgement mechanics, limitations) has moved to [Channel Reference](channels.md).
 
@@ -335,6 +336,65 @@ The adapter interface is defined in `channels/base.py`. To add a new channel:
 The adapter receives a `NotificationPayload`, `RecipientContactInfo`, `idempotency_key`, `job_id`, and optional `options`. It must return a `DeliveryResult` with a `DeliveryStatus`.
 
 > This is an unofficial extension point. The adapter API is not versioned and may change between ANS releases.
+
+
+## Backwards Compatibility
+
+### `metadata` field (deprecated)
+
+Prior to the notification payload redesign, `ans.send_notification` accepted a single flat `metadata` dict that was passed directly to channel adapters:
+
+```yaml
+# Old form — no longer recommended
+service: ans.send_notification
+data:
+  source: "automation.front_door"
+  title: "Motion detected"
+  message: "Front door camera triggered."
+  type: SECURITY
+  criticality: HIGH
+  metadata:
+    text_mode: styled        # Signal: bold title formatting
+    tag: motion-front-door   # Mobile App: notification tag
+    entity: binary_sensor.front_door  # Persistent: context link
+```
+
+This field has been replaced by two focused fields:
+
+- **`channel_data`** — flat dict of adapter-specific delivery overrides (e.g. `text_mode`, `tag`, `attachments`, `verify_ssl`). Each adapter reads only the keys it recognises and ignores the rest.
+- **`context`** — key-value pairs for correlation and display. Persistent notifications append them as a `Context:` section; the mobile app uses the `entity` key for a tap-action deep-link; other adapters ignore all context keys.
+
+**Migrating existing automations:**
+
+```yaml
+# New form
+service: ans.send_notification
+data:
+  source: "automation.front_door"
+  title: "Motion detected"
+  message: "Front door camera triggered."
+  type: SECURITY
+  criticality: HIGH
+  channel_data:
+    text_mode: styled
+    tag: motion-front-door
+  context:
+    entity: binary_sensor.front_door
+```
+
+**How the shim works:**
+
+For backwards compatibility, `metadata` is still accepted. When it is present in a service call and neither `channel_data` nor `context` is explicitly provided, the metadata contents are copied into both fields as a fallback. If `channel_data` or `context` are explicitly set, they take full priority — metadata is not merged, only used when the respective field is absent.
+
+A deprecation warning is written to the HA log each time `metadata` is used:
+
+```
+WARNING ... ANS: 'metadata' is deprecated and will be removed in a future version.
+Replace it with 'channel_data' (adapter-specific options such as text_mode, tag,
+attachments) and/or 'context' (correlation data such as entity, camera).
+```
+
+> **Note:** Because the same dict is applied to both `context` and `channel_data`, adapter-specific keys (e.g. `text_mode`) will also appear in the persistent notification `Context:` section. This is a known trade-off of the shim approach and does not affect delivery behaviour. Migrating to explicit `channel_data` / `context` fields eliminates this.
 
 ---
 

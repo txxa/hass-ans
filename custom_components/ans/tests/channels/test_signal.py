@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
@@ -489,7 +490,7 @@ async def test_link_appended_to_message_body():
 
 @pytest.mark.asyncio
 async def test_link_with_title_appended_after_body():
-    """link appears after the message body even when a title is present."""
+    """Link appears after the message body even when a title is present."""
     adapter, hass = _make_adapter()
     payload = _make_payload(
         title="Alert", message="Body text", link="https://example.com"
@@ -767,7 +768,6 @@ class TestSignalAttachmentPathGuard:
 @pytest.mark.asyncio
 async def test_bare_domain_image_url_skipped_with_warning(caplog):
     """An image URL with no filename path segment is not added to urls and a warning is logged."""
-    import logging
 
     adapter, hass = _make_adapter()
     payload = _make_payload(message="Look", image="https://example.com")

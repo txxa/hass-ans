@@ -221,7 +221,7 @@ class TestMobileAppAcknowledgementTag:
         assert sd["data"]["tag"] == "custom-tag"
 
     async def test_tag_present_without_metadata(self):
-        """tag must be present even when the payload has no metadata."""
+        """Tag must be present even when the payload has no metadata."""
         adapter, hass = _make_adapter()
         payload = make_payload()  # no metadata
         await _deliver(adapter, payload)

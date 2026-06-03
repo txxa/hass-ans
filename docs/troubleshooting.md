@@ -27,6 +27,7 @@ Diagnosing common delivery problems, channel issues, and answers to frequently a
   - [Can two recipients share the same channel?](#can-two-recipients-share-the-same-channel)
   - [Can I configure ANS without a UI? (YAML configuration)](#can-i-configure-ans-without-a-ui-yaml-configuration)
   - [Why does my media player show up in the channel list but I can't select it for a non-TTS recipient?](#why-does-my-media-player-show-up-in-the-channel-list-but-i-cant-select-it-for-a-non-tts-recipient)
+  - [My automations used `metadata:` — is that still supported?](#my-automations-used-metadata--is-that-still-supported)
 
 ## Troubleshooting
 
@@ -291,6 +292,17 @@ No. ANS uses the HA config flow UI exclusively. YAML-based configuration is not 
 ### Why does my media player show up in the channel list but I can't select it for a non-TTS recipient?
 
 Media player channels (`media_player.*`) are reserved for TTS recipients only. For non-TTS recipients (HA User, Generic, System), only `notify.*` channels are shown. This is by design: sending text to a media player requires a TTS engine, which is configured on TTS recipient types.
+
+---
+
+### My automations used `metadata:` — is that still supported?
+
+Yes, but the field is deprecated. Prior to ANS's payload redesign, `metadata` was a single flat dict passed directly to channel adapters. It has been replaced by two focused fields:
+
+- **`channel_data`** — adapter-specific delivery options (e.g. `text_mode`, `tag`, `attachments`, `verify_ssl`)
+- **`context`** — correlation data appended to persistent notifications and used by the mobile app for deep-link tap actions (e.g. `entity`)
+
+For backwards compatibility, `metadata` is still accepted. When it is present and neither `channel_data` nor `context` is explicitly set, the metadata contents are applied as a fallback for both. A deprecation warning is logged each time. See [Backwards Compatibility → `metadata` field](advanced.md#backwards-compatibility) for the full migration guide.
 
 ---
 

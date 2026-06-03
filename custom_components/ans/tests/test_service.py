@@ -254,11 +254,13 @@ class TestBuildPayloadRichContent:
     }
 
     def test_link_is_passed_through(self):
+        """Ensure a provided link is copied into the payload unchanged."""
         call = _make_service_call({**self._BASE, "link": "https://example.com"})
         payload = _build_payload(call)
         assert payload.link == "https://example.com"
 
     def test_image_is_passed_through(self):
+        """Ensure a provided image URL is copied into the payload unchanged."""
         call = _make_service_call(
             {**self._BASE, "image": "https://example.com/img.jpg"}
         )
@@ -266,6 +268,7 @@ class TestBuildPayloadRichContent:
         assert payload.image == "https://example.com/img.jpg"
 
     def test_video_is_passed_through(self):
+        """Ensure a provided video URL is copied into the payload unchanged."""
         call = _make_service_call(
             {**self._BASE, "video": "https://example.com/clip.mp4"}
         )
@@ -273,11 +276,13 @@ class TestBuildPayloadRichContent:
         assert payload.video == "https://example.com/clip.mp4"
 
     def test_file_is_passed_through(self):
+        """Ensure a provided file URL is copied into the payload unchanged."""
         call = _make_service_call({**self._BASE, "file": "https://example.com/doc.pdf"})
         payload = _build_payload(call)
         assert payload.file == "https://example.com/doc.pdf"
 
     def test_entity_is_passed_through(self):
+        """Ensure a provided context entity is copied into the payload unchanged."""
         call = _make_service_call(
             {**self._BASE, "context": {"entity": "binary_sensor.door"}}
         )
@@ -285,6 +290,7 @@ class TestBuildPayloadRichContent:
         assert payload.context.get("entity") == "binary_sensor.door"
 
     def test_all_optional_fields_default_to_none(self):
+        """Ensure all optional payload fields default to None when omitted."""
         call = _make_service_call(self._BASE)
         payload = _build_payload(call)
         assert payload.link is None
@@ -312,12 +318,14 @@ class TestUrlSchemeValidation:
 
     @pytest.mark.parametrize("field", ["link", "image", "video", "file"])
     def test_http_accepted(self, field):
+        """Verify that http URLs are accepted by the schema."""
         data = {**self._BASE, field: "http://example.com/resource"}
         result = SEND_NOTIFICATION_SCHEMA(data)
         assert result[field] == "http://example.com/resource"
 
     @pytest.mark.parametrize("field", ["link", "image", "video", "file"])
     def test_https_accepted(self, field):
+        """Verify that https URLs are accepted by the schema."""
         data = {**self._BASE, field: "https://example.com/resource"}
         result = SEND_NOTIFICATION_SCHEMA(data)
         assert result[field] == "https://example.com/resource"

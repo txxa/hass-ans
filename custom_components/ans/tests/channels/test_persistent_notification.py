@@ -141,7 +141,7 @@ class TestPersistentNotificationDelivery:
         assert "[Details](https://example.com)" in sd["message"]
 
     async def test_entity_rendered_as_deep_link(self):
-        """context value matching a known entity ID is auto-linked in the Context section."""
+        """Context value matching a known entity ID is auto-linked in the Context section."""
         adapter, hass = _make_adapter()
         payload = make_payload(context={"entity": "binary_sensor.door"})
         await _deliver(adapter, payload)

@@ -13,8 +13,8 @@ from homeassistant.exceptions import (
     ServiceValidationError,
 )
 
-from ..models import DeliveryResult, NotificationPayload, RecipientContactInfo
 from ..helper import media_label
+from ..models import DeliveryResult, NotificationPayload, RecipientContactInfo
 from .base import (
     AdapterMetadata,
     AdapterType,

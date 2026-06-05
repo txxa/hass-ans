@@ -334,7 +334,7 @@
     "issues": {
         "stale_channel": {
             "title": "Notification channel unavailable: {channel_label}",
-            "description": "The notification channel '{channel_id}' is no longer available in Home Assistant. Notifications routed to this channel will be permanently failed until it is restored.\n\nTo resolve this, run the `ans.refresh_channels` service to re-detect available channels, or reconfigure the affected recipients to use a different channel."
+            "description": "The notification channel \"{channel_id}\" is no longer available in Home Assistant. Notifications routed to this channel will be permanently failed until it is restored.\n\nTo resolve this, run the `ans.refresh_channels` service to re-detect available channels, or reconfigure the affected recipients to use a different channel."
         }
     },
     "services": {

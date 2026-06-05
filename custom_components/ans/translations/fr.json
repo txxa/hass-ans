@@ -334,7 +334,7 @@
     "issues": {
         "stale_channel": {
             "title": "Canal de notification indisponible : {channel_label}",
-            "description": "Le canal de notification '{channel_id}' n'est plus disponible dans Home Assistant. Les notifications acheminées vers ce canal échoueront définitivement jusqu'à sa restauration.\n\nPour résoudre ce problème, exécutez le service `ans.refresh_channels` pour détecter à nouveau les canaux disponibles, ou reconfigurez les destinataires concernés pour utiliser un autre canal."
+            "description": "Le canal de notification \"{channel_id}\" n'est plus disponible dans Home Assistant. Les notifications acheminées vers ce canal échoueront définitivement jusqu'à sa restauration.\n\nPour résoudre ce problème, exécutez le service `ans.refresh_channels` pour détecter à nouveau les canaux disponibles, ou reconfigurez les destinataires concernés pour utiliser un autre canal."
         }
     },
     "services": {

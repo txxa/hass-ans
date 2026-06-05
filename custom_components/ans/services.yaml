@@ -1,7 +1,6 @@
 send_notification:
   name: Send Notification
   description: Send a notification through the ANS (Advanced Notification System) with configurable criticality and delivery channels.
-  supports_response: optional
   fields:
     source:
       name: Source

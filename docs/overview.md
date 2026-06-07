@@ -57,7 +57,7 @@ When either source fires, ANS records the acknowledgement and fires an `ans_noti
 
 Acknowledgement state is stored in `ans_acknowledgements.json` in HA `.storage/` and survives restarts. Each notification can only be acknowledged once — the registry is idempotent.
 
-> **Note:** Acknowledgement tracking requires the notification to have been delivered in the **current HA session**. Notifications delivered before the last HA restart cannot be acknowledged — the pending-acks set is not persisted across restarts.
+> **Note:** Acknowledgement eligibility is persisted by ANS. Notifications delivered before an HA restart can still be acknowledged after restart when the user taps an action button or dismisses a persistent notification.
 
 ### Criticality-Based Routing
 Every notification carries a criticality level (`LOW`, `MEDIUM`, `HIGH`, `CRITICAL`). Each recipient maps each level to a different set of channels. A LOW-criticality reminder might go only to the HA sidebar; a CRITICAL security alert goes to mobile, Signal, and every speaker in the house.

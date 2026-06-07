@@ -335,9 +335,13 @@ When a persistent notification is dismissed from the HA sidebar, the HA dispatch
 {
     "notification_id": "<uuid-v4>",
     "channel_id": "mobile_app" | "notify.persistent_notification",
-    "acknowledged_at": "2026-05-20T10:30:00+00:00"
+    "acknowledged_at": "2026-05-20T10:30:00+00:00",
+    "action": "<mobile action id, optional>",
+    "device_id": "<mobile device id suffix, optional>"
 }
 ```
+
+`action` and `device_id` are only included for mobile acknowledgements. Persistent notification acknowledgements include only `notification_id`, `channel_id`, and `acknowledged_at`.
 
 ### Idempotency
 
@@ -345,15 +349,14 @@ Each `notification_id` can be acknowledged only once. The first acknowledgement 
 
 ### Pending-Acks Scope
 
-The in-memory pending-acks set is populated by `ans_notification_delivered` events. It is not persisted — HA restarts clear it.
+ANS persists pending acknowledgement eligibility to storage and restores it on startup. This means a notification delivered before a restart can still be acknowledged after restart.
 
-> **Note:** Notifications delivered before the last HA restart will not fire `ans_notification_acknowledged` even if the user taps or dismisses after restart. If your automation uses `wait_for_trigger` on `ans_notification_acknowledged`, it will hang indefinitely for pre-restart notifications. This is expected behaviour for the current scope.
+> **Note:** Acknowledgements remain idempotent per `notification_id`. The first acknowledgement wins; subsequent taps or dismissals for the same notification do not emit additional `ans_notification_acknowledged` events.
 
 ### Limitations
 
 - Acknowledgement tracking is only supported for **Mobile App** and **Persistent Notification** channels.
 - Signal, TTS, and other adapters have no interaction model that ANS can observe.
-- Acknowledgement requires the delivery event to have been observed in the current HA session.
 
 See [Channel Reference → Mobile App → `data.tag` and Acknowledgement Tracking](channels.md#datatag-and-acknowledgement-tracking) for the tag mechanism details and [Advanced → Storage Files](advanced.md#ans_acknowledgementsJSON) for storage details.
 

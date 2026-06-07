@@ -140,6 +140,13 @@ ANS always sets `data.tag` on every Mobile App notification. The tag defaults to
 
 The HA Companion App includes the tag in every `mobile_app_notification_action` event it fires, regardless of which button was tapped. ANS listens for this event, matches the tag against pending deliveries, and — when a match is found — fires `ans_notification_acknowledged` and records the acknowledgement in the `AcknowledgementRegistry`.
 
+For mobile acknowledgements, `ans_notification_acknowledged` includes the standard fields (`notification_id`, `channel_id`, `acknowledged_at`) and may additionally include:
+
+- `action` — the action identifier from `mobile_app_notification_action` (when present)
+- `device_id` — the originating mobile app device suffix (derived from `notify.mobile_app_<device_id>`)
+
+For persistent notification acknowledgements, `action` and `device_id` are omitted.
+
 > **Note:** `data.tag` is reserved for acknowledgement tracking. To control the tag for notification grouping or replacement, supply `tag` in `channel_data` — ANS will use that value for both grouping and ack correlation.
 
 ```yaml
@@ -169,7 +176,7 @@ All keys in `channel_data` are flat-merged into the `data:` payload sent to `not
 
 - `video`, `file`, `context` (non-entity keys), Signal-specific `channel_data` keys — all silently ignored.
 - `image` only works with http/https URLs that contain a filename path segment. Local paths are not forwarded.
-- Acknowledgement tracking requires the delivery event to have been observed in the **current HA session**. Notifications delivered before the last HA restart will not fire `ans_notification_acknowledged` even if the user taps a button after restart.
+- Acknowledgement eligibility is persisted by ANS. Notifications delivered before an HA restart can still emit `ans_notification_acknowledged` after restart when the user taps an action.
 - Action buttons are silently ignored by all other channel adapters (Signal, Persistent Notification, TTS).
 
 ---

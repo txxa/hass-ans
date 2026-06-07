@@ -418,7 +418,7 @@ def _setup_listeners(
     )
 
 
-def _setup_acknowledgement_tracking(
+async def _setup_acknowledgement_tracking(
     hass: HomeAssistant,
     entry: ConfigEntry,
     system: ANSSystem,
@@ -428,14 +428,15 @@ def _setup_acknowledgement_tracking(
     Three listeners are registered:
 
     1. ``ans_notification_delivered`` — when a mobile_app or
-       persistent_notification delivery succeeds, add the notification_id to
-       an in-memory ``_pending_acks`` set so subsequent acknowledgement events
-       can be correlated.
+       persistent_notification delivery succeeds, persist a ``pending`` record
+       via :meth:`AcknowledgementRegistry.mark_pending` so that eligibility
+       survives HA restarts.
 
     2. ``mobile_app_notification_action`` — fired by the HA mobile companion app
        when the user taps any action button.  If the ``tag`` field matches a
        pending notification_id the acknowledgement is recorded and
-       ``ans_notification_acknowledged`` is fired.
+       ``ans_notification_acknowledged`` is fired with ``action`` and
+       ``device_id`` included when available.
 
     3. ``persistent_notification.removed`` — fired when a persistent notification
        is dismissed in the HA frontend.  If ``notification_id`` matches a pending
@@ -455,14 +456,20 @@ def _setup_acknowledgement_tracking(
     """
     acknowledgement_registry = system.acknowledgement_registry
 
-    # In-memory set of notification_ids that have been successfully delivered
-    # to a mobile_app or persistent_notification channel and are therefore
-    # eligible for acknowledgement.  Cleared on HA restart (acceptable for
-    # Phase 4 scope — persistent pending-acks are a future enhancement).
-    _pending_acks: set[str] = set()
+    # Restore eligibility from the durable store so that notifications delivered
+    # before an HA restart remain acknowledgeable in the current session.
+    _pending_meta: dict[
+        str, str
+    ] = await acknowledgement_registry.get_pending_channel_ids()
+    _pending_acks: set[str] = set(_pending_meta.keys())
+    if _pending_acks:
+        _LOGGER.debug(
+            "Restored %d pending ack(s) from persistent store on startup",
+            len(_pending_acks),
+        )
 
     async def _on_notification_delivered(event: Event[Any]) -> None:
-        """Populate pending-acks when a mobile_app or persistent_notification delivers."""
+        """Persist a pending-ack record when a mobile_app or persistent_notification delivers."""
         channel_id: str = event.data.get("channel_id", "")
         notification_id: str = event.data.get("notification_id", "")
         if not notification_id:
@@ -471,12 +478,19 @@ def _setup_acknowledgement_tracking(
             channel_id.startswith("notify.mobile_app_")
             or channel_id == PERSISTENT_NOTIFICATION_CHANNEL
         ):
-            _pending_acks.add(notification_id)
-            _LOGGER.debug(
-                "Added notification_id '%s' to pending acks (channel=%s)",
-                notification_id,
-                channel_id,
+            recorded = await acknowledgement_registry.mark_pending(
+                notification_id=notification_id,
+                channel_id=channel_id,
+                delivered_at=datetime.now(UTC),
             )
+            if recorded:
+                _pending_acks.add(notification_id)
+                _pending_meta[notification_id] = channel_id
+                _LOGGER.debug(
+                    "Pending ack registered for notification_id '%s' (channel=%s)",
+                    notification_id,
+                    channel_id,
+                )
 
     entry.async_on_unload(
         hass.bus.async_listen(EVENT_NOTIFICATION_DELIVERED, _on_notification_delivered)
@@ -485,10 +499,32 @@ def _setup_acknowledgement_tracking(
     async def _on_mobile_app_action(event: Event[Any]) -> None:
         """Handle mobile_app_notification_action — any tap counts as acknowledgement."""
         tag: str | None = event.data.get("tag")
-        if not tag or tag not in _pending_acks:
+        if not tag:
+            _LOGGER.debug(
+                "mobile_app_notification_action ignored: event data contains no 'tag' field"
+            )
+            return
+        if tag not in _pending_acks:
+            _LOGGER.debug(
+                "mobile_app_notification_action ignored: tag '%s' is not in pending acks "
+                "(notification unknown or already acknowledged)",
+                tag,
+            )
             return
 
         acknowledged_at = datetime.now(UTC)
+
+        # Extract the action identifier the user pressed (may be absent on some platforms).
+        action: str | None = event.data.get("action") or None
+
+        # Derive the device_id from the stored delivery channel_id.
+        delivery_channel: str = _pending_meta.get(tag, "")
+        device_id: str | None = (
+            delivery_channel.removeprefix("notify.mobile_app_") or None
+            if delivery_channel.startswith("notify.mobile_app_")
+            else None
+        )
+
         recorded = await acknowledgement_registry.record_acknowledgement(
             notification_id=tag,
             channel_id="mobile_app",
@@ -496,15 +532,30 @@ def _setup_acknowledgement_tracking(
         )
         if recorded:
             _pending_acks.discard(tag)
-            hass.bus.async_fire(
-                EVENT_NOTIFICATION_ACKNOWLEDGED,
-                {
-                    "notification_id": tag,
-                    "channel_id": "mobile_app",
-                    "acknowledged_at": acknowledged_at.isoformat(),
-                },
+            _pending_meta.pop(tag, None)
+            payload: dict[str, Any] = {
+                "notification_id": tag,
+                "channel_id": "mobile_app",
+                "acknowledged_at": acknowledged_at.isoformat(),
+            }
+            if action is not None:
+                payload["action"] = action
+            if device_id is not None:
+                payload["device_id"] = device_id
+            hass.bus.async_fire(EVENT_NOTIFICATION_ACKNOWLEDGED, payload)
+            _LOGGER.debug(
+                "Notification '%s' acknowledged via mobile_app action "
+                "(action=%s device_id=%s)",
+                tag,
+                action,
+                device_id,
             )
-            _LOGGER.debug("Notification '%s' acknowledged via mobile_app action", tag)
+        else:
+            _LOGGER.debug(
+                "mobile_app_notification_action for tag '%s': acknowledgement not recorded "
+                "(already acknowledged or registry write failed)",
+                tag,
+            )
 
     entry.async_on_unload(
         hass.bus.async_listen("mobile_app_notification_action", _on_mobile_app_action)
@@ -524,6 +575,10 @@ def _setup_acknowledgement_tracking(
 
         for notification_id in notifications:
             if notification_id not in _pending_acks:
+                _LOGGER.debug(
+                    "persistent_notification removal ignored for '%s': not in pending acks",
+                    notification_id,
+                )
                 continue
 
             acknowledged_at = datetime.now(UTC)
@@ -534,6 +589,7 @@ def _setup_acknowledgement_tracking(
             )
             if recorded:
                 _pending_acks.discard(notification_id)
+                _pending_meta.pop(notification_id, None)
                 hass.bus.async_fire(
                     EVENT_NOTIFICATION_ACKNOWLEDGED,
                     {
@@ -544,6 +600,12 @@ def _setup_acknowledgement_tracking(
                 )
                 _LOGGER.debug(
                     "Notification '%s' acknowledged via persistent_notification dismissal",
+                    notification_id,
+                )
+            else:
+                _LOGGER.debug(
+                    "persistent_notification dismissal for '%s': acknowledgement not recorded "
+                    "(already acknowledged or registry write failed)",
                     notification_id,
                 )
 
@@ -614,7 +676,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         # Acknowledgement tracking (NH-3): listen for mobile_app actions and
         # persistent_notification dismissals to fire ans_notification_acknowledged.
-        _setup_acknowledgement_tracking(hass, entry, system)
+        await _setup_acknowledgement_tracking(hass, entry, system)
 
         # Finalize setup: clear suppression flag and flush any deferred resync.
         await system.channel_manager.finalize_setup()

@@ -12,8 +12,11 @@ This design makes it easy to:
 - Debug delivery issues
 """
 
+import asyncio
 import json
 import logging
+import os
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -428,13 +431,26 @@ class RetryQueue:
 class AcknowledgementRegistry:
     """Registry of notification acknowledgements.
 
-    Stores one entry per notification_id with:
-    - notification_id: ANS UUID string
-    - channel_id: channel through which acknowledgement arrived
-    - acknowledged_at: ISO-format UTC timestamp
+    Each record tracks the full lifecycle of an acknowledgement:
 
-    record_acknowledgement() is idempotent: a second call for the same
-    notification_id returns False and does not overwrite the original record.
+    - ``status: "pending"``  — notification delivered; awaiting user interaction.
+    - ``status: "acknowledged"`` — user interacted; acknowledgement recorded.
+
+    Schema per record::
+
+        {
+            "notification_id": "<ANS UUID string>",
+            "channel_id":      "<delivery channel, e.g. notify.mobile_app_X>",
+            "status":          "pending" | "acknowledged",
+            "delivered_at":    "<ISO-8601 UTC>" ,   # set when pending
+            "acknowledged_at": "<ISO-8601 UTC>",    # set when acknowledged
+        }
+
+    Older records that pre-date the status field are treated as
+    ``status: "acknowledged"`` for backward compatibility.
+
+    All mutation methods are serialised by an :class:`asyncio.Lock` and use an
+    atomic rename-based write strategy to prevent file corruption.
     """
 
     def __init__(self, hass: HomeAssistant, enabled: bool = True) -> None:
@@ -452,9 +468,14 @@ class AcknowledgementRegistry:
         )
         self._acks: list[dict] = []
         self._loaded = False
+        self._lock = asyncio.Lock()
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
 
     async def _load(self) -> None:
-        """Load acknowledgements from JSON file."""
+        """Load acknowledgements from JSON file (idempotent; guarded by _loaded flag)."""
         if self._loaded:
             return
 
@@ -473,18 +494,113 @@ class AcknowledgementRegistry:
 
         self._loaded = True
 
-    async def _save(self) -> None:
-        """Save acknowledgements to JSON file."""
+    def _write_atomic(self, data: list) -> None:
+        """Serialize *data* to the storage path using an atomic tmp-file + rename.
+
+        Called from an executor thread via :meth:`_save`.
+        """
+        parent = self._storage_path.parent
+        parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(dir=parent, suffix=".tmp")
         try:
-            self._storage_path.parent.mkdir(parents=True, exist_ok=True)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            os.replace(tmp_path, self._storage_path)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
-            def _write():
-                with open(self._storage_path, "w", encoding="utf-8") as f:
-                    json.dump(self._acks, f, indent=2)
+    async def _save(self) -> None:
+        """Persist the current in-memory list atomically.
 
-            await self._hass.async_add_executor_job(_write)
+        Must only be called while ``self._lock`` is held so that the snapshot
+        passed to the executor is consistent.
+        """
+        data = list(self._acks)  # snapshot inside the lock; safe to pass to thread
+        try:
+            await self._hass.async_add_executor_job(self._write_atomic, data)
         except OSError as e:
             _LOGGER.error("Failed to save acknowledgements: %s", e)
+
+    @staticmethod
+    def _record_timestamp(record: dict) -> datetime:
+        """Return the most relevant datetime for retention purposes.
+
+        For acknowledged records the ``acknowledged_at`` field is used;
+        for pending records ``delivered_at`` is used.  Falls back to
+        ``datetime.max`` (UTC-aware) so records with missing timestamps
+        are never cleaned up accidentally.
+        """
+        from datetime import timezone  # noqa: PLC0415
+
+        ts = record.get("acknowledged_at") or record.get("delivered_at")
+        if ts:
+            return datetime.fromisoformat(ts)
+        return datetime.max.replace(tzinfo=timezone.utc)
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    async def mark_pending(
+        self,
+        notification_id: str,
+        channel_id: str,
+        delivered_at: datetime,
+    ) -> bool:
+        """Record that a notification has been delivered and awaits acknowledgement.
+
+        Args:
+            notification_id: ANS notification UUID (string).
+            channel_id: Delivery channel (e.g. ``notify.mobile_app_my_phone``).
+            delivered_at: UTC datetime when delivery succeeded.
+
+        Returns:
+            True if a new pending record was created; False if a record for
+            this notification_id already exists (pending or acknowledged).
+
+        """
+        if not self._enabled:
+            return False
+
+        async with self._lock:
+            await self._load()
+            if any(a["notification_id"] == notification_id for a in self._acks):
+                return False
+            self._acks.append(
+                {
+                    "notification_id": notification_id,
+                    "channel_id": channel_id,
+                    "status": "pending",
+                    "delivered_at": delivered_at.isoformat(),
+                }
+            )
+            await self._save()
+        return True
+
+    async def get_pending_channel_ids(self) -> dict[str, str]:
+        """Return a mapping of ``{notification_id: channel_id}`` for every pending record.
+
+        Used on startup to restore in-memory eligibility from persisted state
+        so that notifications delivered before an HA restart remain acknowledgeable.
+
+        Returns:
+            Dict mapping notification_id strings to their delivery channel_id.
+
+        """
+        if not self._enabled:
+            return {}
+
+        async with self._lock:
+            await self._load()
+            return {
+                a["notification_id"]: a["channel_id"]
+                for a in self._acks
+                if a.get("status") == "pending"
+            }
 
     async def record_acknowledgement(
         self,
@@ -492,7 +608,14 @@ class AcknowledgementRegistry:
         channel_id: str,
         acknowledged_at: datetime,
     ) -> bool:
-        """Record that a notification was acknowledged.
+        """Transition a pending record to acknowledged, or create an acknowledged record.
+
+        When a ``pending`` record exists for *notification_id* it is updated
+        in-place (``status`` → ``"acknowledged"``, ``acknowledged_at`` set).
+        When no prior record exists an acknowledged record is written directly
+        for robustness (e.g. if ``mark_pending`` was skipped).
+        A second call for an already-acknowledged notification returns ``False``
+        without modifying storage.
 
         Args:
             notification_id: ANS notification UUID (string).
@@ -500,26 +623,37 @@ class AcknowledgementRegistry:
             acknowledged_at: UTC datetime when the acknowledgement was received.
 
         Returns:
-            True if the acknowledgement was newly recorded; False if it was
-            already recorded (idempotency guard — no overwrite occurs).
+            True if the notification was newly acknowledged; False if it was
+            already acknowledged (idempotency guard).
 
         """
         if not self._enabled:
             return False
 
-        await self._load()
+        async with self._lock:
+            await self._load()
 
-        if any(a["notification_id"] == notification_id for a in self._acks):
-            return False
+            for record in self._acks:
+                if record["notification_id"] == notification_id:
+                    # Treat legacy records (no status field) as acknowledged.
+                    if record.get("status", "acknowledged") == "acknowledged":
+                        return False
+                    # Transition pending → acknowledged in-place.
+                    record["status"] = "acknowledged"
+                    record["acknowledged_at"] = acknowledged_at.isoformat()
+                    await self._save()
+                    return True
 
-        self._acks.append(
-            {
-                "notification_id": notification_id,
-                "channel_id": channel_id,
-                "acknowledged_at": acknowledged_at.isoformat(),
-            }
-        )
-        await self._save()
+            # No prior record — write an acknowledged record directly.
+            self._acks.append(
+                {
+                    "notification_id": notification_id,
+                    "channel_id": channel_id,
+                    "status": "acknowledged",
+                    "acknowledged_at": acknowledged_at.isoformat(),
+                }
+            )
+            await self._save()
         return True
 
     async def is_acknowledged(self, notification_id: str) -> bool:
@@ -532,11 +666,18 @@ class AcknowledgementRegistry:
         if not self._enabled:
             return False
 
-        await self._load()
-        return any(a["notification_id"] == notification_id for a in self._acks)
+        async with self._lock:
+            await self._load()
+        return any(
+            a["notification_id"] == notification_id
+            and a.get("status", "acknowledged") == "acknowledged"
+            for a in self._acks
+        )
 
     async def get_acknowledgement(self, notification_id: str) -> dict | None:
         """Return the acknowledgement record for the given notification, or None.
+
+        Only returns records with ``status: "acknowledged"``.
 
         Args:
             notification_id: ANS notification UUID (string).
@@ -545,16 +686,26 @@ class AcknowledgementRegistry:
         if not self._enabled:
             return None
 
-        await self._load()
+        async with self._lock:
+            await self._load()
         return next(
-            (a for a in self._acks if a["notification_id"] == notification_id), None
+            (
+                a
+                for a in self._acks
+                if a["notification_id"] == notification_id
+                and a.get("status", "acknowledged") == "acknowledged"
+            ),
+            None,
         )
 
     async def cleanup_old(self, before: datetime) -> int:
-        """Remove acknowledgements older than *before*.
+        """Remove records whose effective timestamp is older than *before*.
+
+        For acknowledged records the ``acknowledged_at`` timestamp is used;
+        for pending records ``delivered_at`` is used.
 
         Args:
-            before: UTC cutoff; records with acknowledged_at < before are removed.
+            before: UTC cutoff; records timestamped before this are removed.
 
         Returns:
             Number of records removed.
@@ -563,18 +714,13 @@ class AcknowledgementRegistry:
         if not self._enabled:
             return 0
 
-        await self._load()
-
-        original_count = len(self._acks)
-        self._acks = [
-            a
-            for a in self._acks
-            if datetime.fromisoformat(a["acknowledged_at"]) >= before
-        ]
-
-        removed = original_count - len(self._acks)
-        if removed > 0:
-            await self._save()
-            _LOGGER.debug("Cleaned up %d old acknowledgements", removed)
+        async with self._lock:
+            await self._load()
+            original_count = len(self._acks)
+            self._acks = [a for a in self._acks if self._record_timestamp(a) >= before]
+            removed = original_count - len(self._acks)
+            if removed > 0:
+                await self._save()
+                _LOGGER.debug("Cleaned up %d old acknowledgements", removed)
 
         return removed

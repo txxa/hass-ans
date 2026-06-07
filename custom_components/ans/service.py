@@ -34,7 +34,7 @@ _ACTION_SCHEMA = vol.Schema(
     {
         vol.Required("action"): cv.string,
         vol.Required("title"): cv.string,
-        vol.Optional("url"): cv.string,
+        vol.Optional("uri"): cv.string,
     }
 )
 

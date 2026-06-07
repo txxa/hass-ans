@@ -180,3 +180,135 @@ class TestAcknowledgementRegistry:
         cutoff = _now() - timedelta(days=1)
         removed = await reg.cleanup_old(cutoff)
         assert removed == 2
+
+
+class TestAcknowledgementRegistryStateMachine:
+    """Verify the pending → acknowledged state-transition semantics."""
+
+    async def test_mark_pending_creates_pending_record(self, tmp_path):
+        """mark_pending() writes a record with status='pending'."""
+        reg = _registry(tmp_path)
+        result = await reg.mark_pending("nid-p", "notify.mobile_app_phone", _now())
+        assert result is True
+        # Pending record is NOT visible as acknowledged.
+        assert await reg.is_acknowledged("nid-p") is False
+        assert await reg.get_acknowledgement("nid-p") is None
+
+    async def test_mark_pending_returns_false_for_duplicate(self, tmp_path):
+        """A second mark_pending() call for the same notification_id returns False."""
+        reg = _registry(tmp_path)
+        await reg.mark_pending("nid-p2", "notify.mobile_app_phone", _now())
+        result = await reg.mark_pending("nid-p2", "notify.mobile_app_phone", _now())
+        assert result is False
+
+    async def test_mark_pending_returns_false_when_already_acknowledged(self, tmp_path):
+        """mark_pending() returns False when a notification is already acknowledged."""
+        reg = _registry(tmp_path)
+        await reg.record_acknowledgement("nid-a", "mobile_app", _now())
+        result = await reg.mark_pending("nid-a", "notify.mobile_app_phone", _now())
+        assert result is False
+
+    async def test_get_pending_channel_ids_returns_only_pending(self, tmp_path):
+        """get_pending_channel_ids() returns only pending records, not acknowledged ones."""
+        reg = _registry(tmp_path)
+        await reg.mark_pending("nid-pend", "notify.mobile_app_phone", _now())
+        await reg.record_acknowledgement("nid-acked", "mobile_app", _now())
+
+        pending = await reg.get_pending_channel_ids()
+        assert "nid-pend" in pending
+        assert pending["nid-pend"] == "notify.mobile_app_phone"
+        assert "nid-acked" not in pending
+
+    async def test_get_pending_channel_ids_empty_when_none(self, tmp_path):
+        """get_pending_channel_ids() returns an empty dict when there are no pending records."""
+        reg = _registry(tmp_path)
+        assert await reg.get_pending_channel_ids() == {}
+
+    async def test_record_acknowledgement_transitions_pending(self, tmp_path):
+        """record_acknowledgement() transitions a pending record to acknowledged in-place."""
+        reg = _registry(tmp_path)
+        delivered = _now()
+        await reg.mark_pending("nid-tr", "notify.mobile_app_phone", delivered)
+
+        acked_at = _now()
+        result = await reg.record_acknowledgement("nid-tr", "mobile_app", acked_at)
+        assert result is True
+
+        assert await reg.is_acknowledged("nid-tr") is True
+        ack = await reg.get_acknowledgement("nid-tr")
+        assert ack is not None
+        assert ack["acknowledged_at"] == acked_at.isoformat()
+        assert ack.get("status") == "acknowledged"
+
+        # Must no longer appear in pending.
+        pending = await reg.get_pending_channel_ids()
+        assert "nid-tr" not in pending
+
+    async def test_record_acknowledgement_idempotent_after_transition(self, tmp_path):
+        """A second record_acknowledgement() after transition returns False."""
+        reg = _registry(tmp_path)
+        await reg.mark_pending("nid-idem", "notify.mobile_app_phone", _now())
+        await reg.record_acknowledgement("nid-idem", "mobile_app", _now())
+
+        result = await reg.record_acknowledgement("nid-idem", "mobile_app", _now())
+        assert result is False
+
+    async def test_record_acknowledgement_without_prior_pending(self, tmp_path):
+        """record_acknowledgement() creates an acknowledged record even with no pending record."""
+        reg = _registry(tmp_path)
+        result = await reg.record_acknowledgement("nid-direct", "mobile_app", _now())
+        assert result is True
+        assert await reg.is_acknowledged("nid-direct") is True
+
+    async def test_pending_record_survives_reload(self, tmp_path):
+        """A pending record written by one instance is visible after loading a fresh one."""
+        reg1 = _registry(tmp_path)
+        delivered = _now()
+        await reg1.mark_pending("nid-reload", "notify.mobile_app_phone", delivered)
+
+        reg2 = _registry(tmp_path)
+        pending = await reg2.get_pending_channel_ids()
+        assert "nid-reload" in pending
+        assert pending["nid-reload"] == "notify.mobile_app_phone"
+
+    async def test_cleanup_pending_uses_delivered_at(self, tmp_path):
+        """cleanup_old() removes stale pending records using their delivered_at timestamp."""
+        reg = _registry(tmp_path)
+        old_delivered = _now() - timedelta(days=10)
+        await reg.mark_pending("nid-stale", "notify.mobile_app_phone", old_delivered)
+
+        cutoff = _now() - timedelta(days=1)
+        removed = await reg.cleanup_old(cutoff)
+        assert removed == 1
+
+        pending = await reg.get_pending_channel_ids()
+        assert "nid-stale" not in pending
+
+    async def test_disabled_mode_mark_pending_returns_false(self, tmp_path):
+        """When enabled=False, mark_pending() is a no-op returning False."""
+        reg = _registry(tmp_path, enabled=False)
+        result = await reg.mark_pending("nid-x", "notify.mobile_app_phone", _now())
+        assert result is False
+
+    async def test_disabled_mode_get_pending_channel_ids_returns_empty(self, tmp_path):
+        """When enabled=False, get_pending_channel_ids() always returns {}."""
+        reg = _registry(tmp_path, enabled=False)
+        assert await reg.get_pending_channel_ids() == {}
+
+    async def test_atomic_write_produces_valid_json(self, tmp_path):
+        """After mark_pending and record_acknowledgement, the storage file is valid JSON."""
+        import json  # noqa: PLC0415
+
+        reg = _registry(tmp_path)
+        await reg.mark_pending("nid-json", "notify.mobile_app_phone", _now())
+        await reg.record_acknowledgement("nid-json", "mobile_app", _now())
+
+        storage_file = tmp_path / "ans_acknowledgements.json"
+        assert storage_file.exists()
+        data = json.loads(storage_file.read_text(encoding="utf-8"))
+        assert isinstance(data, list)
+        assert len(data) == 1
+        record = data[0]
+        assert record["notification_id"] == "nid-json"
+        assert record["status"] == "acknowledged"
+        assert "acknowledged_at" in record

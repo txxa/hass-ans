@@ -136,6 +136,7 @@ send_notification:
       example:
         - action: open_door
           title: Open Door
+          uri: "homeassistant://navigate/lovelace"
         - action: dismiss
           title: Dismiss
       selector:

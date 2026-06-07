@@ -145,6 +145,8 @@ def _make_system(channel_manager: MagicMock | None = None) -> MagicMock:
     system.acknowledgement_registry.record_acknowledgement = AsyncMock(
         return_value=True
     )
+    system.acknowledgement_registry.mark_pending = AsyncMock(return_value=True)
+    system.acknowledgement_registry.get_pending_channel_ids = AsyncMock(return_value={})
     return system
 
 
@@ -1501,7 +1503,11 @@ class TestAcknowledgementTracking:
         ev.data = data
         return ev
 
-    def _setup(self):
+    async def _setup(
+        self,
+        *,
+        pending_channel_ids: dict | None = None,
+    ):
         """Return (hass, entry, system, captured_listeners, dispatcher_cbs) ready for testing."""
         from custom_components.ans import (  # noqa: PLC0415
             _setup_acknowledgement_tracking,
@@ -1510,6 +1516,12 @@ class TestAcknowledgementTracking:
         hass = _make_hass()
         entry = _make_entry()
         system = _make_system()
+
+        # Allow pre-populating the registry with persisted pending records.
+        if pending_channel_ids is not None:
+            system.acknowledgement_registry.get_pending_channel_ids = AsyncMock(
+                return_value=pending_channel_ids
+            )
 
         listeners: dict[str, Any] = {}
 
@@ -1529,7 +1541,7 @@ class TestAcknowledgementTracking:
             "custom_components.ans.async_dispatcher_connect",
             side_effect=_capture_dispatcher,
         ):
-            _setup_acknowledgement_tracking(hass, entry, system)
+            await _setup_acknowledgement_tracking(hass, entry, system)
 
         return hass, entry, system, listeners, dispatcher_callbacks
 
@@ -1545,7 +1557,7 @@ class TestAcknowledgementTracking:
 
     async def test_delivered_mobile_app_adds_to_pending(self):
         """ans_notification_delivered for mobile_app channel adds notification_id to pending acks."""
-        hass, entry, system, listeners, _ = self._setup()
+        hass, entry, system, listeners, _ = await self._setup()
 
         ev = self._make_event(
             {"channel_id": "notify.mobile_app_phone", "notification_id": "nid-1"}
@@ -1560,7 +1572,7 @@ class TestAcknowledgementTracking:
 
     async def test_delivered_persistent_notification_adds_to_pending(self):
         """ans_notification_delivered for persistent_notification channel adds to pending acks."""
-        hass, entry, system, listeners, dispatcher_cbs = self._setup()
+        hass, entry, system, listeners, dispatcher_cbs = await self._setup()
 
         ev = self._make_event(
             {
@@ -1577,7 +1589,7 @@ class TestAcknowledgementTracking:
 
     async def test_delivered_other_channel_not_added_to_pending(self):
         """ans_notification_delivered for a non-mobile-app, non-pn channel does not add to pending."""
-        hass, entry, system, listeners, _ = self._setup()
+        hass, entry, system, listeners, _ = await self._setup()
 
         ev = self._make_event(
             {"channel_id": "notify.signal", "notification_id": "nid-signal"}
@@ -1591,7 +1603,7 @@ class TestAcknowledgementTracking:
 
     async def test_mobile_app_action_fires_ack_event(self):
         """mobile_app_notification_action fires ans_notification_acknowledged with correct fields."""
-        hass, entry, system, listeners, _ = self._setup()
+        hass, entry, system, listeners, _ = await self._setup()
 
         ev = self._make_event(
             {"channel_id": "notify.mobile_app_phone", "notification_id": "nid-ack"}
@@ -1608,9 +1620,66 @@ class TestAcknowledgementTracking:
         assert payload["channel_id"] == "mobile_app"
         assert "acknowledged_at" in payload
 
+    async def test_mobile_app_action_includes_action_field(self):
+        """ans_notification_acknowledged payload includes 'action' when present in the event."""
+        hass, entry, system, listeners, _ = await self._setup()
+
+        ev = self._make_event(
+            {"channel_id": "notify.mobile_app_phone", "notification_id": "nid-btn"}
+        )
+        await listeners[EVENT_NOTIFICATION_DELIVERED](ev)
+
+        action_ev = self._make_event({"tag": "nid-btn", "action": "CLOSE_GARAGE"})
+        await listeners["mobile_app_notification_action"](action_ev)
+
+        event_name, payload = hass.bus.async_fire.call_args.args
+        assert event_name == EVENT_NOTIFICATION_ACKNOWLEDGED
+        assert payload["action"] == "CLOSE_GARAGE"
+
+    async def test_mobile_app_action_includes_device_id(self):
+        """ans_notification_acknowledged payload includes 'device_id' derived from delivery channel."""
+        hass, entry, system, listeners, _ = await self._setup()
+
+        ev = self._make_event(
+            {"channel_id": "notify.mobile_app_my_phone", "notification_id": "nid-dev"}
+        )
+        await listeners[EVENT_NOTIFICATION_DELIVERED](ev)
+
+        action_ev = self._make_event({"tag": "nid-dev", "action": "OK"})
+        await listeners["mobile_app_notification_action"](action_ev)
+
+        event_name, payload = hass.bus.async_fire.call_args.args
+        assert event_name == EVENT_NOTIFICATION_ACKNOWLEDGED
+        assert payload["device_id"] == "my_phone"
+
+    async def test_mobile_app_action_no_action_key_absent_from_payload(self):
+        """When no 'action' key is in the event, 'action' is absent from the ack payload."""
+        hass, entry, system, listeners, _ = await self._setup()
+
+        ev = self._make_event(
+            {"channel_id": "notify.mobile_app_phone", "notification_id": "nid-noact"}
+        )
+        await listeners[EVENT_NOTIFICATION_DELIVERED](ev)
+
+        action_ev = self._make_event({"tag": "nid-noact"})  # no 'action' key
+        await listeners["mobile_app_notification_action"](action_ev)
+
+        event_name, payload = hass.bus.async_fire.call_args.args
+        assert event_name == EVENT_NOTIFICATION_ACKNOWLEDGED
+        assert "action" not in payload
+
+    async def test_mobile_app_action_no_tag_not_fired(self):
+        """mobile_app_notification_action with no 'tag' field does not fire any event."""
+        hass, entry, system, listeners, _ = await self._setup()
+
+        action_ev = self._make_event({"action": "OPEN"})  # no 'tag' key
+        await listeners["mobile_app_notification_action"](action_ev)
+
+        hass.bus.async_fire.assert_not_called()
+
     async def test_mobile_app_action_unknown_tag_ignored(self):
         """mobile_app_notification_action with an unknown tag does not fire any event."""
-        hass, entry, system, listeners, _ = self._setup()
+        hass, entry, system, listeners, _ = await self._setup()
 
         action_ev = self._make_event({"tag": "not-in-pending"})
         await listeners["mobile_app_notification_action"](action_ev)
@@ -1619,7 +1688,7 @@ class TestAcknowledgementTracking:
 
     async def test_persistent_notification_removed_fires_ack_event(self):
         """Dispatcher REMOVED signal for a pending pn fires ans_notification_acknowledged."""
-        hass, entry, system, listeners, dispatcher_cbs = self._setup()
+        hass, entry, system, listeners, dispatcher_cbs = await self._setup()
 
         ev = self._make_event(
             {"channel_id": PERSISTENT_NOTIFICATION_CHANNEL, "notification_id": "pn-1"}
@@ -1633,10 +1702,13 @@ class TestAcknowledgementTracking:
         assert event_name == EVENT_NOTIFICATION_ACKNOWLEDGED
         assert payload["notification_id"] == "pn-1"
         assert payload["channel_id"] == PERSISTENT_NOTIFICATION_CHANNEL
+        # action and device_id must be absent for persistent_notification
+        assert "action" not in payload
+        assert "device_id" not in payload
 
     async def test_persistent_notification_removed_unknown_id_ignored(self):
         """Dispatcher REMOVED signal for an unknown notification_id does nothing."""
-        hass, entry, system, listeners, dispatcher_cbs = self._setup()
+        hass, entry, system, listeners, dispatcher_cbs = await self._setup()
 
         await dispatcher_cbs[0](PNUpdateType.REMOVED, {"not-pending": {}})
 
@@ -1644,7 +1716,7 @@ class TestAcknowledgementTracking:
 
     async def test_second_ack_does_not_fire_event(self):
         """When record_acknowledgement returns False (duplicate), no event is fired."""
-        hass, entry, system, listeners, _ = self._setup()
+        hass, entry, system, listeners, _ = await self._setup()
 
         system.acknowledgement_registry.record_acknowledgement = AsyncMock(
             return_value=False
@@ -1659,6 +1731,37 @@ class TestAcknowledgementTracking:
         await listeners["mobile_app_notification_action"](action_ev)
 
         hass.bus.async_fire.assert_not_called()
+
+    async def test_delivered_calls_mark_pending(self):
+        """_on_notification_delivered calls mark_pending on the registry for mobile_app channel."""
+        hass, entry, system, listeners, _ = await self._setup()
+
+        ev = self._make_event(
+            {"channel_id": "notify.mobile_app_phone", "notification_id": "nid-mp"}
+        )
+        await listeners[EVENT_NOTIFICATION_DELIVERED](ev)
+
+        system.acknowledgement_registry.mark_pending.assert_awaited_once()
+        call_kwargs = system.acknowledgement_registry.mark_pending.call_args.kwargs
+        assert call_kwargs["notification_id"] == "nid-mp"
+        assert call_kwargs["channel_id"] == "notify.mobile_app_phone"
+
+    async def test_startup_restores_pending_from_registry(self):
+        """On setup, get_pending_channel_ids is called to restore persisted pending eligibility."""
+        pending = {"pre-restart-nid": "notify.mobile_app_old_phone"}
+        hass, entry, system, listeners, _ = await self._setup(
+            pending_channel_ids=pending
+        )
+
+        # The pre-restart notification should now be eligible for ack.
+        action_ev = self._make_event({"tag": "pre-restart-nid", "action": "OK"})
+        await listeners["mobile_app_notification_action"](action_ev)
+
+        hass.bus.async_fire.assert_called_once()
+        event_name, payload = hass.bus.async_fire.call_args.args
+        assert event_name == EVENT_NOTIFICATION_ACKNOWLEDGED
+        assert payload["notification_id"] == "pre-restart-nid"
+        assert payload["device_id"] == "old_phone"
 
     async def test_async_setup_entry_calls_acknowledgement_tracking(self):
         """async_setup_entry() calls _setup_acknowledgement_tracking with hass, entry, system."""
@@ -1676,7 +1779,10 @@ class TestAcknowledgementTracking:
             patch("custom_components.ans._setup_services"),
             patch("custom_components.ans._setup_listeners"),
             patch("custom_components.ans._setup_repairs"),
-            patch("custom_components.ans._setup_acknowledgement_tracking") as mock_ack,
+            patch(
+                "custom_components.ans._setup_acknowledgement_tracking",
+                new_callable=AsyncMock,
+            ) as mock_ack,
             patch("custom_components.ans.ir"),
         ):
             mock_vol.return_value.async_load = AsyncMock()

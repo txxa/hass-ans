@@ -372,7 +372,7 @@ class TestSendNotificationSchema:
                 {
                     "action": "dismiss",
                     "title": "Dismiss",
-                    "url": "homeassistant://navigate/lovelace",
+                    "uri": "homeassistant://navigate/lovelace",
                 },
             ],
         }

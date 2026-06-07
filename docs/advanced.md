@@ -111,20 +111,32 @@ Pending retry tasks. Each entry includes the full serialized task snapshot so it
 
 ### `ans_acknowledgements.json`
 
-One entry per acknowledged `notification_id`. Written when ANS observes a mobile app button tap or a persistent notification dismissal.
+One entry per tracked acknowledgement lifecycle record. ANS writes `pending` entries when delivery succeeds on an acknowledgeable channel and transitions them to `acknowledged` when user interaction is observed.
+
+```json
+{
+  "notification_id": "a1b2c3d4-...",
+  "channel_id": "notify.mobile_app_phone",
+  "status": "pending",
+  "delivered_at": "2026-04-20T08:18:10+00:00"
+}
+```
 
 ```json
 {
   "notification_id": "a1b2c3d4-...",
   "channel_id": "mobile_app",
+  "status": "acknowledged",
   "acknowledged_at": "2026-04-20T08:20:05+00:00"
 }
 ```
 
 | Field | Description |
 |---|---|
-| `notification_id` | UUID of the acknowledged ANS notification. |
-| `channel_id` | `"mobile_app"` or `"notify.persistent_notification"` — the channel through which the acknowledgement was observed. |
+| `notification_id` | UUID of the ANS notification being tracked. |
+| `channel_id` | Delivery or acknowledgement channel context (`notify.mobile_app_*`, `notify.persistent_notification`, or `mobile_app` for mobile acknowledgement records). |
+| `status` | `pending` (delivered, waiting for user interaction) or `acknowledged` (interaction observed and recorded). |
+| `delivered_at` | ISO-8601 timestamp for pending records. |
 | `acknowledged_at` | ISO-8601 timestamp of the first acknowledgement. Subsequent taps or dismissals for the same `notification_id` do not update this record. |
 
 Records are removed by the hourly housekeeping task when they are older than `storage_retention_days`.

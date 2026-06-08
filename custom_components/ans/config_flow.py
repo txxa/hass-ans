@@ -89,6 +89,7 @@ class ANSConfigFlow(ConfigFlow, domain=DOMAIN):
     """
 
     VERSION = 2
+    MINOR_VERSION = 1
 
     def __init__(self) -> None:
         """Initialize the config flow."""

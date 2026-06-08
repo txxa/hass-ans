@@ -26,6 +26,8 @@ from homeassistant.helpers.entity_registry import (
 )
 from homeassistant.helpers.event import async_track_state_added_domain
 
+from custom_components.ans.config_flow import ANSConfigFlow
+
 from .channels.base import ChannelStatus
 from .channels.channel_manager import ChannelManager
 from .config.repository import ConfigRepository
@@ -694,16 +696,41 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
     """Migrate old config entries to the current schema version."""
+
+    version = config_entry.version
+    minor_version = getattr(config_entry, "minor_version", 0)
+
     _LOGGER.debug(
-        "Migrating ANS config entry %s from version %s to %s",
+        "Checking if ANS config entry %s requires migration (current version: %s.%s)",
         config_entry.entry_id,
-        config_entry.version,
-        2,
+        version,
+        minor_version,
     )
 
-    if config_entry.version == 1:
-        new_options = dict(config_entry.options or {})
+    # If the entry version is newer than the code supports, log a warning and skip migration
+    if version > ANSConfigFlow.VERSION:
+        _LOGGER.warning(
+            "ANS config entry %s uses a newer schema version (%s.%s) than this integration "
+            "supports. This usually happens after downgrading the integration, and the older "
+            "version cannot safely read the newer entry data.",
+            config_entry.entry_id,
+            version,
+            minor_version,
+        )
+        return False
 
+    # At the moment no migration needed for version 2
+    if version == 2:
+        _LOGGER.info(
+            "ANS config entry migration skipped - no migration needed for version %s.%s",
+            version,
+            minor_version,
+        )
+        return False
+
+    # Migration logic for version 1 → 2: clamp retry configuration values into safe bounds and enforce max_delay >= base_delay.
+    if version == 1:
+        new_options = dict(config_entry.options or {})
         # Clamp retry_base_delay into [SYS_MIN_RETRY_BASE_DELAY_SECONDS, SYS_MAX_RETRY_BASE_DELAY_SECONDS]
         if SYS_CONFIG_RETRY_BASE_DELAY_KEY in new_options:
             new_options[SYS_CONFIG_RETRY_BASE_DELAY_KEY] = max(
@@ -713,7 +740,6 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
                     SYS_MAX_RETRY_BASE_DELAY_SECONDS,
                 ),
             )
-
         # Clamp retry_backoff_factor into [SYS_MIN_RETRY_BACKOFF_FACTOR, SYS_MAX_RETRY_BACKOFF_FACTOR]
         if SYS_CONFIG_RETRY_BACKOFF_FACTOR_KEY in new_options:
             new_options[SYS_CONFIG_RETRY_BACKOFF_FACTOR_KEY] = max(
@@ -723,7 +749,6 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
                     float(SYS_MAX_RETRY_BACKOFF_FACTOR),
                 ),
             )
-
         # Clamp retry_max_delay into [SYS_MIN_RETRY_MAX_DELAY_SECONDS, SYS_MAX_RETRY_MAX_DELAY_SECONDS]
         if SYS_CONFIG_RETRY_MAX_DELAY_KEY in new_options:
             new_options[SYS_CONFIG_RETRY_MAX_DELAY_KEY] = max(
@@ -733,17 +758,27 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
                     SYS_MAX_RETRY_MAX_DELAY_SECONDS,
                 ),
             )
-
         # Enforce cross-field constraint: retry_max_delay >= retry_base_delay
         base = new_options.get(SYS_CONFIG_RETRY_BASE_DELAY_KEY)
         max_delay = new_options.get(SYS_CONFIG_RETRY_MAX_DELAY_KEY)
         if base is not None and max_delay is not None and max_delay < base:
             new_options[SYS_CONFIG_RETRY_MAX_DELAY_KEY] = base
-
+        # Update the entry with the new options and version numbers
         hass.config_entries.async_update_entry(
-            config_entry, options=new_options, version=2
+            config_entry,
+            options=new_options,
+            version=ANSConfigFlow.VERSION,
+            minor_version=ANSConfigFlow.MINOR_VERSION,
         )
-        _LOGGER.info("Migrated ANS config entry %s to version 2", config_entry.entry_id)
+        # Log the successful migration with old and new version numbers
+        _LOGGER.info(
+            "Migrated ANS config entry %s from version %s.%s to version %s.%s",
+            config_entry.entry_id,
+            version,
+            minor_version,
+            ANSConfigFlow.VERSION,
+            ANSConfigFlow.MINOR_VERSION,
+        )
 
     return True
 

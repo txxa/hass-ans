@@ -53,7 +53,7 @@ class MobileAppDeliveryAdapter(DeliveryAdapter):
     )
     # Full channel prefix including separator, derived from metadata.
     # Eliminates hardcoded "notify.mobile_app_" literals throughout the class.
-    _CHANNEL_PREFIX: ClassVar[str] = ADAPTER_METADATA.channel_prefix + "_"
+    CHANNEL_PREFIX: ClassVar[str] = ADAPTER_METADATA.channel_prefix + "_"
 
     @classmethod
     def get_metadata(cls) -> AdapterMetadata:
@@ -63,13 +63,13 @@ class MobileAppDeliveryAdapter(DeliveryAdapter):
     @classmethod
     def matches_channel(cls, channel_id: str) -> bool:
         """Return True if channel_id belongs to this adapter."""
-        return channel_id.startswith(cls._CHANNEL_PREFIX)
+        return channel_id.startswith(cls.CHANNEL_PREFIX)
 
     @classmethod
     def extract_variant(cls, channel_id: str) -> str | None:
         """Return the device_id portion of a mobile_app channel_id."""
         if cls.matches_channel(channel_id):
-            return channel_id[len(cls._CHANNEL_PREFIX) :]
+            return channel_id[len(cls.CHANNEL_PREFIX) :]
         return None
 
     @classmethod
@@ -112,7 +112,7 @@ class MobileAppDeliveryAdapter(DeliveryAdapter):
 
         """
         # Extract device ID from channel_id
-        device_id = channel_id[len(cls._CHANNEL_PREFIX) :]
+        device_id = channel_id[len(cls.CHANNEL_PREFIX) :]
         # Format device name nicely
         device_name = device_id.replace("_", " ").title()
         return f"Mobile App ({device_name})"
@@ -161,7 +161,7 @@ class MobileAppDeliveryAdapter(DeliveryAdapter):
         self._hass = hass
         self.device_id = device_id
         # Full channel name derived from class-level prefix
-        self._channel = f"{self._CHANNEL_PREFIX}{device_id}"
+        self._channel = f"{self.CHANNEL_PREFIX}{device_id}"
 
     @property
     def channel(self) -> str:  # type: ignore[override]  # mypy false positive: abstract property
@@ -249,6 +249,14 @@ class MobileAppDeliveryAdapter(DeliveryAdapter):
             # channel_data may have supplied 'tag'; fall back to the ANS UUID.
             if "tag" not in data:
                 data["tag"] = str(payload.notification_id)
+            effective_tag: str = data["tag"]
+            # Only propagate as mobile_tag when the effective tag is a custom
+            # value different from the notification_id UUID.  When they match
+            # (no channel_data.tag override), the ack handler resolves the UUID
+            # directly without needing the mapping, so including it is redundant.
+            custom_tag: str | None = (
+                effective_tag if effective_tag != str(payload.notification_id) else None
+            )
 
             # Forward action buttons if the notification defines any.
             # Non-mobile-app adapters silently ignore payload.actions.
@@ -275,7 +283,7 @@ class MobileAppDeliveryAdapter(DeliveryAdapter):
                 payload.notification_id,
                 idempotency_key,
             )
-            return self.success(remote_id=idempotency_key)
+            return self.success(remote_id=idempotency_key, mobile_tag=custom_tag)
 
         except ServiceNotFound as exc:
             _LOGGER.warning(

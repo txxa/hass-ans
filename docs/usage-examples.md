@@ -646,7 +646,7 @@ ANS supports HA Companion App action buttons via the top-level `actions` field. 
 
 ## Acknowledgement Tracking
 
-ANS fires `ans_notification_acknowledged` when the user taps any action button on a mobile push notification, or dismisses a persistent notification from the HA sidebar. The event payload always includes `notification_id`, `channel_id`, and `acknowledged_at`. For mobile acknowledgements, it may also include `action` and `device_id`.
+ANS fires `ans_notification_acknowledged` when the user taps an action button or the notification body on a mobile push notification, or dismisses a persistent notification from the HA sidebar. The event payload always includes `notification_id`, `channel_id`, `acknowledged_at`, and `method` (`action_button`, `notification_tap`, or `persistent_notification_dismiss`). Mobile acknowledgements also include `device_name` and optionally `action` (for button taps). The HA event `context.user_id` carries the HA user who performed the interaction when attribution is available.
 
 > **Note:** Acknowledgement eligibility is persisted across HA restarts. A notification delivered before restart can still emit `ans_notification_acknowledged` when the user interacts after restart.
 

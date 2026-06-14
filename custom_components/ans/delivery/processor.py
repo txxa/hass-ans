@@ -415,6 +415,7 @@ class NotificationDeliveryProcessor:
                 **self._build_base_event_payload(task),
                 "attempt_number": attempt.attempt_number,
                 "remote_id": result.remote_id,
+                **({"mobile_tag": result.mobile_tag} if result.mobile_tag else {}),
             },
         )
         if self._on_terminal_outcome is not None:

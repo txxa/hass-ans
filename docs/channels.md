@@ -140,12 +140,15 @@ ANS always sets `data.tag` on every Mobile App notification. The tag defaults to
 
 The HA Companion App includes the tag in every `mobile_app_notification_action` event it fires, regardless of which button was tapped. ANS listens for this event, matches the tag against pending deliveries, and — when a match is found — fires `ans_notification_acknowledged` and records the acknowledgement in the `AcknowledgementRegistry`.
 
-For mobile acknowledgements, `ans_notification_acknowledged` includes the standard fields (`notification_id`, `channel_id`, `acknowledged_at`) and may additionally include:
+For mobile acknowledgements, `ans_notification_acknowledged` includes the standard fields (`notification_id`, `channel_id`, `acknowledged_at`) and additionally:
 
-- `action` — the action identifier from `mobile_app_notification_action` (when present)
-- `device_id` — the originating mobile app device suffix (derived from `notify.mobile_app_<device_id>`)
+- `method` — `"action_button"` when an action button was tapped; `"notification_tap"` when the notification body was tapped
+- `action` — the action identifier from `mobile_app_notification_action` (only present when `method` is `"action_button"`)
+- `device_name` — the device slug derived from the delivery channel (e.g. `"sm_g930f"` from `notify.mobile_app_sm_g930f`)
 
-For persistent notification acknowledgements, `action` and `device_id` are omitted.
+The HA event `context.user_id` carries the HA user who interacted with the notification, following standard HA conventions.
+
+For persistent notification acknowledgements, `method` is `"persistent_notification_dismiss"` and `action`/`device_name` are omitted.
 
 > **Note:** `data.tag` is reserved for acknowledgement tracking. To control the tag for notification grouping or replacement, supply `tag` in `channel_data` — ANS will use that value for both grouping and ack correlation.
 

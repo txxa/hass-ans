@@ -294,13 +294,21 @@ class DeliveryAdapter(ABC):
     # Helper factories (optional, but recommended)
     # ------------------------------------------------------------
 
-    def success(self, *, remote_id: str | None = None) -> DeliveryResult:
+    def success(
+        self,
+        *,
+        remote_id: str | None = None,
+        mobile_tag: str | None = None,
+    ) -> DeliveryResult:
         """Create a successful delivery result.
 
         Parameters
         ----------
         remote_id : str, optional
             Remote service message ID if available.
+        mobile_tag : str, optional
+            Effective ``data.tag`` sent to the mobile device (may differ from
+            ``notification_id`` when ``channel_data.tag`` overrides the default).
 
         Returns
         -------
@@ -308,7 +316,11 @@ class DeliveryAdapter(ABC):
             Success result object.
 
         """
-        return DeliveryResult(status=DeliveryStatus.SUCCESS, remote_id=remote_id)
+        return DeliveryResult(
+            status=DeliveryStatus.SUCCESS,
+            remote_id=remote_id,
+            mobile_tag=mobile_tag,
+        )
 
     def transient_failure(self, *, error: str) -> DeliveryResult:
         """Create a transient failure result for retrying.

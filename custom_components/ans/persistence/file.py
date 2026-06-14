@@ -13,11 +13,12 @@ This design makes it easy to:
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
 import tempfile
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import UUID
@@ -507,10 +508,8 @@ class AcknowledgementRegistry:
                 json.dump(data, f, indent=2)
             os.replace(tmp_path, self._storage_path)
         except Exception:
-            try:
+            with contextlib.suppress(OSError):
                 os.unlink(tmp_path)
-            except OSError:
-                pass
             raise
 
     async def _save(self) -> None:
@@ -534,12 +533,11 @@ class AcknowledgementRegistry:
         ``datetime.max`` (UTC-aware) so records with missing timestamps
         are never cleaned up accidentally.
         """
-        from datetime import timezone  # noqa: PLC0415
 
         ts = record.get("acknowledged_at") or record.get("delivered_at")
         if ts:
             return datetime.fromisoformat(ts)
-        return datetime.max.replace(tzinfo=timezone.utc)
+        return datetime.max.replace(tzinfo=UTC)
 
     # ------------------------------------------------------------------
     # Public API
@@ -550,6 +548,7 @@ class AcknowledgementRegistry:
         notification_id: str,
         channel_id: str,
         delivered_at: datetime,
+        mobile_tag: str | None = None,
     ) -> bool:
         """Record that a notification has been delivered and awaits acknowledgement.
 
@@ -557,6 +556,10 @@ class AcknowledgementRegistry:
             notification_id: ANS notification UUID (string).
             channel_id: Delivery channel (e.g. ``notify.mobile_app_my_phone``).
             delivered_at: UTC datetime when delivery succeeded.
+            mobile_tag: Effective ``data.tag`` sent to the mobile device.  Only
+                stored when it differs from *notification_id* (i.e. the caller
+                used ``channel_data.tag`` to set a custom tag).  Persisted so
+                the custom-tag → notification_id mapping survives HA restarts.
 
         Returns:
             True if a new pending record was created; False if a record for
@@ -568,16 +571,31 @@ class AcknowledgementRegistry:
 
         async with self._lock:
             await self._load()
-            if any(a["notification_id"] == notification_id for a in self._acks):
-                return False
-            self._acks.append(
-                {
-                    "notification_id": notification_id,
-                    "channel_id": channel_id,
-                    "status": "pending",
-                    "delivered_at": delivered_at.isoformat(),
-                }
-            )
+            for existing in self._acks:
+                if existing["notification_id"] == notification_id:
+                    # Backfill mobile_tag on the existing pending record when the
+                    # new delivery provides one that the record is missing.  This
+                    # happens when persistent_notification delivers first (no tag)
+                    # and mobile delivers second — without this, the custom-tag →
+                    # notification_id mapping is lost across HA restarts.
+                    if (
+                        mobile_tag
+                        and mobile_tag != notification_id
+                        and existing.get("status") == "pending"
+                        and not existing.get("mobile_tag")
+                    ):
+                        existing["mobile_tag"] = mobile_tag
+                        await self._save()
+                    return False
+            record: dict = {
+                "notification_id": notification_id,
+                "channel_id": channel_id,
+                "status": "pending",
+                "delivered_at": delivered_at.isoformat(),
+            }
+            if mobile_tag and mobile_tag != notification_id:
+                record["mobile_tag"] = mobile_tag
+            self._acks.append(record)
             await self._save()
         return True
 
@@ -600,6 +618,28 @@ class AcknowledgementRegistry:
                 a["notification_id"]: a["channel_id"]
                 for a in self._acks
                 if a.get("status") == "pending"
+            }
+
+    async def get_pending_mobile_tags(self) -> dict[str, str]:
+        """Return ``{mobile_tag: notification_id}`` for pending records with a custom tag.
+
+        Used on startup to restore the custom-tag → notification_id mapping so
+        that notifications delivered before an HA restart (whose ``channel_data.tag``
+        differs from the UUID) can still be acknowledged after restart.
+
+        Returns:
+            Dict mapping custom mobile tag strings to their notification_id UUID.
+
+        """
+        if not self._enabled:
+            return {}
+
+        async with self._lock:
+            await self._load()
+            return {
+                a["mobile_tag"]: a["notification_id"]
+                for a in self._acks
+                if a.get("status") == "pending" and a.get("mobile_tag")
             }
 
     async def record_acknowledgement(

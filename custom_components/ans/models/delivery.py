@@ -266,6 +266,7 @@ class DeliveryResult:
     status: DeliveryStatus
     remote_id: str | None = None
     error: str | None = None
+    mobile_tag: str | None = None
 
 
 @dataclass(frozen=True)

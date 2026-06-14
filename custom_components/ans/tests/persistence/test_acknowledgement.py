@@ -312,3 +312,207 @@ class TestAcknowledgementRegistryStateMachine:
         assert record["notification_id"] == "nid-json"
         assert record["status"] == "acknowledged"
         assert "acknowledged_at" in record
+
+
+# ---------------------------------------------------------------------------
+# mobile_tag support (custom channel_data.tag correlation)
+# ---------------------------------------------------------------------------
+
+
+class TestMobileTagPersistence:
+    """Tests for the mobile_tag field added to support custom channel_data.tag values."""
+
+    async def test_mark_pending_with_custom_mobile_tag_stores_field(self, tmp_path):
+        """mark_pending() stores mobile_tag in the record when it differs from notification_id."""
+        import json  # noqa: PLC0415
+
+        reg = _registry(tmp_path)
+        await reg.mark_pending(
+            "uuid-1",
+            "notify.mobile_app_phone",
+            _now(),
+            mobile_tag="garage-door",
+        )
+
+        storage_file = tmp_path / "ans_acknowledgements.json"
+        data = json.loads(storage_file.read_text(encoding="utf-8"))
+        assert data[0]["mobile_tag"] == "garage-door"
+
+    async def test_mark_pending_without_mobile_tag_omits_field(self, tmp_path):
+        """mark_pending() without mobile_tag does not add the field to the record."""
+        import json  # noqa: PLC0415
+
+        reg = _registry(tmp_path)
+        await reg.mark_pending("uuid-2", "notify.mobile_app_phone", _now())
+
+        storage_file = tmp_path / "ans_acknowledgements.json"
+        data = json.loads(storage_file.read_text(encoding="utf-8"))
+        assert "mobile_tag" not in data[0]
+
+    async def test_mark_pending_mobile_tag_equals_notification_id_omits_field(
+        self, tmp_path
+    ):
+        """mark_pending() omits mobile_tag when it equals notification_id (no custom tag)."""
+        import json  # noqa: PLC0415
+
+        reg = _registry(tmp_path)
+        await reg.mark_pending(
+            "uuid-3",
+            "notify.mobile_app_phone",
+            _now(),
+            mobile_tag="uuid-3",  # same as notification_id
+        )
+
+        storage_file = tmp_path / "ans_acknowledgements.json"
+        data = json.loads(storage_file.read_text(encoding="utf-8"))
+        assert "mobile_tag" not in data[0]
+
+    async def test_get_pending_mobile_tags_returns_mapping(self, tmp_path):
+        """get_pending_mobile_tags() returns {mobile_tag: notification_id} for pending records."""
+        reg = _registry(tmp_path)
+        await reg.mark_pending(
+            "uuid-4",
+            "notify.mobile_app_phone",
+            _now(),
+            mobile_tag="ha-update",
+        )
+
+        result = await reg.get_pending_mobile_tags()
+        assert result == {"ha-update": "uuid-4"}
+
+    async def test_get_pending_mobile_tags_excludes_acknowledged(self, tmp_path):
+        """get_pending_mobile_tags() does not include records that have been acknowledged."""
+        reg = _registry(tmp_path)
+        await reg.mark_pending(
+            "uuid-5",
+            "notify.mobile_app_phone",
+            _now(),
+            mobile_tag="update-tag",
+        )
+        await reg.record_acknowledgement("uuid-5", "mobile_app", _now())
+
+        result = await reg.get_pending_mobile_tags()
+        assert result == {}
+
+    async def test_get_pending_mobile_tags_excludes_records_without_mobile_tag(
+        self, tmp_path
+    ):
+        """get_pending_mobile_tags() excludes pending records that have no mobile_tag."""
+        reg = _registry(tmp_path)
+        await reg.mark_pending("uuid-6", "notify.mobile_app_phone", _now())
+
+        result = await reg.get_pending_mobile_tags()
+        assert result == {}
+
+    async def test_get_pending_mobile_tags_empty_when_disabled(self, tmp_path):
+        """get_pending_mobile_tags() returns {} when registry is disabled."""
+        reg = _registry(tmp_path, enabled=False)
+        result = await reg.get_pending_mobile_tags()
+        assert result == {}
+
+    async def test_mobile_tag_mapping_survives_reload(self, tmp_path):
+        """Custom tag → notification_id mapping is persisted and visible after registry reload."""
+        reg1 = _registry(tmp_path)
+        await reg1.mark_pending(
+            "uuid-7",
+            "notify.mobile_app_phone",
+            _now(),
+            mobile_tag="persistent-tag",
+        )
+
+        reg2 = _registry(tmp_path)
+        result = await reg2.get_pending_mobile_tags()
+        assert result == {"persistent-tag": "uuid-7"}
+
+    async def test_mark_pending_backfills_mobile_tag_on_existing_pending_record(
+        self, tmp_path
+    ):
+        """When a channel (e.g. persistent_notification) already created a pending record without a mobile_tag, a subsequent mark_pending call from mobile_app that provides a custom tag backfills it onto the existing record so the mapping survives restarts."""
+        import json  # noqa: PLC0415
+
+        reg = _registry(tmp_path)
+        # First delivery: persistent_notification — no mobile_tag
+        result1 = await reg.mark_pending(
+            "uuid-backfill",
+            "notify.persistent_notification",
+            _now(),
+        )
+        assert result1 is True
+
+        # Second delivery: mobile_app with a custom tag
+        result2 = await reg.mark_pending(
+            "uuid-backfill",
+            "notify.mobile_app_phone",
+            _now(),
+            mobile_tag="motion-front-door",
+        )
+        assert result2 is False  # no new record created
+
+        # The existing record should now carry mobile_tag
+        storage_file = tmp_path / "ans_acknowledgements.json"
+        data = json.loads(storage_file.read_text(encoding="utf-8"))
+        assert len(data) == 1
+        assert data[0]["mobile_tag"] == "motion-front-door"
+        assert data[0]["channel_id"] == "notify.persistent_notification"
+
+    async def test_mark_pending_does_not_overwrite_existing_mobile_tag(self, tmp_path):
+        """mark_pending() does not overwrite a mobile_tag that is already set on the record."""
+        import json  # noqa: PLC0415
+
+        reg = _registry(tmp_path)
+        await reg.mark_pending(
+            "uuid-nowipe",
+            "notify.mobile_app_phone",
+            _now(),
+            mobile_tag="original-tag",
+        )
+        # Second call with a different tag — should NOT overwrite
+        await reg.mark_pending(
+            "uuid-nowipe",
+            "notify.mobile_app_phone",
+            _now(),
+            mobile_tag="different-tag",
+        )
+
+        storage_file = tmp_path / "ans_acknowledgements.json"
+        data = json.loads(storage_file.read_text(encoding="utf-8"))
+        assert data[0]["mobile_tag"] == "original-tag"
+
+    async def test_mark_pending_backfill_visible_via_get_pending_mobile_tags(
+        self, tmp_path
+    ):
+        """After backfill, get_pending_mobile_tags() returns the tag → notification_id mapping."""
+        reg = _registry(tmp_path)
+        await reg.mark_pending("uuid-tags", "notify.persistent_notification", _now())
+        await reg.mark_pending(
+            "uuid-tags",
+            "notify.mobile_app_phone",
+            _now(),
+            mobile_tag="door-alert",
+        )
+
+        result = await reg.get_pending_mobile_tags()
+        assert result == {"door-alert": "uuid-tags"}
+
+    async def test_mark_pending_no_backfill_when_already_acknowledged(self, tmp_path):
+        """mark_pending() does not backfill mobile_tag when the record is already acknowledged."""
+        import json  # noqa: PLC0415
+
+        reg = _registry(tmp_path)
+        await reg.record_acknowledgement(
+            "uuid-acked", "notify.persistent_notification", _now()
+        )
+
+        # Call mark_pending with a mobile_tag — the record is acknowledged, not pending
+        result = await reg.mark_pending(
+            "uuid-acked",
+            "notify.mobile_app_phone",
+            _now(),
+            mobile_tag="some-tag",
+        )
+        assert result is False
+
+        # The acknowledged record must NOT gain a mobile_tag
+        storage_file = tmp_path / "ans_acknowledgements.json"
+        data = json.loads(storage_file.read_text(encoding="utf-8"))
+        assert "mobile_tag" not in data[0]

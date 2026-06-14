@@ -323,11 +323,16 @@ Automations can use the `notification_id` returned by `response_variable` to cor
 
 ### Trigger Sources
 
-**Mobile App — button tap**
+**Mobile App — action button tap**
 When a push notification is delivered via `MobileAppDeliveryAdapter`, ANS always sets `data.tag` on the notification to the `notification_id` UUID (the `channel_data.tag` field can override this — ANS records the active tag at delivery time so correlation is maintained regardless of which tag value is used). The HA Companion App includes the tag in every `mobile_app_notification_action` event it fires, regardless of which button was tapped. ANS listens for this event and checks whether the tag matches a pending delivery — if it does, the notification is acknowledged.
 
+**Mobile App — notification body tap**
+Tapping the notification body (not an action button) fires `mobile_app_notification_tapped`. ANS handles this identically to a button tap — the same tag-matching logic applies, and acknowledgement is recorded. The `action` field is absent from the payload in this case; `method` is set to `notification_tap` instead of `action_button`.
+
+> **Note:** When a tap-action URL is configured (`link` or `context.entity`), the Companion App may open the URL directly instead of firing `mobile_app_notification_tapped`. In that case no acknowledgement is recorded via the body-tap path; only an action button tap can trigger acknowledgement for such notifications.
+
 **Persistent Notification — sidebar dismissal**
-When a persistent notification is dismissed from the HA sidebar, the HA dispatcher sends `SIGNAL_PERSISTENT_NOTIFICATIONS_UPDATED` with `UpdateType.REMOVED`. ANS connects to this signal via `async_dispatcher_connect` and checks whether the dismissed notification's ID corresponds to a pending ANS delivery.
+When a persistent notification is dismissed from the HA sidebar, the frontend calls the `persistent_notification.dismiss` service. ANS listens for `EVENT_CALL_SERVICE` events on this domain/service to capture the caller's HA context (including `user_id`) before the service executes, then the HA dispatcher sends `SIGNAL_PERSISTENT_NOTIFICATIONS_UPDATED` with `UpdateType.REMOVED`. ANS connects to this signal and checks whether the dismissed notification's ID corresponds to a pending ANS delivery.
 
 ### Event Payload
 
@@ -336,12 +341,15 @@ When a persistent notification is dismissed from the HA sidebar, the HA dispatch
     "notification_id": "<uuid-v4>",
     "channel_id": "mobile_app" | "notify.persistent_notification",
     "acknowledged_at": "2026-05-20T10:30:00+00:00",
-    "action": "<mobile action id, optional>",
-    "device_id": "<mobile device id suffix, optional>"
+    "method": "action_button" | "notification_tap" | "persistent_notification_dismiss",
+    "action": "<mobile action id, only for action_button>",
+    "device_name": "<mobile device slug, only for mobile_app>"
 }
 ```
 
-`action` and `device_id` are only included for mobile acknowledgements. Persistent notification acknowledgements include only `notification_id`, `channel_id`, and `acknowledged_at`.
+The HA event `context` carries `user_id` (the HA user who interacted with the notification), following standard HA conventions. `user_id` is populated when the companion app interaction is attributed to a user; it is `null` when an automation dismisses a persistent notification via `async_dismiss` directly.
+
+`action` is only present when `method` is `action_button`. `device_name` is only present for mobile acknowledgements. Persistent notification acknowledgements omit both `action` and `device_name`.
 
 ### Idempotency
 

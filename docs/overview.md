@@ -55,7 +55,7 @@ ANS tracks whether a delivered notification was acknowledged by the recipient. T
 
 When either source fires, ANS records the acknowledgement and fires an `ans_notification_acknowledged` HA bus event. Automations can correlate the `notification_id` (returned by `ans.send_notification` via `response_variable`) with this event to implement confirmed read receipts, automatic escalation cancellation, or acknowledgement dashboards.
 
-Acknowledgement state is stored in `ans_acknowledgements.json` in HA `.storage/` and survives restarts. Each notification can only be acknowledged once — the registry is idempotent.
+Acknowledgement state is stored in `ans.acknowledgements` in HA `.storage/` and survives restarts. Each notification can only be acknowledged once — the registry is idempotent.
 
 > **Note:** Acknowledgement eligibility is persisted by ANS. Notifications delivered before an HA restart can still be acknowledged after restart when the user taps an action button or dismisses a persistent notification.
 

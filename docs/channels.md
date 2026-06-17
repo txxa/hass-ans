@@ -290,7 +290,7 @@ When **Enable Volume Management** is on (the default), ANS performs a capture-se
 
 The restoration registry (`persistence/volume_restoration.py`) handles edge cases in the capture-restore lifecycle:
 
-- **Persisted across restarts** — state is stored under the `ans_volume_restoration` key in HA storage. If HA restarts between the TTS call and the IDLE event, restoration is still attempted on the next startup.
+- **Persisted across restarts** — state is stored under the `ans.volume_restoration` key in HA storage. If HA restarts between the TTS call and the IDLE event, restoration is still attempted on the next startup.
 - **User-change detection** — if the volume is manually adjusted within 5 seconds of ANS setting it (echo-guard window), ANS treats it as intentional and aborts restoration to avoid overriding user intent.
 - **Timeout expiry** — restoration intents expire after 1 hour. If a media player never reaches IDLE within that window, the intent is discarded.
 - **120-second fallback** — a safety timer fires 120 seconds after playback starts as a fallback for players that don't reliably signal IDLE.

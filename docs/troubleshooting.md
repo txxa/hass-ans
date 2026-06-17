@@ -78,7 +78,7 @@ Diagnosing common delivery problems, channel issues, and answers to frequently a
 
 **Step 1 — Check the audit log:**
 
-Open `<config>/.storage/ans_delivery_attempts.json`. Find the attempt for your notification and read the `status` and `error` fields.
+Open `<config>/.storage/ans.delivery_attempts`. Find the attempt for your notification and read the `status` and `error` fields.
 
 | Status | Meaning |
 |---|---|
@@ -242,7 +242,7 @@ Yes. An HA User recipient can have multiple `notify.mobile_app_*` channels assig
 
 ### What happens if HA restarts while a notification is being delivered?
 
-Pending retries and in-progress tasks are persisted to `<config>/.storage/ans_retry_queue.json`. On the next startup, ANS loads this queue and re-schedules any tasks that were waiting for retry. Tasks that were actively mid-delivery when HA shut down may not have a saved attempt record; they will be retried at startup if their retry schedule was already persisted.
+Pending retries and in-progress tasks are persisted to `<config>/.storage/ans.retry_queue`. On the next startup, ANS loads this queue and re-schedules any tasks that were waiting for retry. Tasks that were actively mid-delivery when HA shut down may not have a saved attempt record; they will be retried at startup if their retry schedule was already persisted.
 
 Notifications in the retry queue older than 2 hours are automatically discarded on startup to prevent stale alerts.
 
@@ -257,9 +257,9 @@ No global type filter exists. Type filtering is per-recipient only. If you want 
 ### Where is the delivery history stored?
 
 In the HA `.storage/` directory:
-- `ans_notifications.json` — one entry per `send_notification` call
-- `ans_delivery_attempts.json` — one entry per delivery attempt (per recipient + channel)
-- `ans_retry_queue.json` — pending retry tasks
+- `ans.notifications` — one entry per `send_notification` call
+- `ans.delivery_attempts` — one entry per delivery attempt (per recipient + channel)
+- `ans.retry_queue` — pending retry tasks
 
 These are plain JSON files. Retention is controlled by the **Audit log retention** setting in Options (default: 7 days).
 

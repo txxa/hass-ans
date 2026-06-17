@@ -8,10 +8,10 @@ This section covers internals and extension points for users who want to underst
 
 - [Delivery Snapshots and Crash Recovery](#delivery-snapshots-and-crash-recovery)
 - [Storage Files Reference](#storage-files-reference)
-  - [`ans_notifications.json`](#ans_notificationsjson)
-  - [`ans_delivery_attempts.json`](#ans_delivery_attemptsjson)
-  - [`ans_retry_queue.json`](#ans_retry_queuejson)
-  - [`ans_acknowledgements.json`](#ans_acknowledgementsjson)
+  - [`ans.notifications`](#ansnotifications)
+  - [`ans.delivery_attempts`](#ansdelivery_attempts)
+  - [`ans.retry_queue`](#ansretry_queue)
+  - [`ans.acknowledgements`](#ansacknowledgements)
   - [Housekeeping](#housekeeping)
 - [Rate Limiter — Token Bucket Details](#rate-limiter--token-bucket-details)
 - [Deduplication — LRU Cache Details](#deduplication--lru-cache-details)
@@ -28,7 +28,7 @@ This section covers internals and extension points for users who want to underst
 
 When `ans.send_notification` is called, ANS takes an immutable snapshot of the full configuration before creating any delivery tasks. Each task stores a reference to this snapshot.
 
-If a task needs to be retried (due to rate limiting or a transient failure), the retry is scheduled as a record in `ans_retry_queue.json`. Each record contains the full serialized task — including payload, recipient policy, contact info, and channel info — so the task can be reconstructed without touching live configuration.
+If a task needs to be retried (due to rate limiting or a transient failure), the retry is scheduled as a record in `ans.retry_queue`. Each record contains the full serialized task — including payload, recipient policy, contact info, and channel info — so the task can be reconstructed without touching live configuration.
 
 On HA startup, `PersistenceRecovery` reads the retry queue and re-enqueues all pending tasks. Tasks older than 2 hours are automatically discarded to avoid delivering stale notifications.
 
@@ -42,7 +42,7 @@ This means:
 
 All ANS data lives in `<config>/.storage/`. The files are plain JSON and human-readable.
 
-### `ans_notifications.json`
+### `ans.notifications`
 
 One entry per `send_notification` call. Written when audit logging is enabled.
 
@@ -70,7 +70,7 @@ One entry per `send_notification` call. Written when audit logging is enabled.
 }
 ```
 
-### `ans_delivery_attempts.json`
+### `ans.delivery_attempts`
 
 One entry per delivery attempt (per recipient + channel). Each retry is a separate attempt with an incremented `attempt_number`.
 
@@ -94,7 +94,7 @@ One entry per delivery attempt (per recipient + channel). Each retry is a separa
 
 Possible `status` values: `SUCCESS`, `FILTERED`, `RATE_LIMITED`, `TRANSIENT_FAIL`, `PERMANENT_FAIL`, `IN_PROGRESS`.
 
-### `ans_retry_queue.json`
+### `ans.retry_queue`
 
 Pending retry tasks. Each entry includes the full serialized task snapshot so it can be replayed after restart.
 
@@ -109,7 +109,7 @@ Pending retry tasks. Each entry includes the full serialized task snapshot so it
 ```
 
 
-### `ans_acknowledgements.json`
+### `ans.acknowledgements`
 
 One entry per tracked acknowledgement lifecycle record. ANS writes `pending` entries when delivery succeeds on an acknowledgeable channel and transitions them to `acknowledged` when user interaction is observed.
 

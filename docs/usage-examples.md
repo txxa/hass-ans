@@ -650,7 +650,7 @@ ANS fires `ans_notification_acknowledged` when the user taps an action button or
 
 > **Note:** Acknowledgement eligibility is persisted across HA restarts. A notification delivered before restart can still emit `ans_notification_acknowledged` when the user interacts after restart.
 
-For the architectural details, see [How It Works → Acknowledgement Tracking](how-it-works.md#acknowledgement-tracking) and [Advanced → `ans_acknowledgements.json`](advanced.md#ans_acknowledgementsjson).
+For the architectural details, see [How It Works → Acknowledgement Tracking](how-it-works.md#acknowledgement-tracking) and [Advanced → `ans.acknowledgements`](advanced.md#ansacknowledgements).
 
 ### Example 1 — Cancel escalation on acknowledgement
 

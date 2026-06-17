@@ -224,8 +224,8 @@ Retries older than 2 hours are automatically discarded to prevent stale notifica
 
 When audit logging is enabled (default), ANS writes two records per notification:
 
-- **`ans_notifications.json`** — one entry per `send_notification` call: source, title, type, criticality, recipient list, timestamp
-- **`ans_delivery_attempts.json`** — one entry per delivery attempt: channel, recipient, status, attempt number, error (if any), timestamps
+- **`ans.notifications`** — one entry per `send_notification` call: source, title, type, criticality, recipient list, timestamp
+- **`ans.delivery_attempts`** — one entry per delivery attempt: channel, recipient, status, attempt number, error (if any), timestamps
 
 These files are stored in `<config>/.storage/` and cleaned up automatically based on the configured retention period. See [Advanced Topics](advanced.md) for details.
 
@@ -353,7 +353,7 @@ The HA event `context` carries `user_id` (the HA user who interacted with the no
 
 ### Idempotency
 
-Each `notification_id` can be acknowledged only once. The first acknowledgement wins; subsequent acknowledgements for the same notification are silently discarded. `AcknowledgementRegistry` persists acknowledgements to `ans_acknowledgements.json` in HA `.storage/`, and they survive HA restarts. Housekeeping removes records older than the configured retention period.
+Each `notification_id` can be acknowledged only once. The first acknowledgement wins; subsequent acknowledgements for the same notification are silently discarded. `AcknowledgementRegistry` persists acknowledgements to `ans.acknowledgements` in HA `.storage/`, and they survive HA restarts. Housekeeping removes records older than the configured retention period.
 
 ### Pending-Acks Scope
 
@@ -366,7 +366,7 @@ ANS persists pending acknowledgement eligibility to storage and restores it on s
 - Acknowledgement tracking is only supported for **Mobile App** and **Persistent Notification** channels.
 - Signal, TTS, and other adapters have no interaction model that ANS can observe.
 
-See [Channel Reference → Mobile App → `data.tag` and Acknowledgement Tracking](channels.md#datatag-and-acknowledgement-tracking) for the tag mechanism details and [Advanced → Storage Files](advanced.md#ans_acknowledgementsJSON) for storage details.
+See [Channel Reference → Mobile App → `data.tag` and Acknowledgement Tracking](channels.md#datatag-and-acknowledgement-tracking) for the tag mechanism details and [Advanced → Storage Files](advanced.md#ansacknowledgements) for storage details.
 
 ---
 

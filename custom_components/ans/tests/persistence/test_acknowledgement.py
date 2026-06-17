@@ -26,7 +26,7 @@ def _now() -> datetime:
 def _registry(tmp_path, enabled: bool = True) -> AcknowledgementRegistry:
     hass = _make_hass()
     reg = AcknowledgementRegistry(hass, enabled=enabled)
-    reg._storage_path = tmp_path / "ans_acknowledgements.json"
+    reg._storage_path = tmp_path / "ans.acknowledgements"
     return reg
 
 
@@ -150,7 +150,7 @@ class TestAcknowledgementRegistry:
 
     async def test_corrupted_file_handled_gracefully(self, tmp_path):
         """A corrupted JSON file is treated as empty — no exception is raised."""
-        storage_path = tmp_path / "ans_acknowledgements.json"
+        storage_path = tmp_path / "ans.acknowledgements"
         storage_path.write_text("not valid json", encoding="utf-8")
 
         reg = _registry(tmp_path)
@@ -303,7 +303,7 @@ class TestAcknowledgementRegistryStateMachine:
         await reg.mark_pending("nid-json", "notify.mobile_app_phone", _now())
         await reg.record_acknowledgement("nid-json", "mobile_app", _now())
 
-        storage_file = tmp_path / "ans_acknowledgements.json"
+        storage_file = tmp_path / "ans.acknowledgements"
         assert storage_file.exists()
         data = json.loads(storage_file.read_text(encoding="utf-8"))
         assert isinstance(data, list)
@@ -334,7 +334,7 @@ class TestMobileTagPersistence:
             mobile_tag="garage-door",
         )
 
-        storage_file = tmp_path / "ans_acknowledgements.json"
+        storage_file = tmp_path / "ans.acknowledgements"
         data = json.loads(storage_file.read_text(encoding="utf-8"))
         assert data[0]["mobile_tag"] == "garage-door"
 
@@ -345,7 +345,7 @@ class TestMobileTagPersistence:
         reg = _registry(tmp_path)
         await reg.mark_pending("uuid-2", "notify.mobile_app_phone", _now())
 
-        storage_file = tmp_path / "ans_acknowledgements.json"
+        storage_file = tmp_path / "ans.acknowledgements"
         data = json.loads(storage_file.read_text(encoding="utf-8"))
         assert "mobile_tag" not in data[0]
 
@@ -363,7 +363,7 @@ class TestMobileTagPersistence:
             mobile_tag="uuid-3",  # same as notification_id
         )
 
-        storage_file = tmp_path / "ans_acknowledgements.json"
+        storage_file = tmp_path / "ans.acknowledgements"
         data = json.loads(storage_file.read_text(encoding="utf-8"))
         assert "mobile_tag" not in data[0]
 
@@ -449,7 +449,7 @@ class TestMobileTagPersistence:
         assert result2 is False  # no new record created
 
         # The existing record should now carry mobile_tag
-        storage_file = tmp_path / "ans_acknowledgements.json"
+        storage_file = tmp_path / "ans.acknowledgements"
         data = json.loads(storage_file.read_text(encoding="utf-8"))
         assert len(data) == 1
         assert data[0]["mobile_tag"] == "motion-front-door"
@@ -474,7 +474,7 @@ class TestMobileTagPersistence:
             mobile_tag="different-tag",
         )
 
-        storage_file = tmp_path / "ans_acknowledgements.json"
+        storage_file = tmp_path / "ans.acknowledgements"
         data = json.loads(storage_file.read_text(encoding="utf-8"))
         assert data[0]["mobile_tag"] == "original-tag"
 
@@ -513,6 +513,6 @@ class TestMobileTagPersistence:
         assert result is False
 
         # The acknowledged record must NOT gain a mobile_tag
-        storage_file = tmp_path / "ans_acknowledgements.json"
+        storage_file = tmp_path / "ans.acknowledgements"
         data = json.loads(storage_file.read_text(encoding="utf-8"))
         assert "mobile_tag" not in data[0]

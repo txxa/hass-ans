@@ -82,6 +82,7 @@ def _make_hass() -> MagicMock:
         return_value=MagicMock()
     )  # returns unsubscribe fn
     hass.services = MagicMock()
+    hass.async_add_executor_job = AsyncMock()
     return hass
 
 

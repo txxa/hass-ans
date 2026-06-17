@@ -1,9 +1,9 @@
 """Event-based persistent storage for ANS notification system.
 
 Redesigned persistence layer with intuitive structure:
-- ans_notifications.json: Registry of all notifications sent
-- ans_delivery_attempts.json: Log of all delivery attempts
-- ans_retry_queue.json: Active retry queue for recovery
+- ans.notifications: Registry of all notifications sent
+- ans.delivery_attempts: Log of all delivery attempts
+- ans.retry_queue: Active retry queue for recovery
 
 This design makes it easy to:
 - Query delivery history

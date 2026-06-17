@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
     from homeassistant.core import Event
 
-from ..const import VOLUME_SET_TIMEOUT
+from ..const import SYS_STORAGE_VOLUME_RESTORATION_FILE, VOLUME_SET_TIMEOUT
 from ..exceptions import TTSVolumeControlError
 
 _LOGGER = logging.getLogger(__name__)
@@ -52,7 +52,6 @@ def _parse_dt(value: str) -> datetime:
 
 # Constants for volume restoration
 STORAGE_VERSION = 1
-STORAGE_KEY = "ans_volume_restoration"
 DEFAULT_TIMEOUT = 3600  # 1 hour
 VOLUME_CHANGE_THRESHOLD = 0.05  # 5% difference to detect user changes
 RESTORATION_DELAY = 2.0  # seconds after idle before restoration
@@ -141,7 +140,7 @@ class VolumeRestorationRegistry:
 
         """
         self._hass = hass
-        self._store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
+        self._store = Store(hass, STORAGE_VERSION, SYS_STORAGE_VOLUME_RESTORATION_FILE)
         self._intents: dict[str, VolumeIntent] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._state_unsub: Callable[[], None] | None = None

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -48,6 +49,11 @@ from .const import (
     SYS_MIN_RETRY_BACKOFF_FACTOR,
     SYS_MIN_RETRY_BASE_DELAY_SECONDS,
     SYS_MIN_RETRY_MAX_DELAY_SECONDS,
+    SYS_STORAGE_ACKNOWLEDGEMENTS_FILE,
+    SYS_STORAGE_ATTEMPTS_FILE,
+    SYS_STORAGE_NOTIFICATIONS_FILE,
+    SYS_STORAGE_RETRIES_FILE,
+    SYS_STORAGE_VOLUME_RESTORATION_FILE,
 )
 from .delivery.factory import ANSSystem, create_system
 from .helper import get_main_entry
@@ -870,6 +876,57 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
+_STORAGE_MIGRATION_PAIRS: list[tuple[str, str]] = [
+    ("ans_notifications.json", SYS_STORAGE_NOTIFICATIONS_FILE),
+    ("ans_delivery_attempts.json", SYS_STORAGE_ATTEMPTS_FILE),
+    ("ans_retry_queue.json", SYS_STORAGE_RETRIES_FILE),
+    ("ans_acknowledgements.json", SYS_STORAGE_ACKNOWLEDGEMENTS_FILE),
+    ("ans_volume_restoration", SYS_STORAGE_VOLUME_RESTORATION_FILE),
+]
+
+
+def _do_migrate_storage_files(storage_dir: Path) -> None:
+    """Rename legacy storage files to the current dot-separated naming scheme."""
+    for old_name, new_name in _STORAGE_MIGRATION_PAIRS:
+        _LOGGER.debug("Checking storage file migration: %s → %s", old_name, new_name)
+        old_path = storage_dir / old_name
+        new_path = storage_dir / new_name
+
+        if old_path.exists() and not new_path.exists():
+            old_path.rename(new_path)
+            _LOGGER.info("Migrated storage file %s → %s", old_name, new_name)
+
+        elif old_path.exists() and new_path.exists():
+            old_mtime = old_path.stat().st_mtime
+            new_mtime = new_path.stat().st_mtime
+            _LOGGER.debug(
+                "Conflict: both %s and %s exist — old_mtime=%s, new_mtime=%s",
+                old_name,
+                new_name,
+                old_mtime,
+                new_mtime,
+            )
+            if old_mtime > new_mtime:
+                old_path.replace(new_path)
+                _LOGGER.warning(
+                    "Both %s and %s existed; old was newer — replaced new with old",
+                    old_name,
+                    new_name,
+                )
+            else:
+                old_path.unlink()
+                _LOGGER.warning(
+                    "Both %s and %s existed; new was newer — deleted old",
+                    old_name,
+                    new_name,
+                )
+
+        else:
+            _LOGGER.debug(
+                "Skipping %s — not found (fresh install or already migrated)", old_name
+            )
+
+
 async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
     """Migrate old config entries to the current schema version."""
 
@@ -939,6 +996,9 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
         max_delay = new_options.get(SYS_CONFIG_RETRY_MAX_DELAY_KEY)
         if base is not None and max_delay is not None and max_delay < base:
             new_options[SYS_CONFIG_RETRY_MAX_DELAY_KEY] = base
+        # Rename legacy storage files to the current dot-separated naming scheme
+        storage_dir = Path(hass.config.path(".storage"))
+        await hass.async_add_executor_job(_do_migrate_storage_files, storage_dir)
         # Update the entry with the new options and version numbers
         hass.config_entries.async_update_entry(
             config_entry,

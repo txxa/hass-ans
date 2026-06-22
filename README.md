@@ -115,6 +115,8 @@ For per-channel adapter reference (field handling, `channel_data`, acknowledgeme
 I basically created this integration for my personal purpose. As it fulfils all my current needs I won't develop it further for now.\
 However, as long as I am using this integration in my Home Assistant setup I will maintain it actively.
 
+Development of this integration was assisted by AI tools.
+
 ## Contributions
 
 If you want to contribute to this integration, please read the [Contribution guidelines](CONTRIBUTING.md)

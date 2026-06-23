@@ -5,7 +5,6 @@ from homeassistant.components.media_player.const import MediaPlayerEntityFeature
 # Integration identification
 DOMAIN = "ans"
 NAME = "Advanced Notification System"
-VERSION = "0.2.0"
 
 SERVICE_SEND = "send_notification"
 PERSISTENT_NOTIFICATION_CHANNEL = "notify.persistent_notification"

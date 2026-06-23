@@ -656,7 +656,6 @@ class TestDeliveryOutcomeEvents:
             contact_info=RecipientContactInfo(
                 email_address=None,
                 phone_number=None,
-                mobile_device_id=None,
             ),
         )
         proc = _make_processor(hass=hass, channel_manager=cm)

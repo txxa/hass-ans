@@ -400,18 +400,15 @@ class TestRecipientContactInfo:
         c = RecipientContactInfo(email_address=None, phone_number=None)
         assert c.email_address is None
         assert c.phone_number is None
-        assert c.mobile_device_id is None
 
     def test_with_values(self):
-        """RecipientContactInfo stores email, phone, and mobile_device_id correctly."""
+        """RecipientContactInfo stores email and phone correctly."""
         c = RecipientContactInfo(
             email_address="user@example.com",
             phone_number="+12025551234",
-            mobile_device_id="device_abc",
         )
         assert c.email_address == "user@example.com"
         assert c.phone_number == "+12025551234"
-        assert c.mobile_device_id == "device_abc"
 
 
 # ---------------------------------------------------------------------------

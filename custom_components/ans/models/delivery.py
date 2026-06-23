@@ -149,7 +149,9 @@ class NotificationDeliveryTask:
                 rate_limit=policy_data["rate_limit"],
                 rate_limit_window=policy_data["rate_limit_window"],
                 retry_attempts=policy_data["retry_attempts"],
-                allowed_types=[NotificationType(t) for t in _allowed_types_raw],
+                allowed_types=frozenset(
+                    NotificationType(t) for t in _allowed_types_raw
+                ),
                 blocked_sources_regex=policy_data.get("blocked_sources_regex"),
                 dnd=None,  # DND is time-sensitive; evaluated fresh, not persisted
             )
@@ -220,7 +222,7 @@ class NotificationDeliveryTask:
                 "rate_limit": self.policy.rate_limit,
                 "rate_limit_window": self.policy.rate_limit_window,
                 "retry_attempts": self.policy.retry_attempts,
-                "allowed_types": [t.value for t in self.policy.allowed_types],
+                "allowed_types": sorted(t.value for t in self.policy.allowed_types),
                 "blocked_sources_regex": self.policy.blocked_sources_regex,
             },
             "contact_info": {

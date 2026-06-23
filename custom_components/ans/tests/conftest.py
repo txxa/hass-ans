@@ -52,6 +52,9 @@ def make_dnd(start: str, end: str, **overrides) -> DoNotDisturbConfig:
         "allowed_types": None,
     }
     defaults.update(overrides)
+    for key in ("allowed_criticalities", "allowed_types"):
+        if defaults[key] is not None:
+            defaults[key] = frozenset(defaults[key])
     return DoNotDisturbConfig(**defaults)
 
 
@@ -61,11 +64,12 @@ def make_policy(**overrides) -> RecipientNotificationPolicy:
         "retry_attempts": 3,
         "rate_limit": 100,
         "rate_limit_window": 60,
-        "allowed_types": list(NotificationType),
+        "allowed_types": frozenset(NotificationType),
         "blocked_sources_regex": None,
         "dnd": None,
     }
     defaults.update(overrides)
+    defaults["allowed_types"] = frozenset(defaults["allowed_types"])
     return RecipientNotificationPolicy(**defaults)
 
 

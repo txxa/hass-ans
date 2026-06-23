@@ -69,8 +69,8 @@ class DoNotDisturbConfig:
     start: time | None
     end: time | None
     allowed_sources_regex: str | None  # re.Pattern
-    allowed_criticalities: list[NotificationCriticality] | None = None
-    allowed_types: list[NotificationType] | None = None
+    allowed_criticalities: frozenset[NotificationCriticality] | None = None
+    allowed_types: frozenset[NotificationType] | None = None
 
 
 @dataclass(frozen=True)
@@ -83,6 +83,6 @@ class RecipientNotificationPolicy:
     retry_attempts: int
     rate_limit: int
     rate_limit_window: int
-    allowed_types: list[NotificationType]  # TODO: should be set
+    allowed_types: frozenset[NotificationType]
     blocked_sources_regex: str | None
     dnd: DoNotDisturbConfig | None = None

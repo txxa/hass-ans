@@ -235,6 +235,9 @@ class TestDNDBypass:
             "allowed_types": None,
         }
         dnd_kwargs.update(policy_overrides)
+        for key in ("allowed_criticalities", "allowed_types"):
+            if dnd_kwargs[key] is not None:
+                dnd_kwargs[key] = frozenset(dnd_kwargs[key])
         dnd = DoNotDisturbConfig(**dnd_kwargs)
         return make_task(
             payload=make_payload(
@@ -283,7 +286,7 @@ class TestDNDBypass:
                     start=time(22, 0),
                     end=time(7, 0),
                     allowed_sources_regex=None,
-                    allowed_criticalities=[NotificationCriticality.CRITICAL],
+                    allowed_criticalities=frozenset({NotificationCriticality.CRITICAL}),
                 )
             ),
         )

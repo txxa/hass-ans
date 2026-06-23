@@ -227,15 +227,15 @@ class ConfigSnapshot:
                 if recipient_config.dnd_end
                 else None,
                 allowed_sources_regex=recipient_config.dnd_allowed_sources_regex,
-                allowed_criticalities=allowed_criticalities or None,
-                allowed_types=allowed_types or None,
+                allowed_criticalities=frozenset(allowed_criticalities) or None,
+                allowed_types=frozenset(allowed_types) or None,
             )
 
         return RecipientNotificationPolicy(
             retry_attempts=recipient_config.retry_attempts,
             rate_limit=recipient_config.rate_limit,
             rate_limit_window=self.system_config.rate_limit_window,
-            allowed_types=recipient_config.notification_types,
+            allowed_types=frozenset(recipient_config.notification_types),
             blocked_sources_regex=recipient_config.blocked_sources_regex,
             dnd=dnd,
         )

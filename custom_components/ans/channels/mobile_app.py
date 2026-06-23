@@ -189,7 +189,7 @@ class MobileAppDeliveryAdapter(DeliveryAdapter):
         payload : NotificationPayload
             The notification content to send.
         contact_info : RecipientContactInfo
-            Recipient contact information including mobile_device_id.
+            Recipient contact information.
         idempotency_key : str
             Unique key for idempotent retries.
         job_id : str

@@ -71,7 +71,6 @@ class RecipientContactInfo:
 
     email_address: str | None
     phone_number: str | None
-    mobile_device_id: str | None = None
 
 
 @dataclass

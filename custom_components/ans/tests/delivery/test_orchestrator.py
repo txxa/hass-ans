@@ -50,7 +50,7 @@ def _make_snapshot(
         retry_attempts=3,
         rate_limit=100,
         rate_limit_window=60,
-        allowed_types=list(NotificationType),
+        allowed_types=frozenset(NotificationType),
         blocked_sources_regex=None,
     )
     snap.getRecipientNotificationPolicy.return_value = policy

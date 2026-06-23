@@ -246,7 +246,7 @@ class TestProcessorDeliveryFlow:
             start=time(0, 0),
             end=time(23, 59),
             allowed_sources_regex=None,
-            allowed_criticalities=[NotificationCriticality.CRITICAL],
+            allowed_criticalities=frozenset({NotificationCriticality.CRITICAL}),
         )
         task = _system_task(
             payload=make_payload(criticality=NotificationCriticality.CRITICAL),

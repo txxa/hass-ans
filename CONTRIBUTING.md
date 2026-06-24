@@ -58,6 +58,10 @@ Home Assistant instance running and already configured with the included
 [`configuration.yaml`](./config/configuration.yaml)
 file.
 
+To run the test suite, install the test dependencies with
+`pip install -r requirements-test.txt`, then run `scripts/test`. CI runs the
+same suite with coverage reporting on every push and pull request.
+
 ## License
 
 By contributing, you agree that your contributions will be licensed under its MIT License.

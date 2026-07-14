@@ -11,11 +11,14 @@ An introduction to ANS: what it is, what problems it solves, and what you need t
   - [Multi-Channel Delivery](#multi-channel-delivery)
   - [Actionable Mobile Notifications](#actionable-mobile-notifications)
   - [Acknowledgement Tracking](#acknowledgement-tracking)
+  - [Recipient Types](#recipient-types)
   - [Criticality-Based Routing](#criticality-based-routing)
   - [Intelligent Filtering](#intelligent-filtering)
   - [Rate Limiting](#rate-limiting)
+  - [Queue Depth Limit](#queue-depth-limit)
   - [Reliable Delivery](#reliable-delivery)
   - [TTS Volume Management](#tts-volume-management)
+  - [Real-Time Delivery Events](#real-time-delivery-events)
   - [Audit Logging](#audit-logging)
   - [Stale Channel Repairs](#stale-channel-repairs)
   - [Built-in Diagnostics](#built-in-diagnostics)
@@ -59,8 +62,19 @@ Acknowledgement state is stored in `ans.acknowledgements` in HA `.storage/` and 
 
 > **Note:** Acknowledgement eligibility is persisted by ANS. Notifications delivered before an HA restart can still be acknowledged after restart when the user taps an action button or dismisses a persistent notification.
 
+### Recipient Types
+Every recipient is one of four types, each with different capabilities:
+- **HA System** — a single, integration-wide recipient representing Home Assistant itself. It's the only recipient type that can use the Persistent Notification channel, and exactly one may exist.
+- **HA User** — tied to a Home Assistant user account; can use Mobile App (requires that user to be logged into the Companion App) and Signal Messenger.
+- **Generic** — a free-form recipient (e.g. a household member without an HA account), identified by name with an optional email/phone; can use Signal Messenger.
+- **TTS** — represents a media player for spoken announcements; gets an extra configuration step for time-of-day and criticality-based volume settings (see [TTS Volume Management](#tts-volume-management)).
+
+Recipients are created and edited entirely in the integration's configuration — see [Adding Recipients](getting-started.md#adding-recipients).
+
 ### Criticality-Based Routing
 Every notification carries a criticality level (`LOW`, `MEDIUM`, `HIGH`, `CRITICAL`). Each recipient maps each level to a different set of channels. A LOW-criticality reminder might go only to the HA sidebar; a CRITICAL security alert goes to mobile, Signal, and every speaker in the house.
+
+There is no `target` field on `ans.send_notification` and none is supported — recipients, their channel mappings, and their filters are entirely defined in configuration, not in the service call. Sending a notification always fans out to every recipient whose filters allow it; you cannot address a single device or person from an automation.
 
 ### Intelligent Filtering
 Each recipient has configurable filters applied before delivery:
@@ -73,7 +87,10 @@ Two layers of protection against notification floods:
 - **Per-recipient** — cap how many notifications a single recipient receives per minute
 - **Global** — system-wide ceiling across all recipients combined
 
-Both use a token bucket algorithm with configurable capacity and window.
+Both use a token bucket algorithm with configurable capacity; the window is fixed at 60 seconds.
+
+### Queue Depth Limit
+Notifications are delivered through a bounded delivery queue (default: 500 pending tasks, configurable) to prevent memory exhaustion during automation storms. If the queue is full, excess tasks are dropped with a warning log and an `ans_notification_failed` event (`error: queue_full`) so automations can detect the condition.
 
 ### Reliable Delivery
 - **Automatic retries** with exponential backoff for transient failures (network issues, service unavailable); retry attempts and delay intervals are configurable
@@ -82,6 +99,16 @@ Both use a token bucket algorithm with configurable capacity and window.
 
 ### TTS Volume Management
 For TTS recipients, ANS automatically adjusts media player volume based on time of day (morning, daytime, evening, night) and criticality level. After playback, the original volume is restored. Volume state is persisted so restoration works even across restarts. A per-device delivery lock prevents overlapping TTS playback on the same media player.
+
+### Real-Time Delivery Events
+Every delivery attempt fires an HA bus event, so automations can react as things happen instead of polling:
+- `ans_notification_delivered` — a channel successfully delivered the notification
+- `ans_notification_filtered` — a recipient's filters (type allow-list, source blocking, or DND) suppressed it
+- `ans_notification_failed` — a channel permanently failed, including after retries are exhausted
+- `ans_notification_rate_limited` — a channel was throttled by the rate limiter
+- `ans_notification_settled` — fires once every fan-out task for a notification reaches a terminal state, carrying per-recipient channel counts and a `recipients_delivered` total
+
+`ans.send_notification` also returns `{"notification_id": "..."}` via `response_variable`, so an automation can correlate any of these events — including `ans_notification_acknowledged` (see [Acknowledgement Tracking](#acknowledgement-tracking)) — back to the call that triggered them.
 
 ### Audit Logging
 When enabled, ANS records every notification and every delivery attempt to JSON files in the HA `.storage/` directory. The retention period is configurable (default: 7 days, max: 365 days). Hourly housekeeping automatically purges expired records.
@@ -97,6 +124,7 @@ The standard HA Diagnostics panel (Settings → Integrations → ANS → Downloa
 - **Per-recipient customization** — channels, filters, DND schedules, and rate limits are configured independently per recipient
 - **System-wide defaults** — global settings for audit logging, TTS service, and rate limits apply across all recipients
 - **Runtime reconfiguration** — channels and options can be changed at any time without restarting Home Assistant
+- **Multi-language UI** — the config flow and options are available in English, German, and French
 
 ---
 

@@ -31,6 +31,7 @@ These are maintainer-defined expectations, not things to infer from the code —
 - **Write a docstring** for every module, class, and function (ruff `D` rules are enforced).
 - **Keep code async-safe** — no blocking I/O in the event loop (ruff `ASYNC*` rules enforce this); use HA's async helpers and executor jobs.
 - **Update docs alongside code** — the matching page in [docs/](docs/) and the feature list in [README.md](README.md).
+- **Keep `.internal/features/` in sync** — if you add, change, or remove any notable functionality, update (or create) the matching page in `.internal/features/<slug>.md` in the same change: adjust Behavior/Configuration/Code References and append a Changelog entry. For a brand-new feature, create its page first (`Status: Planned`) before writing code, then flip it to `Active` and reconcile the Changelog once it ships. See `.internal/features/TEMPLATE.md`.
 - **Keep UI strings in sync** — when changing the `send_notification` service schema, update [services.yaml](custom_components/ans/services.yaml); when changing the config/options/recipient flow, update [translations/en.json](custom_components/ans/translations/en.json) (and `de.json`/`fr.json` where possible). Both are hassfest-validated.
 - **Bump the version in both places together** — `version` in [manifest.json](custom_components/ans/manifest.json) and `VERSION` in [const.py](custom_components/ans/const.py).
 
@@ -136,4 +137,4 @@ These patterns are already consistently applied — follow them so new code stay
 
 - `config/` is a local Home Assistant runtime instance (gitignored except `configuration.yaml`). Do not commit `config/.storage/`, logs, or the SQLite DB.
 - `.venv/`, `.ruff_cache/`, `.pytest_cache/`, `.coverage` are local artifacts (gitignored).
-- `.prompts/` and `.releases` are gitignored local tooling — not part of the shipped integration.
+- `.internal/` (feature specs, release-note drafts, prompt templates, audit reports) is gitignored local tooling — not part of the shipped integration.

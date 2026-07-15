@@ -195,13 +195,17 @@ Complete payload schemas for all events fired by the delivery pipeline. See [How
     "recipient_id": "...",
     "channel_id": "...",
     "source": "...",
+    "criticality": "...",
     "type": "...",
     "attempt_number": 1,
-    "remote_id": "<adapter-provided-id-or-null>"
+    "remote_id": "<adapter-provided-id-or-null>",
+    "mobile_tag": "<custom-tag>"
 }
 ```
 
 `remote_id` is an opaque string returned by the channel adapter (e.g. a message ID from the downstream service). It is `null` when the adapter does not provide one.
+
+`mobile_tag` is present **only** for Mobile App deliveries that used a custom `channel_data.tag` different from the notification's UUID. When no override was supplied (the common case — the tag defaults to the notification UUID), this field is omitted from the payload entirely rather than being `null`.
 
 ### `ans_notification_filtered`
 
@@ -211,6 +215,7 @@ Complete payload schemas for all events fired by the delivery pipeline. See [How
     "recipient_id": "...",
     "channel_id": "...",
     "source": "...",
+    "criticality": "...",
     "type": "...",
     "filter_reason": "<FilterReason-enum-value>"
 }
@@ -224,6 +229,7 @@ Complete payload schemas for all events fired by the delivery pipeline. See [How
     "recipient_id": "...",
     "channel_id": "...",
     "source": "...",
+    "criticality": "...",
     "type": "...",
     "error": "<exception-message-or-null>",
     "attempt_number": 3
@@ -240,6 +246,7 @@ This event fires only when `PERMANENT_FAIL` is reached (all retry attempts exhau
     "recipient_id": "...",
     "channel_id": "...",
     "source": "...",
+    "criticality": "...",
     "type": "...",
     "limit_type": "GLOBAL",
     "retry_at": "2025-01-01T12:00:00+00:00"
@@ -291,7 +298,7 @@ Field definitions:
 | `recipients[id].channels_failed` | Permanent failures for that recipient |
 | `recipients[id].channels_filtered` | Filtered tasks for that recipient |
 
-> **TTL edge case:** Settled tracking is held in memory with a 1-hour TTL. If retries are still outstanding when the TTL expires (e.g. a task is stuck in the retry queue for over an hour), the settled event is not fired and a warning is logged instead.
+> **TTL edge case:** Settled tracking is held in memory with a TTL of `RCPT_MAX_RETRY_ATTEMPTS × retry_max_delay` (5 × your configured `retry_max_delay`), chosen so it always exceeds the worst-case retry schedule. With the default `retry_max_delay` of 3600s that's 18,000s (5 hours); since `retry_max_delay` is configurable (60-3600s), the actual TTL scales with it and can range from 5 minutes to 5 hours. If retries are still outstanding when the TTL expires, the settled event is not fired and a warning is logged instead.
 
 
 ## Channel Manager — Adapter Lifecycle

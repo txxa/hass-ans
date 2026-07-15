@@ -267,7 +267,7 @@ Extra fields per event:
 
 | Event | Extra fields |
 |---|---|
-| `ans_notification_delivered` | `attempt_number: int`, `remote_id: str \| null` |
+| `ans_notification_delivered` | `attempt_number: int`, `remote_id: str \| null`, `mobile_tag: str` (Mobile App only, present only when a custom `channel_data.tag` was used) |
 | `ans_notification_filtered` | `filter_reason: str` (the `FilterReason` enum value) |
 | `ans_notification_failed` | `error: str \| null`, `attempt_number: int` |
 | `ans_notification_rate_limited` | `limit_type: str` (`"GLOBAL"` or `"RECIPIENT"`), `retry_at: str \| null` (ISO-8601; `null` when retries are exhausted) |

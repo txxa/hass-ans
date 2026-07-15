@@ -13,7 +13,10 @@ from custom_components.ans.const import (
     EVENT_NOTIFICATION_FILTERED,
     EVENT_NOTIFICATION_RATE_LIMITED,
 )
-from custom_components.ans.delivery.processor import NotificationDeliveryProcessor
+from custom_components.ans.delivery.processor import (
+    NotificationDeliveryProcessor,
+    build_base_event_payload,
+)
 from custom_components.ans.models import (
     ChannelInfo,
     ChannelScope,
@@ -581,6 +584,23 @@ def _make_hass_with_bus() -> MagicMock:
     hass.bus = MagicMock()
     hass.bus.async_fire = MagicMock()
     return hass
+
+
+class TestBuildBaseEventPayload:
+    """Verify build_base_event_payload() — the shared payload builder reused by factory.py."""
+
+    def test_includes_all_shared_fields(self):
+        """The returned dict includes all 6 fields, matching the source task's values."""
+        task = make_task()
+        payload = build_base_event_payload(task)
+        assert payload == {
+            "notification_id": str(task.payload.notification_id),
+            "recipient_id": task.recipient_id,
+            "channel_id": task.channel_info.id,
+            "source": task.payload.source,
+            "criticality": task.payload.criticality.value,
+            "type": task.payload.type.value,
+        }
 
 
 class TestDeliveryOutcomeEvents:

@@ -8,6 +8,7 @@ import pytest
 
 from ...channels.channel_manager import ChannelManager
 from ...channels.tts_mediaplayer import TTSMediaPlayerAdapter
+from ...const import EVENT_NOTIFICATION_FAILED
 from ...delivery.factory import (
     _ALL_ADAPTER_CLASSES,
     ADAPTER_CLASS_MAP,
@@ -19,7 +20,8 @@ from ...delivery.factory import (
 from ...delivery.processor import (
     NotificationDeliveryProcessor,
 )
-from ...models import SystemConfig
+from ...models import NotificationCriticality, SystemConfig
+from ..conftest import make_payload, make_task
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -342,6 +344,55 @@ class TestCreateSystemHappyPath:
 
         _, kwargs = mock_queue_cls.call_args
         assert kwargs["queue_max_depth"] == 250
+
+    def test_on_queue_full_fires_failed_event_with_criticality(self):
+        """on_queue_full must fire ans_notification_failed with criticality included.
+
+        Regression test for the 2026-07-13 audit finding: the queue-full
+        payload used to be hand-built and omitted criticality. It's now
+        built via the same shared build_base_event_payload() used by every
+        other delivery outcome event.
+        """
+        hass = _make_hass()
+        repo = _make_config_repo()
+        vol_reg = _make_volume_registry()
+
+        with (
+            patch(
+                "ans.delivery.factory._create_channel_manager",
+                return_value=MagicMock(),
+            ),
+            patch("ans.delivery.factory.NotificationRegistry"),
+            patch("ans.delivery.factory.DeliveryAttemptLog"),
+            patch("ans.delivery.factory.RetryQueue"),
+            patch("ans.delivery.factory.FilterEngine"),
+            patch("ans.delivery.factory.RateLimiter"),
+            patch("ans.delivery.factory.RetryPolicy"),
+            patch(
+                "ans.delivery.factory.NotificationDeliveryTaskQueue"
+            ) as mock_queue_cls,
+            patch("ans.delivery.factory.DeduplicationService"),
+            patch("ans.delivery.factory.NotificationOrchestrator"),
+            patch("ans.delivery.factory.HousekeepingScheduler"),
+        ):
+            mock_queue_cls.return_value = MagicMock()
+            create_system(hass=hass, config_repo=repo, volume_registry=vol_reg)
+
+        _, kwargs = mock_queue_cls.call_args
+        on_queue_full = kwargs["on_queue_full"]
+
+        dropped_task = make_task(
+            payload=make_payload(criticality=NotificationCriticality.CRITICAL)
+        )
+
+        on_queue_full(dropped_task)
+
+        hass.bus.async_fire.assert_called_once()
+        fired_event, fired_payload = hass.bus.async_fire.call_args[0]
+        assert fired_event == EVENT_NOTIFICATION_FAILED
+        assert fired_payload["criticality"] == NotificationCriticality.CRITICAL.value
+        assert fired_payload["error"] == "queue_full"
+        assert fired_payload["attempt_number"] == 0
 
     def test_audit_logging_enabled_passed_to_stores(self):
         """NotificationRegistry and DeliveryAttemptLog must receive the audit flag."""

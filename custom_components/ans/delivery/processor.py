@@ -42,6 +42,24 @@ from .retry_scheduler import RetryPolicy, RetryReason
 _LOGGER = logging.getLogger(__name__)
 
 
+def build_base_event_payload(task: NotificationDeliveryTask) -> dict:
+    """Build the common event payload fields shared by all delivery outcome events.
+
+    Module-level (not an instance method) so it can be reused by callers
+    that don't have a NotificationDeliveryProcessor instance — e.g.
+    factory.py's on_queue_full callback, which fires for tasks dropped
+    before a processor is ever created for them.
+    """
+    return {
+        "notification_id": str(task.payload.notification_id),
+        "recipient_id": task.recipient_id,
+        "channel_id": task.channel_info.id,
+        "source": task.payload.source,
+        "criticality": task.payload.criticality.value,
+        "type": task.payload.type.value,
+    }
+
+
 class NotificationDeliveryProcessor:
     """Executes exactly one delivery task.
 
@@ -147,7 +165,7 @@ class NotificationDeliveryProcessor:
             self._hass.bus.async_fire(
                 EVENT_NOTIFICATION_FILTERED,
                 {
-                    **self._build_base_event_payload(task),
+                    **build_base_event_payload(task),
                     "filter_reason": filter_decision.reason.value,
                 },
             )
@@ -186,7 +204,7 @@ class NotificationDeliveryProcessor:
             self._hass.bus.async_fire(
                 EVENT_NOTIFICATION_RATE_LIMITED,
                 {
-                    **self._build_base_event_payload(task),
+                    **build_base_event_payload(task),
                     "limit_type": limit_type or "UNKNOWN",
                     "retry_at": retry_at.isoformat() if retry_at else None,
                 },
@@ -406,7 +424,7 @@ class NotificationDeliveryProcessor:
         self._hass.bus.async_fire(
             EVENT_NOTIFICATION_DELIVERED,
             {
-                **self._build_base_event_payload(task),
+                **build_base_event_payload(task),
                 "attempt_number": attempt.attempt_number,
                 "remote_id": result.remote_id,
                 **({"mobile_tag": result.mobile_tag} if result.mobile_tag else {}),
@@ -527,7 +545,7 @@ class NotificationDeliveryProcessor:
         self._hass.bus.async_fire(
             EVENT_NOTIFICATION_FAILED,
             {
-                **self._build_base_event_payload(task),
+                **build_base_event_payload(task),
                 "error": error,
                 "attempt_number": attempt_number,
             },
@@ -536,17 +554,6 @@ class NotificationDeliveryProcessor:
             self._on_terminal_outcome(
                 str(task.payload.notification_id), TaskOutcome.FAILED, task.recipient_id
             )
-
-    def _build_base_event_payload(self, task: NotificationDeliveryTask) -> dict:
-        """Build the common event payload fields shared by all delivery outcome events."""
-        return {
-            "notification_id": str(task.payload.notification_id),
-            "recipient_id": task.recipient_id,
-            "channel_id": task.channel_info.id,
-            "source": task.payload.source,
-            "criticality": task.payload.criticality.value,
-            "type": task.payload.type.value,
-        }
 
     async def _schedule_retry(
         self,

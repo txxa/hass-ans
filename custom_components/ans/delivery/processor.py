@@ -566,7 +566,10 @@ class NotificationDeliveryProcessor:
         """
         attempt_count = await self._attempt_log.count_attempts(task.job_id)
 
-        # Check against policy max attempts
+        # Primary ceiling: this recipient's configured retry_attempts. The
+        # UI caps this at RCPT_MAX_RETRY_ATTEMPTS, which is also the hard
+        # ceiling RetryPolicy.evaluate() enforces as a safety net below —
+        # see RetryPolicy's class docstring for why both checks exist.
         if attempt_count > task.policy.retry_attempts:
             _LOGGER.warning(
                 "Max retries exceeded: notification_id=%s job_id=%s "

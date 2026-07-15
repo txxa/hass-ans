@@ -49,6 +49,18 @@ class RetryPolicy:
     """Pure retry/backoff policy.
 
     No persistence, no sleeping, no async primitives.
+
+    ``max_attempts`` is constructed once, system-wide, from
+    ``RCPT_MAX_RETRY_ATTEMPTS`` (see ``delivery/factory.py``). It is a hard
+    safety-net ceiling, not the primary retry-count check: callers are
+    expected to enforce the recipient's own configured ``retry_attempts``
+    first (see ``processor.py``'s ``_schedule_retry``, which does this
+    before ever calling :meth:`evaluate`). Since the UI caps a recipient's
+    ``retry_attempts`` at the same ``RCPT_MAX_RETRY_ATTEMPTS`` constant, the
+    check in :meth:`evaluate` is not expected to be the deciding factor for
+    any config saved through the UI — it exists to bound retries for a
+    recipient config that predates the cap or was edited directly in
+    storage outside the UI.
     """
 
     def __init__(
@@ -64,7 +76,9 @@ class RetryPolicy:
         Parameters
         ----------
         max_attempts : int
-            Maximum number of delivery attempts.
+            System-wide hard ceiling on delivery attempts (safety net; see
+            class docstring). Not the per-recipient attempt count — that is
+            checked separately by the caller before invoking :meth:`evaluate`.
         base_delay : timedelta
             Initial delay before first retry.
         backoff_factor : float, optional
@@ -102,6 +116,10 @@ class RetryPolicy:
             Decision with retry timing and reason.
 
         """
+        # System-wide safety-net ceiling (see class docstring) — normally
+        # unreachable in the false-branch, since the caller's per-recipient
+        # check already rejects attempt_number beyond task.policy.retry_attempts,
+        # which the UI caps at this same constant.
         if attempt_number > self._max_attempts:
             return RetryDecision(False, None, None)
 

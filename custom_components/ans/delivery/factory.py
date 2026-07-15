@@ -37,7 +37,7 @@ from ..persistence.volume_restoration import VolumeRestorationRegistry
 from .deduplication import DeduplicationService
 from .filter_engine import FilterEngine
 from .orchestrator import NotificationOrchestrator
-from .processor import NotificationDeliveryProcessor
+from .processor import NotificationDeliveryProcessor, build_base_event_payload
 from .queue import NotificationDeliveryTaskQueue
 from .rate_limiter import RateLimiter
 from .retry_scheduler import RetryPolicy
@@ -294,11 +294,7 @@ def create_system(
         on_queue_full=lambda task: hass.bus.async_fire(
             EVENT_NOTIFICATION_FAILED,
             {
-                "notification_id": str(task.payload.notification_id),
-                "recipient_id": task.recipient_id,
-                "channel_id": task.channel_info.id,
-                "source": task.payload.source,
-                "type": task.payload.type.value,
+                **build_base_event_payload(task),
                 "error": "queue_full",
                 "attempt_number": 0,
             },

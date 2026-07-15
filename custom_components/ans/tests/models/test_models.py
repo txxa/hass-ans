@@ -28,7 +28,7 @@ from custom_components.ans.models import (
 )
 from custom_components.ans.models.recipient import TTSSettings
 
-from ..conftest import make_channel_info, make_payload, make_policy, make_task
+from ..conftest import make_channel_info, make_dnd, make_payload, make_policy, make_task
 
 # ---------------------------------------------------------------------------
 # NotificationPayload
@@ -241,6 +241,39 @@ class TestNotificationDeliveryTask:
         snapshot = t.to_dict()
         recovered = NotificationDeliveryTask.from_snapshot(uuid4(), snapshot)
         assert recovered.channel_info.scope == ChannelScope.RECIPIENT
+
+    def test_to_dict_from_snapshot_dnd_none_round_trip(self):
+        """A policy with dnd=None round-trips as dnd=None (default make_policy() case)."""
+        t = make_task()
+        snapshot = t.to_dict()
+        assert snapshot["policy"]["dnd"] is None
+        recovered = NotificationDeliveryTask.from_snapshot(uuid4(), snapshot)
+        assert recovered.policy.dnd is None
+
+    def test_to_dict_from_snapshot_dnd_round_trip(self):
+        """DND config (window + bypass lists) survives a to_dict()/from_snapshot() round-trip.
+
+        Recovered retries must replay with the DND settings active *when the
+        notification was originally sent* (docs/advanced.md), not skip DND
+        entirely.
+        """
+        dnd = make_dnd(
+            "22:00",
+            "06:00",
+            allowed_sources_regex="^camera\\.",
+            allowed_criticalities=[NotificationCriticality.CRITICAL],
+            allowed_types=[NotificationType.ALERT],
+        )
+        t = make_task(policy=make_policy(dnd=dnd))
+        snapshot = t.to_dict()
+        recovered = NotificationDeliveryTask.from_snapshot(uuid4(), snapshot)
+
+        assert recovered.policy.dnd is not None
+        assert recovered.policy.dnd.start == dnd.start
+        assert recovered.policy.dnd.end == dnd.end
+        assert recovered.policy.dnd.allowed_sources_regex == dnd.allowed_sources_regex
+        assert recovered.policy.dnd.allowed_criticalities == dnd.allowed_criticalities
+        assert recovered.policy.dnd.allowed_types == dnd.allowed_types
 
     def test_to_dict_includes_tts_settings_none(self):
         """to_dict() includes a 'tts_settings' key set to None when no TTSSettings are configured."""

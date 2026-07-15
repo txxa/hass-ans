@@ -3,15 +3,57 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, time
 from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
 from .channel import ChannelInfo, ChannelScope
 from .notification import NotificationCriticality, NotificationPayload, NotificationType
-from .policy import RecipientNotificationPolicy
+from .policy import DoNotDisturbConfig, RecipientNotificationPolicy
 from .recipient import RecipientContactInfo, TTSSettings
+
+
+def _dnd_config_to_dict(dnd: DoNotDisturbConfig | None) -> dict | None:
+    """Serialize a DoNotDisturbConfig for persistence, or None if unset."""
+    if dnd is None:
+        return None
+    return {
+        "start": dnd.start.isoformat() if dnd.start else None,
+        "end": dnd.end.isoformat() if dnd.end else None,
+        "allowed_sources_regex": dnd.allowed_sources_regex,
+        "allowed_criticalities": (
+            sorted(c.value for c in dnd.allowed_criticalities)
+            if dnd.allowed_criticalities is not None
+            else None
+        ),
+        "allowed_types": (
+            sorted(t.value for t in dnd.allowed_types)
+            if dnd.allowed_types is not None
+            else None
+        ),
+    }
+
+
+def _dnd_config_from_dict(data: dict | None) -> DoNotDisturbConfig | None:
+    """Reconstruct a DoNotDisturbConfig from its persisted form, or None if unset."""
+    if data is None:
+        return None
+    return DoNotDisturbConfig(
+        start=time.fromisoformat(data["start"]) if data.get("start") else None,
+        end=time.fromisoformat(data["end"]) if data.get("end") else None,
+        allowed_sources_regex=data.get("allowed_sources_regex"),
+        allowed_criticalities=(
+            frozenset(NotificationCriticality(c) for c in data["allowed_criticalities"])
+            if data.get("allowed_criticalities") is not None
+            else None
+        ),
+        allowed_types=(
+            frozenset(NotificationType(t) for t in data["allowed_types"])
+            if data.get("allowed_types") is not None
+            else None
+        ),
+    )
 
 
 class DeliveryStatus(StrEnum):
@@ -153,7 +195,14 @@ class NotificationDeliveryTask:
                     NotificationType(t) for t in _allowed_types_raw
                 ),
                 blocked_sources_regex=policy_data.get("blocked_sources_regex"),
-                dnd=None,  # DND is time-sensitive; evaluated fresh, not persisted
+                # DND is replayed exactly as it was when the notification was
+                # originally sent (docs/advanced.md: "retries use the
+                # configuration that was active when the notification was
+                # originally sent"). Whether the window is *active* is still
+                # re-evaluated against wall-clock time on every attempt by
+                # FilterEngine — only the window/bypass configuration itself
+                # is persisted here, not a point-in-time verdict.
+                dnd=_dnd_config_from_dict(policy_data.get("dnd")),
             )
 
             # Reconstruct RecipientContactInfo
@@ -224,6 +273,7 @@ class NotificationDeliveryTask:
                 "retry_attempts": self.policy.retry_attempts,
                 "allowed_types": sorted(t.value for t in self.policy.allowed_types),
                 "blocked_sources_regex": self.policy.blocked_sources_regex,
+                "dnd": _dnd_config_to_dict(self.policy.dnd),
             },
             "contact_info": {
                 "email": self.contact_info.email_address,

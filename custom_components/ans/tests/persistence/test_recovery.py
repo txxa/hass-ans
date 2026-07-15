@@ -60,7 +60,7 @@ def _make_valid_snapshot():
             "message": "M",
             "type": "INFO",
             "criticality": "LOW",
-            "created_at": _now().isoformat(),
+            "timestamp": _now().isoformat(),
         },
         "policy": {
             "retry_attempts": 3,
@@ -120,6 +120,39 @@ class TestPersistenceRecovery:
         task_obj, scheduled_at = result["pending_tasks"][0]
         assert scheduled_at == run_at
         assert result["orphaned_retries"] == []
+
+    async def test_recover_snapshot_with_dnd_restores_dnd_policy(self):
+        """A snapshot with a populated DND config reconstructs a task whose policy.dnd is restored.
+
+        Exercises the real from_snapshot() (not mocked) end-to-end, so a
+        recovered retry replays with the same DND window/bypass config that
+        was active when the notification was originally sent, instead of
+        silently skipping DND (2026-07-13 audit finding).
+        """
+        hass = _make_hass()
+        job_id = uuid4()
+        run_at = _now() + timedelta(minutes=5)
+        snapshot = _make_valid_snapshot()
+        snapshot["policy"]["dnd"] = {
+            "start": "22:00:00",
+            "end": "06:00:00",
+            "allowed_sources_regex": None,
+            "allowed_criticalities": ["CRITICAL"],
+            "allowed_types": ["ALERT"],
+        }
+
+        nr, al, rq = _make_stores(pending_retries=[(job_id, run_at, snapshot)])
+        recovery = PersistenceRecovery(hass, nr, al, rq)
+
+        result = await recovery.recover_on_startup()
+
+        assert result["orphaned_retries"] == []
+        assert len(result["pending_tasks"]) == 1
+        task_obj, scheduled_at = result["pending_tasks"][0]
+        assert scheduled_at == run_at
+        assert task_obj.policy.dnd is not None
+        assert task_obj.policy.dnd.start.isoformat() == "22:00:00"
+        assert task_obj.policy.dnd.end.isoformat() == "06:00:00"
 
     async def test_recover_none_snapshot_goes_to_orphaned(self):
         """A retry queue entry with a None snapshot is placed in orphaned_retries rather than pending_tasks."""

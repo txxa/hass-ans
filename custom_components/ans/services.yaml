@@ -146,12 +146,17 @@ send_notification:
       required: false
       description: >
         Flat dict of adapter-specific delivery overrides merged on top of the standard fields.
-        Each adapter reads only the keys it recognises and silently ignores the rest.
+        Signal and TTS read only the keys they recognise and ignore the rest.
 
-        Mobile app keys: tag, importance, channel, vibrationPattern, sound, badge,
-        sticky, persistent, alert_once, car_ui, subtitle.
+        Mobile app is the exception: channel_data is merged directly into the HA Companion
+        App payload, so any Companion App data key is forwarded, not just the common ones
+        listed below — see docs/channels.md for the full reference. Because it's a raw merge,
+        an unlisted or mistyped key is not silently dropped; it takes effect as sent.
 
-        Signal keys: text_mode ("normal"/"styled"), attachments (list of local paths),
+        Mobile app keys (most common): tag, importance, channel, vibrationPattern, sound,
+        badge, sticky, persistent, alert_once, car_ui, subtitle.
+
+        Signal keys (exhaustive): text_mode ("normal"/"styled"), attachments (list of local paths),
         urls (list of URL attachments), verify_ssl (bool).
       example: "tag: motion-front-door\nimportance: high"
       selector:

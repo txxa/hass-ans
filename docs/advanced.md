@@ -12,6 +12,7 @@ This section covers internals and extension points for users who want to underst
   - [`ans.delivery_attempts`](#ansdelivery_attempts)
   - [`ans.retry_queue`](#ansretry_queue)
   - [`ans.acknowledgements`](#ansacknowledgements)
+  - [`ans.volume_restoration`](#ansvolume_restoration)
   - [Housekeeping](#housekeeping)
 - [Rate Limiter — Token Bucket Details](#rate-limiter--token-bucket-details)
 - [Deduplication — LRU Cache Details](#deduplication--lru-cache-details)
@@ -141,9 +142,39 @@ One entry per tracked acknowledgement lifecycle record. ANS writes `pending` ent
 
 Records are removed by the hourly housekeeping task when they are older than `storage_retention_days`.
 
+### `ans.volume_restoration`
+
+Pending TTS volume-restore intents — one entry per media player currently overridden for a TTS announcement, capturing the volume level to restore once playback ends. Unlike the four files above, this one holds functional state for [TTS Volume Management](tts-volume-management.md), not an audit trail, and it exists regardless of the `enable_audit_logging` setting.
+
+```json
+{
+  "intents": [
+    {
+      "entity_id": "media_player.living_room",
+      "original_volume": 0.4,
+      "override_volume": 0.8,
+      "timestamp": "2026-04-20T08:15:00+00:00",
+      "timeout": "2026-04-20T09:15:00+00:00"
+    }
+  ],
+  "version": 1,
+  "timestamp": "2026-04-20T08:15:00+00:00"
+}
+```
+
+| Field | Description |
+|---|---|
+| `entity_id` | Media player entity this intent applies to. |
+| `original_volume` | Volume level (0.0–1.0) to restore once TTS playback completes. |
+| `override_volume` | Volume level set for the TTS announcement itself. |
+| `timestamp` | ISO-8601 time the intent was captured. |
+| `timeout` | ISO-8601 expiry; if playback never reaches idle before this time, the intent is dropped without restoring the volume. |
+
+**Not covered by the hourly housekeeping task described below** — this file cleans itself independently: an internal 5-minute timer expires any intent past its `timeout`, every successful restore removes its own intent immediately, and any leftover intents from an HA restart are reconciled at startup. Intents are short-lived by design (default timeout: 1 hour), so this file does not accumulate.
+
 ### Housekeeping
 
-ANS runs a housekeeping task hourly. It removes records older than the configured retention period (`storage_retention_days`, default 7) from all four storage files. Setting retention to `0` disables automatic cleanup.
+ANS runs a housekeeping task hourly. It removes records older than the configured retention period (`storage_retention_days`, default 7) from the four audit-related storage files above (`ans.notifications`, `ans.delivery_attempts`, `ans.retry_queue`, `ans.acknowledgements`). Setting retention to `0` disables automatic cleanup for those four. `ans.volume_restoration` is not part of this sweep — see its own section above for how it cleans itself.
 
 
 ## Rate Limiter — Token Bucket Details

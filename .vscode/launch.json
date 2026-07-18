@@ -10,6 +10,7 @@
             "request": "launch",
             "module": "homeassistant",
             "justMyCode": false,
+            "logToFile": true,
             "args": [
                 "--debug",
                 "-c",

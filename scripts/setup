@@ -20,5 +20,5 @@ python3 -m pip install --requirement requirements.txt
 echo "/workspaces/$(basename $PWD)/.venv/bin/python" > /workspaces/$(basename $PWD)/.venv/.env
 
 # Install claude CLI
-su - vscode
-curl -fsSL https://claude.ai/install.sh | bash
+# su - vscode
+# curl -fsSL https://claude.ai/install.sh | bash

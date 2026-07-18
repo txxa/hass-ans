@@ -8,7 +8,7 @@ Guidance for AI coding agents working in this repository. Human contributors sho
 
 - **Domain:** `ans` — all code lives under [custom_components/ans/](custom_components/ans/).
 - **Integration type:** `service`, `iot_class: local_push`, no external requirements.
-- **Language/runtime:** Python (targets 3.12+; CI and the local venv run 3.13).
+- **Language/runtime:** Python (targets 3.12+; CI and the local venv run 3.14).
 - This is a config-flow-only integration (no YAML config); setup and recipients are managed entirely through the HA UI.
 
 ## Project intent

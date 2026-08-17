@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from homeassistant.const import EVENT_SERVICE_REGISTERED
+from homeassistant.helpers.entity_registry import EVENT_ENTITY_REGISTRY_UPDATED
 
 from custom_components.ans.channels.base import (
     AdapterFactory,
@@ -16,8 +20,14 @@ from custom_components.ans.channels.channel_manager import (
     detect_media_players,
     detect_notification_channels,
     detect_tts_entities,
+    register_channel_resync_listeners,
+    register_stale_channel_repairs,
 )
-from custom_components.ans.const import REQUIRED_MP_FEATURES
+from custom_components.ans.const import (
+    DOMAIN,
+    REPAIR_ISSUE_STALE_CHANNEL,
+    REQUIRED_MP_FEATURES,
+)
 from custom_components.ans.models import ChannelScope, RecipientType
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -994,3 +1004,398 @@ class TestLifecycleCallback:
         record = mgr.get_record("notify.mobile_app_phone")
         assert record is not None
         assert record.status == ChannelStatus.STALE
+
+
+# ---------------------------------------------------------------------------
+# register_stale_channel_repairs / register_channel_resync_listeners
+# ---------------------------------------------------------------------------
+# Entry-lifecycle helpers wired up once from __init__.py's async_setup_entry;
+# registered for the lifetime of the config entry.
+
+
+def _make_bootstrap_hass() -> MagicMock:
+    """Minimal HomeAssistant mock suitable for entry-lifecycle helper tests."""
+    hass = MagicMock()
+    hass.config_entries = MagicMock()
+    hass.bus = MagicMock()
+    hass.bus.async_listen = MagicMock(
+        return_value=MagicMock()
+    )  # returns unsubscribe fn
+    hass.services = MagicMock()
+    hass.async_add_executor_job = AsyncMock()
+    return hass
+
+
+def _make_config_entry(entry_id: str = "test-entry-id") -> MagicMock:
+    """Return a mock ConfigEntry with entry_id, runtime_data={}, and async_on_unload/add_update_listener pre-configured."""
+    entry = MagicMock()
+    entry.entry_id = entry_id
+    entry.runtime_data = {}
+    entry.async_on_unload = MagicMock()
+    entry.add_update_listener = MagicMock(return_value=MagicMock())
+    return entry
+
+
+def _make_mock_channel_manager(*, setup_in_progress: bool = False) -> MagicMock:
+    """Return a mock ChannelManager with all async methods pre-configured as AsyncMocks."""
+    mgr = MagicMock()
+    mgr.sync = AsyncMock()
+    mgr.resync = AsyncMock()
+    mgr.request_resync = AsyncMock()
+    mgr.finalize_setup = AsyncMock()
+    mgr.cleanup_all = AsyncMock()
+    mgr._setup_in_progress = setup_in_progress
+    mgr._pending_resync = False
+    return mgr
+
+
+class TestRegisterStaleChannelRepairs:
+    """Verify register_stale_channel_repairs() wires the lifecycle callback and reacts correctly."""
+
+    def _make_channel_info(self, channel_id: str) -> MagicMock:
+        info = MagicMock()
+        info.id = channel_id
+        info.label = channel_id.replace("notify.", "").replace("_", " ").title()
+        return info
+
+    def _make_record(self, channel_id: str, status: ChannelStatus) -> ChannelRecord:
+        info = self._make_channel_info(channel_id)
+        return ChannelRecord(info=info, adapter=None, status=status)
+
+    def test_registers_callback_on_channel_manager(self):
+        """register_stale_channel_repairs() calls set_channel_lifecycle_callback on the channel manager."""
+        hass = _make_bootstrap_hass()
+        channel_manager = _make_mock_channel_manager()
+        channel_manager.set_channel_lifecycle_callback = MagicMock()
+
+        register_stale_channel_repairs(hass, channel_manager)
+
+        channel_manager.set_channel_lifecycle_callback.assert_called_once()
+        cb = channel_manager.set_channel_lifecycle_callback.call_args[0][0]
+        assert callable(cb)
+
+    def test_callback_creates_repair_issue_for_stale_channel(self):
+        """Callback invokes ir.async_create_issue with correct args when a channel goes STALE."""
+        hass = _make_bootstrap_hass()
+        channel_manager = _make_mock_channel_manager()
+        channel_manager.set_channel_lifecycle_callback = MagicMock()
+        channel_manager.get_record = MagicMock(
+            return_value=self._make_record(
+                "notify.mobile_app_phone", ChannelStatus.STALE
+            )
+        )
+
+        register_stale_channel_repairs(hass, channel_manager)
+        cb = channel_manager.set_channel_lifecycle_callback.call_args[0][0]
+
+        with patch("custom_components.ans.channels.channel_manager.ir") as mock_ir:
+            cb(["notify.mobile_app_phone"], [])
+
+        mock_ir.async_create_issue.assert_called_once_with(
+            hass,
+            DOMAIN,
+            f"{REPAIR_ISSUE_STALE_CHANNEL}_notify_mobile_app_phone",
+            is_fixable=False,
+            severity=mock_ir.IssueSeverity.WARNING,
+            translation_key=REPAIR_ISSUE_STALE_CHANNEL,
+            translation_placeholders={
+                "channel_label": channel_manager.get_record.return_value.info.label,
+                "channel_id": "notify.mobile_app_phone",
+            },
+        )
+
+    def test_callback_deletes_repair_issue_for_recovered_channel(self):
+        """Callback invokes ir.async_delete_issue with the correct issue ID when a channel recovers."""
+        hass = _make_bootstrap_hass()
+        channel_manager = _make_mock_channel_manager()
+        channel_manager.set_channel_lifecycle_callback = MagicMock()
+
+        register_stale_channel_repairs(hass, channel_manager)
+        cb = channel_manager.set_channel_lifecycle_callback.call_args[0][0]
+
+        with patch("custom_components.ans.channels.channel_manager.ir") as mock_ir:
+            cb([], ["notify.mobile_app_phone"])
+
+        mock_ir.async_delete_issue.assert_called_once_with(
+            hass,
+            DOMAIN,
+            f"{REPAIR_ISSUE_STALE_CHANNEL}_notify_mobile_app_phone",
+        )
+
+    def test_callback_uses_channel_id_as_label_when_record_is_none(self):
+        """When get_record returns None, channel_id is used as the label fallback."""
+        hass = _make_bootstrap_hass()
+        channel_manager = _make_mock_channel_manager()
+        channel_manager.set_channel_lifecycle_callback = MagicMock()
+        channel_manager.get_record = MagicMock(return_value=None)
+
+        register_stale_channel_repairs(hass, channel_manager)
+        cb = channel_manager.set_channel_lifecycle_callback.call_args[0][0]
+
+        with patch("custom_components.ans.channels.channel_manager.ir") as mock_ir:
+            cb(["notify.gone_channel"], [])
+
+        call_kwargs = mock_ir.async_create_issue.call_args.kwargs
+        assert (
+            call_kwargs["translation_placeholders"]["channel_label"]
+            == "notify.gone_channel"
+        )
+
+
+class TestRegisterChannelResyncListeners:
+    """Tests for each event listener registered in register_channel_resync_listeners."""
+
+    def _capture_listeners(
+        self, hass: MagicMock, entry: MagicMock, channel_manager: MagicMock
+    ) -> dict[str, Any]:
+        """Call register_channel_resync_listeners and harvest the registered callbacks.
+
+        Returns a dict with keys:
+        - ``update_listener``        — the options-change callback
+        - ``notify_service``         — EVENT_SERVICE_REGISTERED callback
+        - ``media_player_added``     — state-added callback
+        - ``entity_registry_updated``— EVENT_ENTITY_REGISTRY_UPDATED callback
+        """
+        captured: dict[str, Any] = {}
+
+        def _on_unload(fn):
+            # fn is either a callable (the remove/unsubscribe fn) or the result
+            # of hass.bus.async_listen / async_track_state_added_domain.
+            """Accept and ignore the unsubscribe callable (side-effect capture only)."""
+
+        entry.async_on_unload.side_effect = _on_unload
+
+        # Capture add_update_listener callback
+        def _add_listener(cb):
+            """Capture the update listener callback for assertion."""
+            captured["update_listener"] = cb
+            return MagicMock()  # unsubscribe
+
+        entry.add_update_listener.side_effect = _add_listener
+
+        # Capture EVENT_SERVICE_REGISTERED listener
+        bus_listens: list = []
+
+        def _bus_listen(event_type, cb):
+            """Capture bus event callbacks, keyed by event_type."""
+            bus_listens.append((event_type, cb))
+            return MagicMock()
+
+        hass.bus.async_listen.side_effect = _bus_listen
+
+        # Capture state-added listener
+        state_added_cbs: list = []
+
+        def _state_added(hass_, domain, cb):
+            """Capture state-change domain callbacks for assertion."""
+            state_added_cbs.append(cb)
+            return MagicMock()
+
+        with patch(
+            "custom_components.ans.channels.channel_manager.async_track_state_added_domain",
+            side_effect=_state_added,
+        ):
+            register_channel_resync_listeners(hass, entry, channel_manager)
+
+        for event_type, cb in bus_listens:
+            if event_type == EVENT_SERVICE_REGISTERED:
+                captured["notify_service"] = cb
+            elif event_type == EVENT_ENTITY_REGISTRY_UPDATED:
+                captured["entity_registry_updated"] = cb
+
+        if state_added_cbs:
+            captured["media_player_added"] = state_added_cbs[0]
+
+        return captured
+
+    # ── update_listener ──────────────────────────────────────────────────────
+
+    async def test_update_listener_reloads_entry(self):
+        """The update listener calls config_entries.async_reload() with the entry_id."""
+        hass = _make_bootstrap_hass()
+        entry = _make_config_entry()
+        hass.config_entries.async_reload = AsyncMock()
+        channel_manager = _make_mock_channel_manager()
+
+        captured = self._capture_listeners(hass, entry, channel_manager)
+        await captured["update_listener"](hass, entry)
+
+        hass.config_entries.async_reload.assert_awaited_once_with(entry.entry_id)
+
+    # ── notify service registered ─────────────────────────────────────────────
+
+    async def test_notify_service_ignores_non_notify_domain(self):
+        """The EVENT_SERVICE_REGISTERED callback ignores events from non-notify domains."""
+        hass = _make_bootstrap_hass()
+        entry = _make_config_entry()
+        channel_manager = _make_mock_channel_manager()
+
+        captured = self._capture_listeners(hass, entry, channel_manager)
+        event = MagicMock()
+        event.data = {"domain": "mqtt", "service": "foo"}
+        await captured["notify_service"](event)
+
+        channel_manager.request_resync.assert_not_awaited()
+
+    async def test_notify_service_ignores_builtin_names(self):
+        """The callback ignores the built-in service names 'notify' and 'send_message'."""
+        hass = _make_bootstrap_hass()
+        entry = _make_config_entry()
+        channel_manager = _make_mock_channel_manager()
+
+        captured = self._capture_listeners(hass, entry, channel_manager)
+        for svc in ("notify", "send_message"):
+            event = MagicMock()
+            event.data = {"domain": "notify", "service": svc}
+            await captured["notify_service"](event)
+
+        channel_manager.request_resync.assert_not_awaited()
+
+    async def test_notify_service_triggers_resync(self):
+        """A new notify domain service triggers channel_manager.request_resync()."""
+        hass = _make_bootstrap_hass()
+        entry = _make_config_entry()
+        channel_manager = _make_mock_channel_manager()
+
+        captured = self._capture_listeners(hass, entry, channel_manager)
+        event = MagicMock()
+        event.data = {"domain": "notify", "service": "mobile_app_phone"}
+        await captured["notify_service"](event)
+
+        channel_manager.request_resync.assert_awaited_once()
+
+    async def test_notify_service_logs_exception(self, caplog):
+        """An exception from request_resync() is caught and logged with the service name."""
+        hass = _make_bootstrap_hass()
+        entry = _make_config_entry()
+        channel_manager = _make_mock_channel_manager()
+        channel_manager.request_resync = AsyncMock(side_effect=RuntimeError("boom"))
+
+        captured = self._capture_listeners(hass, entry, channel_manager)
+        event = MagicMock()
+        event.data = {"domain": "notify", "service": "my_service"}
+
+        with caplog.at_level("ERROR"):
+            await captured["notify_service"](event)
+
+        assert "my_service" in caplog.text
+
+    # ── media_player added ────────────────────────────────────────────────────
+
+    async def test_media_player_added_ignores_insufficient_features(self):
+        """A new media_player state with insufficient supported_features does not trigger a resync."""
+        hass = _make_bootstrap_hass()
+        entry = _make_config_entry()
+        channel_manager = _make_mock_channel_manager()
+
+        captured = self._capture_listeners(hass, entry, channel_manager)
+        state = MagicMock()
+        state.attributes = {"supported_features": 0x0001}  # missing required bits
+        event = MagicMock()
+        event.data = {"entity_id": "media_player.tv", "new_state": state}
+        await captured["media_player_added"](event)
+
+        channel_manager.request_resync.assert_not_awaited()
+
+    async def test_media_player_added_with_no_new_state_ignored(self):
+        """A state-change event with new_state=None is silently ignored."""
+        hass = _make_bootstrap_hass()
+        entry = _make_config_entry()
+        channel_manager = _make_mock_channel_manager()
+
+        captured = self._capture_listeners(hass, entry, channel_manager)
+        event = MagicMock()
+        event.data = {"entity_id": "media_player.tv", "new_state": None}
+        await captured["media_player_added"](event)
+
+        channel_manager.request_resync.assert_not_awaited()
+
+    async def test_media_player_added_triggers_resync(self):
+        """A new media_player with the required supported_features triggers channel_manager.request_resync()."""
+        hass = _make_bootstrap_hass()
+        entry = _make_config_entry()
+        channel_manager = _make_mock_channel_manager()
+
+        captured = self._capture_listeners(hass, entry, channel_manager)
+        state = MagicMock()
+        state.attributes = {"supported_features": REQUIRED_MP_FEATURES}
+        event = MagicMock()
+        event.data = {"entity_id": "media_player.speaker", "new_state": state}
+        await captured["media_player_added"](event)
+
+        channel_manager.request_resync.assert_awaited_once()
+
+    async def test_media_player_added_logs_exception(self, caplog):
+        """An exception from request_resync() is caught and logged with the entity_id."""
+        hass = _make_bootstrap_hass()
+        entry = _make_config_entry()
+        channel_manager = _make_mock_channel_manager()
+        channel_manager.request_resync = AsyncMock(side_effect=RuntimeError("fail"))
+
+        captured = self._capture_listeners(hass, entry, channel_manager)
+        state = MagicMock()
+        state.attributes = {"supported_features": REQUIRED_MP_FEATURES}
+        event = MagicMock()
+        event.data = {"entity_id": "media_player.speaker", "new_state": state}
+
+        with caplog.at_level("ERROR"):
+            await captured["media_player_added"](event)
+
+        assert "media_player.speaker" in caplog.text
+
+    # ── entity registry updated ───────────────────────────────────────────────
+
+    async def test_entity_registry_ignores_non_remove_actions(self):
+        """The EVENT_ENTITY_REGISTRY_UPDATED callback ignores non-remove actions such as 'update'."""
+        hass = _make_bootstrap_hass()
+        entry = _make_config_entry()
+        channel_manager = _make_mock_channel_manager()
+
+        captured = self._capture_listeners(hass, entry, channel_manager)
+        event = MagicMock()
+        event.data = {"action": "update", "entity_id": "media_player.tv"}
+        await captured["entity_registry_updated"](event)
+
+        channel_manager.request_resync.assert_not_awaited()
+
+    async def test_entity_registry_ignores_non_media_player(self):
+        """The callback ignores remove events for non-media_player entities."""
+        hass = _make_bootstrap_hass()
+        entry = _make_config_entry()
+        channel_manager = _make_mock_channel_manager()
+
+        captured = self._capture_listeners(hass, entry, channel_manager)
+        event = MagicMock()
+        event.data = {"action": "remove", "entity_id": "light.bedroom"}
+        await captured["entity_registry_updated"](event)
+
+        channel_manager.request_resync.assert_not_awaited()
+
+    async def test_entity_registry_triggers_resync_on_media_player_remove(self):
+        """Removing a media_player entity triggers channel_manager.request_resync()."""
+        hass = _make_bootstrap_hass()
+        entry = _make_config_entry()
+        channel_manager = _make_mock_channel_manager()
+
+        captured = self._capture_listeners(hass, entry, channel_manager)
+        event = MagicMock()
+        event.data = {"action": "remove", "entity_id": "media_player.living_room"}
+        await captured["entity_registry_updated"](event)
+
+        channel_manager.request_resync.assert_awaited_once()
+
+    async def test_entity_registry_logs_exception(self, caplog):
+        """An exception from request_resync() is caught and logged with the entity_id."""
+        hass = _make_bootstrap_hass()
+        entry = _make_config_entry()
+        channel_manager = _make_mock_channel_manager()
+        channel_manager.request_resync = AsyncMock(side_effect=RuntimeError("err"))
+
+        captured = self._capture_listeners(hass, entry, channel_manager)
+        event = MagicMock()
+        event.data = {"action": "remove", "entity_id": "media_player.kitchen"}
+
+        with caplog.at_level("ERROR"):
+            await captured["entity_registry_updated"](event)
+
+        assert "media_player.kitchen" in caplog.text

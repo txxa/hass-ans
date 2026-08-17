@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -569,3 +571,108 @@ class TestCreateSystemErrors:
         p1 = factory()
         p2 = factory()
         assert p1 is not p2
+
+
+# ---------------------------------------------------------------------------
+# ANSSystem.start()
+# ---------------------------------------------------------------------------
+
+
+def _make_ans_system() -> ANSSystem:
+    """Return an ANSSystem with the components start() touches wired as AsyncMocks."""
+    return ANSSystem(
+        channel_manager=MagicMock(),
+        orchestrator=MagicMock(),
+        task_queue=MagicMock(start=AsyncMock(), add_task=AsyncMock()),
+        filter_engine=MagicMock(),
+        rate_limiter=MagicMock(),
+        retry_policy=MagicMock(),
+        notification_registry=MagicMock(),
+        attempt_log=MagicMock(),
+        retry_queue=MagicMock(remove_retry=AsyncMock()),
+        acknowledgement_registry=MagicMock(),
+        housekeeping_scheduler=MagicMock(start=AsyncMock()),
+        deduplication_service=MagicMock(start=AsyncMock()),
+    )
+
+
+class TestAnsSystemStart:
+    """Verify ANSSystem.start() starts all workers, re-enqueues pending retries, and removes orphaned retry entries."""
+
+    async def test_starts_all_background_workers(self):
+        """start() starts task_queue, housekeeping_scheduler, and deduplication_service."""
+        system = _make_ans_system()
+
+        await system.start([], [])
+
+        system.task_queue.start.assert_awaited_once()
+        system.housekeeping_scheduler.start.assert_awaited_once()
+        system.deduplication_service.start.assert_awaited_once()
+
+    async def test_enqueues_non_overdue_task_with_delay(self):
+        """start() re-enqueues a pending retry with a positive delay when scheduled_at is in the future."""
+        system = _make_ans_system()
+        task = make_task()
+        future_time = datetime.now(UTC) + timedelta(seconds=30)
+
+        await system.start([(task, future_time)], [])
+
+        system.task_queue.add_task.assert_awaited_once()
+        _, kwargs = system.task_queue.add_task.call_args
+        assert kwargs["delay"].total_seconds() > 0
+
+    async def test_enqueues_overdue_task_with_zero_delay(self):
+        """start() re-enqueues an overdue retry with delay=timedelta(0) when scheduled_at is in the past."""
+        system = _make_ans_system()
+        task = make_task()
+        past_time = datetime.now(UTC) - timedelta(seconds=60)
+
+        await system.start([(task, past_time)], [])
+
+        system.task_queue.add_task.assert_awaited_once()
+        _, kwargs = system.task_queue.add_task.call_args
+        assert kwargs["delay"].total_seconds() == 0
+
+    async def test_removes_orphaned_retries(self):
+        """start() calls retry_queue.remove_retry() for each orphaned job ID."""
+        job_id = str(uuid4())
+        system = _make_ans_system()
+
+        await system.start([], [job_id])
+
+        system.retry_queue.remove_retry.assert_awaited_once_with(UUID(job_id))
+
+    async def test_logs_error_for_invalid_uuid_orphan(self, caplog):
+        """start() logs an 'Invalid UUID' error and skips remove_retry() when the orphan ID is malformed."""
+        system = _make_ans_system()
+
+        with caplog.at_level("ERROR"):
+            await system.start([], ["not-a-uuid"])
+
+        assert "Invalid UUID" in caplog.text
+        system.retry_queue.remove_retry.assert_not_awaited()
+
+    async def test_logs_error_when_enqueue_raises(self, caplog):
+        """start() logs a 'Failed to re-enqueue' error when add_task() raises."""
+        system = _make_ans_system()
+        system.task_queue.add_task = AsyncMock(side_effect=RuntimeError("queue full"))
+        task = make_task()
+        future_time = datetime.now(UTC) + timedelta(seconds=5)
+
+        with caplog.at_level("ERROR"):
+            await system.start([(task, future_time)], [])
+
+        assert "Failed to re-enqueue" in caplog.text
+
+    async def test_logs_error_when_remove_retry_raises(self, caplog):
+        """start() logs a 'Failed to remove orphaned retry' error when remove_retry() raises."""
+        job_id = str(uuid4())
+        system = _make_ans_system()
+        system.retry_queue.remove_retry = AsyncMock(
+            side_effect=RuntimeError("db error")
+        )
+
+        with caplog.at_level("ERROR"):
+            await system.start([], [job_id])
+
+        assert "Failed to remove orphaned retry" in caplog.text

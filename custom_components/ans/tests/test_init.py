@@ -5,12 +5,18 @@ Coverage targets
 - _setup_config          — happy path + ConfigEntryNotReady on load failure
 - _setup_system          — channel sync with / without system_config
 - _setup_persistence     — delegates to async_initialize_persistence
-- _setup_tasks           — worker startup, retry recovery, orphan removal,
-                           exception logging from gather results
+- _setup_tasks           — delegates to ANSSystem.start() (behavioral tests live
+                           in tests/delivery/test_factory.py::TestAnsSystemStart)
 - _setup_services        — delegates to async_setup_services
-- _setup_listeners       — all four event handlers + exception paths
+- _setup_repairs         — delegates to register_stale_channel_repairs (behavioral
+                           tests live in tests/channels/test_channel_manager.py)
+- _setup_listeners       — delegates to register_channel_resync_listeners
+                           (behavioral tests live in tests/channels/test_channel_manager.py)
+- _setup_acknowledgement_tracking — delegates to async_setup_acknowledgement_tracking
+                           (behavioral tests live in tests/test_acknowledgement.py)
 - async_setup_entry      — happy path, ConfigEntryNotReady passthrough,
-                           generic exception wrapping, cleanup on failure
+                           generic exception wrapping, cleanup on failure,
+                           phase-delegate wiring, post-restart Repairs sweep
 - async_unload_entry     — with / without runtime_data
 - _teardown_entry_components — full / partial teardown, exception logging
 - _cleanup_entry_data    — with / without runtime_data
@@ -23,22 +29,16 @@ Coverage targets
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
-from typing import Any
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import UUID, uuid4
 
 import pytest
-from homeassistant.components.persistent_notification import UpdateType as PNUpdateType
-from homeassistant.const import EVENT_SERVICE_REGISTERED
 from homeassistant.exceptions import ConfigEntryNotReady
-from homeassistant.helpers.entity_registry import (
-    EVENT_ENTITY_REGISTRY_UPDATED,
-)
 
 from custom_components.ans import (
     _cleanup_entry_data,
     _get_entry_data,
+    _setup_acknowledgement_tracking,
     _setup_config,
     _setup_listeners,
     _setup_persistence,
@@ -57,14 +57,7 @@ from custom_components.ans import (
 )
 from custom_components.ans.channels.base import ChannelRecord, ChannelStatus
 from custom_components.ans.channels.channel_manager import ChannelManager
-from custom_components.ans.const import (
-    DOMAIN,
-    EVENT_NOTIFICATION_ACKNOWLEDGED,
-    EVENT_NOTIFICATION_DELIVERED,
-    PERSISTENT_NOTIFICATION_CHANNEL,
-    REPAIR_ISSUE_STALE_CHANNEL,
-    REQUIRED_MP_FEATURES,
-)
+from custom_components.ans.const import REPAIR_ISSUE_STALE_CHANNEL
 
 from .conftest import make_task
 
@@ -143,13 +136,23 @@ def _make_system(channel_manager: MagicMock | None = None) -> MagicMock:
     system.orchestrator.stop = AsyncMock()
     system.rate_limiter = MagicMock()
     system.acknowledgement_registry = MagicMock()
-    system.acknowledgement_registry.record_acknowledgement = AsyncMock(
-        return_value=True
-    )
-    system.acknowledgement_registry.mark_pending = AsyncMock(return_value=True)
     system.acknowledgement_registry.get_pending_channel_ids = AsyncMock(return_value={})
     system.acknowledgement_registry.get_pending_mobile_tags = AsyncMock(return_value={})
     return system
+
+
+def _make_channel_info(channel_id: str) -> MagicMock:
+    """Return a mock ChannelInfo with id and a human-friendly label derived from it."""
+    info = MagicMock()
+    info.id = channel_id
+    info.label = channel_id.replace("notify.", "").replace("_", " ").title()
+    return info
+
+
+def _make_record(channel_id: str, status: ChannelStatus) -> ChannelRecord:
+    """Return a ChannelRecord for *channel_id* with the given status."""
+    info = _make_channel_info(channel_id)
+    return ChannelRecord(info=info, adapter=None, status=status)
 
 
 # ===========================================================================
@@ -274,85 +277,19 @@ class TestSetupPersistence:
 
 
 class TestSetupTasks:
-    """Verify _setup_tasks() starts all workers, re-enqueues pending retries, and removes orphaned retry entries."""
+    """Verify _setup_tasks() delegates to system.start() with the recovered tasks/retries."""
 
-    async def test_starts_all_background_workers(self):
-        """_setup_tasks() starts task_queue, housekeeping_scheduler, and deduplication_service."""
+    async def test_delegates_to_system_start(self):
+        """_setup_tasks() awaits system.start(pending_tasks, orphaned_retries)."""
         system = _make_system()
-
-        await _setup_tasks(system, [], [])
-
-        system.task_queue.start.assert_awaited_once()
-        system.housekeeping_scheduler.start.assert_awaited_once()
-        system.deduplication_service.start.assert_awaited_once()
-
-    async def test_enqueues_non_overdue_task_with_delay(self):
-        """_setup_tasks() re-enqueues a pending retry with a positive delay when scheduled_at is in the future."""
-        system = _make_system()
+        system.start = AsyncMock()
         task = make_task()
-        future_time = datetime.now(UTC) + timedelta(seconds=30)
+        pending = [(task, datetime.now(UTC))]
+        orphaned = ["orphan-1"]
 
-        await _setup_tasks(system, [(task, future_time)], [])
+        await _setup_tasks(system, pending, orphaned)
 
-        system.task_queue.add_task.assert_awaited_once()
-        _, kwargs = system.task_queue.add_task.call_args
-        assert kwargs["delay"].total_seconds() > 0
-
-    async def test_enqueues_overdue_task_with_zero_delay(self):
-        """_setup_tasks() re-enqueues an overdue retry with delay=timedelta(0) when scheduled_at is in the past."""
-        system = _make_system()
-        task = make_task()
-        past_time = datetime.now(UTC) - timedelta(seconds=60)
-
-        await _setup_tasks(system, [(task, past_time)], [])
-
-        system.task_queue.add_task.assert_awaited_once()
-        _, kwargs = system.task_queue.add_task.call_args
-        assert kwargs["delay"].total_seconds() == 0
-
-    async def test_removes_orphaned_retries(self):
-        """_setup_tasks() calls retry_queue.remove_retry() for each orphaned job ID."""
-        job_id = str(uuid4())
-        system = _make_system()
-
-        await _setup_tasks(system, [], [job_id])
-
-        system.retry_queue.remove_retry.assert_awaited_once_with(UUID(job_id))
-
-    async def test_logs_error_for_invalid_uuid_orphan(self, caplog):
-        """_setup_tasks() logs an 'Invalid UUID' error and skips remove_retry() when the orphan ID is malformed."""
-        system = _make_system()
-
-        with caplog.at_level("ERROR"):
-            await _setup_tasks(system, [], ["not-a-uuid"])
-
-        assert "Invalid UUID" in caplog.text
-        system.retry_queue.remove_retry.assert_not_awaited()
-
-    async def test_logs_error_when_enqueue_raises(self, caplog):
-        """_setup_tasks() logs a 'Failed to re-enqueue' error when add_task() raises."""
-        system = _make_system()
-        system.task_queue.add_task = AsyncMock(side_effect=RuntimeError("queue full"))
-        task = make_task()
-        future_time = datetime.now(UTC) + timedelta(seconds=5)
-
-        with caplog.at_level("ERROR"):
-            await _setup_tasks(system, [(task, future_time)], [])
-
-        assert "Failed to re-enqueue" in caplog.text
-
-    async def test_logs_error_when_remove_retry_raises(self, caplog):
-        """_setup_tasks() logs a 'Failed to remove orphaned retry' error when remove_retry() raises."""
-        job_id = str(uuid4())
-        system = _make_system()
-        system.retry_queue.remove_retry = AsyncMock(
-            side_effect=RuntimeError("db error")
-        )
-
-        with caplog.at_level("ERROR"):
-            await _setup_tasks(system, [], [job_id])
-
-        assert "Failed to remove orphaned retry" in caplog.text
+        system.start.assert_awaited_once_with(pending, orphaned)
 
 
 # ===========================================================================
@@ -381,262 +318,20 @@ class TestSetupServices:
 
 
 class TestSetupListeners:
-    """Tests for each event listener registered in _setup_listeners."""
+    """Verify _setup_listeners() delegates to register_channel_resync_listeners()."""
 
-    def _capture_listeners(
-        self, hass: MagicMock, entry: MagicMock, channel_manager: MagicMock
-    ) -> dict[str, Any]:
-        """Call _setup_listeners and harvest the registered callbacks.
-
-        Returns a dict with keys:
-        - ``update_listener``        — the options-change callback
-        - ``notify_service``         — EVENT_SERVICE_REGISTERED callback
-        - ``media_player_added``     — state-added callback
-        - ``entity_registry_updated``— EVENT_ENTITY_REGISTRY_UPDATED callback
-        """
-        captured: dict[str, Any] = {}
-
-        def _on_unload(fn):
-            # fn is either a callable (the remove/unsubscribe fn) or the result
-            # of hass.bus.async_listen / async_track_state_added_domain.
-            """Accept and ignore the unsubscribe callable (side-effect capture only)."""
-
-        entry.async_on_unload.side_effect = _on_unload
-
-        # Capture add_update_listener callback
-        def _add_listener(cb):
-            """Capture the update listener callback for assertion."""
-            captured["update_listener"] = cb
-            return MagicMock()  # unsubscribe
-
-        entry.add_update_listener.side_effect = _add_listener
-
-        # Capture EVENT_SERVICE_REGISTERED listener
-        bus_listens: list = []
-
-        def _bus_listen(event_type, cb):
-            """Capture bus event callbacks, keyed by event_type."""
-            bus_listens.append((event_type, cb))
-            return MagicMock()
-
-        hass.bus.async_listen.side_effect = _bus_listen
-
-        # Capture state-added listener
-        state_added_cbs: list = []
-
-        def _state_added(hass_, domain, cb):
-            """Capture state-change domain callbacks for assertion."""
-            state_added_cbs.append(cb)
-            return MagicMock()
+    async def test_delegates_to_register_channel_resync_listeners(self):
+        """_setup_listeners() calls register_channel_resync_listeners(hass, entry, channel_manager)."""
+        hass = _make_hass()
+        entry = _make_entry()
+        channel_manager = _make_channel_manager()
 
         with patch(
-            "custom_components.ans.async_track_state_added_domain",
-            side_effect=_state_added,
-        ):
+            "custom_components.ans.register_channel_resync_listeners"
+        ) as mock_register:
             _setup_listeners(hass, entry, channel_manager)
 
-        for event_type, cb in bus_listens:
-            if event_type == EVENT_SERVICE_REGISTERED:
-                captured["notify_service"] = cb
-            elif event_type == EVENT_ENTITY_REGISTRY_UPDATED:
-                captured["entity_registry_updated"] = cb
-
-        if state_added_cbs:
-            captured["media_player_added"] = state_added_cbs[0]
-
-        return captured
-
-    # ── update_listener ──────────────────────────────────────────────────────
-
-    async def test_update_listener_reloads_entry(self):
-        """The update listener calls config_entries.async_reload() with the entry_id."""
-        hass = _make_hass()
-        entry = _make_entry()
-        hass.config_entries.async_reload = AsyncMock()
-        channel_manager = _make_channel_manager()
-
-        captured = self._capture_listeners(hass, entry, channel_manager)
-        await captured["update_listener"](hass, entry)
-
-        hass.config_entries.async_reload.assert_awaited_once_with(entry.entry_id)
-
-    # ── notify service registered ─────────────────────────────────────────────
-
-    async def test_notify_service_ignores_non_notify_domain(self):
-        """The EVENT_SERVICE_REGISTERED callback ignores events from non-notify domains."""
-        hass = _make_hass()
-        entry = _make_entry()
-        channel_manager = _make_channel_manager()
-
-        captured = self._capture_listeners(hass, entry, channel_manager)
-        event = MagicMock()
-        event.data = {"domain": "mqtt", "service": "foo"}
-        await captured["notify_service"](event)
-
-        channel_manager.request_resync.assert_not_awaited()
-
-    async def test_notify_service_ignores_builtin_names(self):
-        """The callback ignores the built-in service names 'notify' and 'send_message'."""
-        hass = _make_hass()
-        entry = _make_entry()
-        channel_manager = _make_channel_manager()
-
-        captured = self._capture_listeners(hass, entry, channel_manager)
-        for svc in ("notify", "send_message"):
-            event = MagicMock()
-            event.data = {"domain": "notify", "service": svc}
-            await captured["notify_service"](event)
-
-        channel_manager.request_resync.assert_not_awaited()
-
-    async def test_notify_service_triggers_resync(self):
-        """A new notify domain service triggers channel_manager.request_resync()."""
-        hass = _make_hass()
-        entry = _make_entry()
-        channel_manager = _make_channel_manager()
-
-        captured = self._capture_listeners(hass, entry, channel_manager)
-        event = MagicMock()
-        event.data = {"domain": "notify", "service": "mobile_app_phone"}
-        await captured["notify_service"](event)
-
-        channel_manager.request_resync.assert_awaited_once()
-
-    async def test_notify_service_logs_exception(self, caplog):
-        """An exception from request_resync() is caught and logged with the service name."""
-        hass = _make_hass()
-        entry = _make_entry()
-        channel_manager = _make_channel_manager()
-        channel_manager.request_resync = AsyncMock(side_effect=RuntimeError("boom"))
-
-        captured = self._capture_listeners(hass, entry, channel_manager)
-        event = MagicMock()
-        event.data = {"domain": "notify", "service": "my_service"}
-
-        with caplog.at_level("ERROR"):
-            await captured["notify_service"](event)
-
-        assert "my_service" in caplog.text
-
-    # ── media_player added ────────────────────────────────────────────────────
-
-    async def test_media_player_added_ignores_insufficient_features(self):
-        """A new media_player state with insufficient supported_features does not trigger a resync."""
-        hass = _make_hass()
-        entry = _make_entry()
-        channel_manager = _make_channel_manager()
-
-        captured = self._capture_listeners(hass, entry, channel_manager)
-        state = MagicMock()
-        state.attributes = {"supported_features": 0x0001}  # missing required bits
-        event = MagicMock()
-        event.data = {"entity_id": "media_player.tv", "new_state": state}
-        await captured["media_player_added"](event)
-
-        channel_manager.request_resync.assert_not_awaited()
-
-    async def test_media_player_added_with_no_new_state_ignored(self):
-        """A state-change event with new_state=None is silently ignored."""
-        hass = _make_hass()
-        entry = _make_entry()
-        channel_manager = _make_channel_manager()
-
-        captured = self._capture_listeners(hass, entry, channel_manager)
-        event = MagicMock()
-        event.data = {"entity_id": "media_player.tv", "new_state": None}
-        await captured["media_player_added"](event)
-
-        channel_manager.request_resync.assert_not_awaited()
-
-    async def test_media_player_added_triggers_resync(self):
-        """A new media_player with the required supported_features triggers channel_manager.request_resync()."""
-        hass = _make_hass()
-        entry = _make_entry()
-        channel_manager = _make_channel_manager()
-
-        captured = self._capture_listeners(hass, entry, channel_manager)
-        state = MagicMock()
-        state.attributes = {"supported_features": REQUIRED_MP_FEATURES}
-        event = MagicMock()
-        event.data = {"entity_id": "media_player.speaker", "new_state": state}
-        await captured["media_player_added"](event)
-
-        channel_manager.request_resync.assert_awaited_once()
-
-    async def test_media_player_added_logs_exception(self, caplog):
-        """An exception from request_resync() is caught and logged with the entity_id."""
-        hass = _make_hass()
-        entry = _make_entry()
-        channel_manager = _make_channel_manager()
-        channel_manager.request_resync = AsyncMock(side_effect=RuntimeError("fail"))
-
-        captured = self._capture_listeners(hass, entry, channel_manager)
-        state = MagicMock()
-        state.attributes = {"supported_features": REQUIRED_MP_FEATURES}
-        event = MagicMock()
-        event.data = {"entity_id": "media_player.speaker", "new_state": state}
-
-        with caplog.at_level("ERROR"):
-            await captured["media_player_added"](event)
-
-        assert "media_player.speaker" in caplog.text
-
-    # ── entity registry updated ───────────────────────────────────────────────
-
-    async def test_entity_registry_ignores_non_remove_actions(self):
-        """The EVENT_ENTITY_REGISTRY_UPDATED callback ignores non-remove actions such as 'update'."""
-        hass = _make_hass()
-        entry = _make_entry()
-        channel_manager = _make_channel_manager()
-
-        captured = self._capture_listeners(hass, entry, channel_manager)
-        event = MagicMock()
-        event.data = {"action": "update", "entity_id": "media_player.tv"}
-        await captured["entity_registry_updated"](event)
-
-        channel_manager.request_resync.assert_not_awaited()
-
-    async def test_entity_registry_ignores_non_media_player(self):
-        """The callback ignores remove events for non-media_player entities."""
-        hass = _make_hass()
-        entry = _make_entry()
-        channel_manager = _make_channel_manager()
-
-        captured = self._capture_listeners(hass, entry, channel_manager)
-        event = MagicMock()
-        event.data = {"action": "remove", "entity_id": "light.bedroom"}
-        await captured["entity_registry_updated"](event)
-
-        channel_manager.request_resync.assert_not_awaited()
-
-    async def test_entity_registry_triggers_resync_on_media_player_remove(self):
-        """Removing a media_player entity triggers channel_manager.request_resync()."""
-        hass = _make_hass()
-        entry = _make_entry()
-        channel_manager = _make_channel_manager()
-
-        captured = self._capture_listeners(hass, entry, channel_manager)
-        event = MagicMock()
-        event.data = {"action": "remove", "entity_id": "media_player.living_room"}
-        await captured["entity_registry_updated"](event)
-
-        channel_manager.request_resync.assert_awaited_once()
-
-    async def test_entity_registry_logs_exception(self, caplog):
-        """An exception from request_resync() is caught and logged with the entity_id."""
-        hass = _make_hass()
-        entry = _make_entry()
-        channel_manager = _make_channel_manager()
-        channel_manager.request_resync = AsyncMock(side_effect=RuntimeError("err"))
-
-        captured = self._capture_listeners(hass, entry, channel_manager)
-        event = MagicMock()
-        event.data = {"action": "remove", "entity_id": "media_player.kitchen"}
-
-        with caplog.at_level("ERROR"):
-            await captured["entity_registry_updated"](event)
-
-        assert "media_player.kitchen" in caplog.text
+        mock_register.assert_called_once_with(hass, entry, channel_manager)
 
 
 # ===========================================================================
@@ -801,6 +496,104 @@ class TestAsyncSetupEntry:
             await async_setup_entry(hass, entry)
 
         assert "no recipients configured" in caplog.text
+
+    async def test_async_setup_entry_calls_setup_repairs(self):
+        """async_setup_entry() calls _setup_repairs() with hass and the channel manager."""
+        hass = _make_hass()
+        entry = _make_entry()
+        config_repo = _make_config_repo()
+        system = _make_system()
+
+        with (
+            patch("custom_components.ans.VolumeRestorationRegistry") as mock_vol,
+            patch("custom_components.ans._setup_config", return_value=config_repo),
+            patch("custom_components.ans._setup_system", return_value=system),
+            patch(
+                "custom_components.ans._setup_persistence",
+                return_value=([], []),
+            ),
+            patch("custom_components.ans._setup_tasks"),
+            patch("custom_components.ans._setup_services"),
+            patch("custom_components.ans._setup_listeners"),
+            patch("custom_components.ans._setup_repairs") as mock_setup_repairs,
+            patch("custom_components.ans.ir"),
+        ):
+            mock_vol.return_value.async_load = AsyncMock()
+            await async_setup_entry(hass, entry)
+
+        mock_setup_repairs.assert_called_once_with(hass, system.channel_manager)
+
+    async def test_post_setup_sweep_deletes_issues_for_active_channels(self):
+        """After finalize_setup(), ir.async_delete_issue is called for each ACTIVE channel."""
+        hass = _make_hass()
+        entry = _make_entry()
+        config_repo = _make_config_repo()
+        system = _make_system()
+
+        active_record = _make_record("notify.mobile_app_phone", ChannelStatus.ACTIVE)
+        stale_record = _make_record("notify.gone", ChannelStatus.STALE)
+        system.channel_manager.get_all_records = MagicMock(
+            return_value=[active_record, stale_record]
+        )
+
+        with (
+            patch("custom_components.ans.VolumeRestorationRegistry") as mock_vol,
+            patch("custom_components.ans._setup_config", return_value=config_repo),
+            patch("custom_components.ans._setup_system", return_value=system),
+            patch(
+                "custom_components.ans._setup_persistence",
+                return_value=([], []),
+            ),
+            patch("custom_components.ans._setup_tasks"),
+            patch("custom_components.ans._setup_services"),
+            patch("custom_components.ans._setup_listeners"),
+            patch("custom_components.ans._setup_repairs"),
+            patch("custom_components.ans.ir") as mock_ir,
+        ):
+            mock_vol.return_value.async_load = AsyncMock()
+            await async_setup_entry(hass, entry)
+
+        # Only the ACTIVE channel should trigger async_delete_issue in the sweep
+        delete_calls = [
+            call
+            for call in mock_ir.async_delete_issue.call_args_list
+            if call.args[2] == f"{REPAIR_ISSUE_STALE_CHANNEL}_notify_mobile_app_phone"
+        ]
+        assert len(delete_calls) == 1
+        # STALE channel must NOT be cleaned up in the sweep
+        stale_calls = [
+            call
+            for call in mock_ir.async_delete_issue.call_args_list
+            if call.args[2] == f"{REPAIR_ISSUE_STALE_CHANNEL}_notify_gone"
+        ]
+        assert len(stale_calls) == 0
+
+    async def test_async_setup_entry_calls_acknowledgement_tracking(self):
+        """async_setup_entry() calls _setup_acknowledgement_tracking with hass, entry, system."""
+        hass = _make_hass()
+        entry = _make_entry()
+        config_repo = _make_config_repo()
+        system = _make_system()
+
+        with (
+            patch("custom_components.ans.VolumeRestorationRegistry") as mock_vol,
+            patch("custom_components.ans._setup_config", return_value=config_repo),
+            patch("custom_components.ans._setup_system", return_value=system),
+            patch("custom_components.ans._setup_persistence", return_value=([], [])),
+            patch("custom_components.ans._setup_tasks"),
+            patch("custom_components.ans._setup_services"),
+            patch("custom_components.ans._setup_listeners"),
+            patch("custom_components.ans._setup_repairs"),
+            patch(
+                "custom_components.ans._setup_acknowledgement_tracking",
+                new_callable=AsyncMock,
+            ) as mock_ack,
+            patch("custom_components.ans.ir"),
+        ):
+            mock_vol.return_value.async_load = AsyncMock()
+            await async_setup_entry(hass, entry)
+
+        mock_ack.assert_called_once_with(hass, entry, system)
 
 
 # ===========================================================================
@@ -1327,169 +1120,19 @@ class TestAsyncMigrateEntry:
 
 
 class TestSetupRepairs:
-    """Verify _setup_repairs() wires the lifecycle callback and reacts correctly."""
+    """Verify _setup_repairs() delegates to register_stale_channel_repairs()."""
 
-    def _make_channel_info(self, channel_id: str) -> MagicMock:
-        info = MagicMock()
-        info.id = channel_id
-        info.label = channel_id.replace("notify.", "").replace("_", " ").title()
-        return info
-
-    def _make_record(self, channel_id: str, status: ChannelStatus) -> ChannelRecord:
-        info = self._make_channel_info(channel_id)
-        return ChannelRecord(info=info, adapter=None, status=status)
-
-    def test_setup_repairs_registers_callback_on_channel_manager(self):
-        """_setup_repairs() calls set_channel_lifecycle_callback on the channel manager."""
+    def test_delegates_to_register_stale_channel_repairs(self):
+        """_setup_repairs() calls register_stale_channel_repairs(hass, channel_manager)."""
         hass = _make_hass()
         channel_manager = _make_channel_manager()
-        channel_manager.set_channel_lifecycle_callback = MagicMock()
 
-        _setup_repairs(hass, channel_manager)
+        with patch(
+            "custom_components.ans.register_stale_channel_repairs"
+        ) as mock_register:
+            _setup_repairs(hass, channel_manager)
 
-        channel_manager.set_channel_lifecycle_callback.assert_called_once()
-        cb = channel_manager.set_channel_lifecycle_callback.call_args[0][0]
-        assert callable(cb)
-
-    def test_callback_creates_repair_issue_for_stale_channel(self):
-        """Callback invokes ir.async_create_issue with correct args when a channel goes STALE."""
-        hass = _make_hass()
-        channel_manager = _make_channel_manager()
-        channel_manager.set_channel_lifecycle_callback = MagicMock()
-        channel_manager.get_record = MagicMock(
-            return_value=self._make_record(
-                "notify.mobile_app_phone", ChannelStatus.STALE
-            )
-        )
-
-        _setup_repairs(hass, channel_manager)
-        cb = channel_manager.set_channel_lifecycle_callback.call_args[0][0]
-
-        with patch("custom_components.ans.ir") as mock_ir:
-            cb(["notify.mobile_app_phone"], [])
-
-        mock_ir.async_create_issue.assert_called_once_with(
-            hass,
-            DOMAIN,
-            f"{REPAIR_ISSUE_STALE_CHANNEL}_notify_mobile_app_phone",
-            is_fixable=False,
-            severity=mock_ir.IssueSeverity.WARNING,
-            translation_key=REPAIR_ISSUE_STALE_CHANNEL,
-            translation_placeholders={
-                "channel_label": channel_manager.get_record.return_value.info.label,
-                "channel_id": "notify.mobile_app_phone",
-            },
-        )
-
-    def test_callback_deletes_repair_issue_for_recovered_channel(self):
-        """Callback invokes ir.async_delete_issue with the correct issue ID when a channel recovers."""
-        hass = _make_hass()
-        channel_manager = _make_channel_manager()
-        channel_manager.set_channel_lifecycle_callback = MagicMock()
-
-        _setup_repairs(hass, channel_manager)
-        cb = channel_manager.set_channel_lifecycle_callback.call_args[0][0]
-
-        with patch("custom_components.ans.ir") as mock_ir:
-            cb([], ["notify.mobile_app_phone"])
-
-        mock_ir.async_delete_issue.assert_called_once_with(
-            hass,
-            DOMAIN,
-            f"{REPAIR_ISSUE_STALE_CHANNEL}_notify_mobile_app_phone",
-        )
-
-    def test_callback_uses_channel_id_as_label_when_record_is_none(self):
-        """When get_record returns None, channel_id is used as the label fallback."""
-        hass = _make_hass()
-        channel_manager = _make_channel_manager()
-        channel_manager.set_channel_lifecycle_callback = MagicMock()
-        channel_manager.get_record = MagicMock(return_value=None)
-
-        _setup_repairs(hass, channel_manager)
-        cb = channel_manager.set_channel_lifecycle_callback.call_args[0][0]
-
-        with patch("custom_components.ans.ir") as mock_ir:
-            cb(["notify.gone_channel"], [])
-
-        call_kwargs = mock_ir.async_create_issue.call_args.kwargs
-        assert (
-            call_kwargs["translation_placeholders"]["channel_label"]
-            == "notify.gone_channel"
-        )
-
-    async def test_post_setup_sweep_deletes_issues_for_active_channels(self):
-        """After finalize_setup(), ir.async_delete_issue is called for each ACTIVE channel."""
-        hass = _make_hass()
-        entry = _make_entry()
-        config_repo = _make_config_repo()
-        system = _make_system()
-
-        active_record = self._make_record(
-            "notify.mobile_app_phone", ChannelStatus.ACTIVE
-        )
-        stale_record = self._make_record("notify.gone", ChannelStatus.STALE)
-        system.channel_manager.get_all_records = MagicMock(
-            return_value=[active_record, stale_record]
-        )
-
-        with (
-            patch("custom_components.ans.VolumeRestorationRegistry") as mock_vol,
-            patch("custom_components.ans._setup_config", return_value=config_repo),
-            patch("custom_components.ans._setup_system", return_value=system),
-            patch(
-                "custom_components.ans._setup_persistence",
-                return_value=([], []),
-            ),
-            patch("custom_components.ans._setup_tasks"),
-            patch("custom_components.ans._setup_services"),
-            patch("custom_components.ans._setup_listeners"),
-            patch("custom_components.ans._setup_repairs"),
-            patch("custom_components.ans.ir") as mock_ir,
-        ):
-            mock_vol.return_value.async_load = AsyncMock()
-            await async_setup_entry(hass, entry)
-
-        # Only the ACTIVE channel should trigger async_delete_issue in the sweep
-        delete_calls = [
-            call
-            for call in mock_ir.async_delete_issue.call_args_list
-            if call.args[2] == f"{REPAIR_ISSUE_STALE_CHANNEL}_notify_mobile_app_phone"
-        ]
-        assert len(delete_calls) == 1
-        # STALE channel must NOT be cleaned up in the sweep
-        stale_calls = [
-            call
-            for call in mock_ir.async_delete_issue.call_args_list
-            if call.args[2] == f"{REPAIR_ISSUE_STALE_CHANNEL}_notify_gone"
-        ]
-        assert len(stale_calls) == 0
-
-    async def test_async_setup_entry_calls_setup_repairs(self):
-        """async_setup_entry() calls _setup_repairs() with hass and the channel manager."""
-        hass = _make_hass()
-        entry = _make_entry()
-        config_repo = _make_config_repo()
-        system = _make_system()
-
-        with (
-            patch("custom_components.ans.VolumeRestorationRegistry") as mock_vol,
-            patch("custom_components.ans._setup_config", return_value=config_repo),
-            patch("custom_components.ans._setup_system", return_value=system),
-            patch(
-                "custom_components.ans._setup_persistence",
-                return_value=([], []),
-            ),
-            patch("custom_components.ans._setup_tasks"),
-            patch("custom_components.ans._setup_services"),
-            patch("custom_components.ans._setup_listeners"),
-            patch("custom_components.ans._setup_repairs") as mock_setup_repairs,
-            patch("custom_components.ans.ir"),
-        ):
-            mock_vol.return_value.async_load = AsyncMock()
-            await async_setup_entry(hass, entry)
-
-        mock_setup_repairs.assert_called_once_with(hass, system.channel_manager)
+        mock_register.assert_called_once_with(hass, channel_manager)
 
 
 # ===========================================================================
@@ -1498,764 +1141,18 @@ class TestSetupRepairs:
 
 
 class TestAcknowledgementTracking:
-    """Verify _setup_acknowledgement_tracking() listener logic (NH-3)."""
+    """Verify _setup_acknowledgement_tracking() delegates to async_setup_acknowledgement_tracking()."""
 
-    def _make_event(self, data: dict, *, user_id: str | None = None) -> MagicMock:
-        ev = MagicMock()
-        ev.data = data
-        ev.context = MagicMock()
-        ev.context.user_id = user_id
-        return ev
-
-    async def _setup(
-        self,
-        *,
-        pending_channel_ids: dict | None = None,
-        pending_mobile_tags: dict | None = None,
-    ):
-        """Return (hass, entry, system, captured_listeners, dispatcher_cbs) ready for testing."""
-        from custom_components.ans import (  # noqa: PLC0415
-            _setup_acknowledgement_tracking,
-        )
-
+    async def test_delegates_to_async_setup_acknowledgement_tracking(self):
+        """_setup_acknowledgement_tracking() awaits async_setup_acknowledgement_tracking(hass, entry, system)."""
         hass = _make_hass()
         entry = _make_entry()
         system = _make_system()
-
-        # Allow pre-populating the registry with persisted pending records.
-        if pending_channel_ids is not None:
-            system.acknowledgement_registry.get_pending_channel_ids = AsyncMock(
-                return_value=pending_channel_ids
-            )
-        if pending_mobile_tags is not None:
-            system.acknowledgement_registry.get_pending_mobile_tags = AsyncMock(
-                return_value=pending_mobile_tags
-            )
-
-        listeners: dict[str, Any] = {}
-
-        def _capture_listen(event_type, callback, *args, **kwargs):
-            listeners[event_type] = callback
-            return MagicMock()
-
-        hass.bus.async_listen = MagicMock(side_effect=_capture_listen)
-
-        dispatcher_callbacks: list[Any] = []
-
-        def _capture_dispatcher(h, signal, cb):
-            dispatcher_callbacks.append(cb)
-            return MagicMock()
 
         with patch(
-            "custom_components.ans.async_dispatcher_connect",
-            side_effect=_capture_dispatcher,
-        ):
+            "custom_components.ans.async_setup_acknowledgement_tracking",
+            new_callable=AsyncMock,
+        ) as mock_tracking:
             await _setup_acknowledgement_tracking(hass, entry, system)
 
-        return hass, entry, system, listeners, dispatcher_callbacks
-
-    def _collect_tasks(self, hass: MagicMock) -> list:
-        """Wire hass.async_create_task to collect coroutines; return the list."""
-        tasks: list = []
-
-        def _collect(coro):
-            tasks.append(coro)
-
-        hass.async_create_task = _collect
-        return tasks
-
-    async def test_delivered_mobile_app_adds_to_pending(self):
-        """ans_notification_delivered for mobile_app channel adds notification_id to pending acks."""
-        hass, entry, system, listeners, _ = await self._setup()
-
-        ev = self._make_event(
-            {"channel_id": "notify.mobile_app_phone", "notification_id": "nid-1"}
-        )
-        await listeners[EVENT_NOTIFICATION_DELIVERED](ev)
-
-        action_ev = self._make_event({"tag": "nid-1"})
-        await listeners["mobile_app_notification_action"](action_ev)
-
-        hass.bus.async_fire.assert_called_once()
-        assert hass.bus.async_fire.call_args.args[0] == EVENT_NOTIFICATION_ACKNOWLEDGED
-
-    async def test_delivered_persistent_notification_adds_to_pending(self):
-        """ans_notification_delivered for persistent_notification channel adds to pending acks."""
-        hass, entry, system, listeners, dispatcher_cbs = await self._setup()
-
-        ev = self._make_event(
-            {
-                "channel_id": PERSISTENT_NOTIFICATION_CHANNEL,
-                "notification_id": "pn-nid-1",
-            }
-        )
-        await listeners[EVENT_NOTIFICATION_DELIVERED](ev)
-
-        await dispatcher_cbs[0](PNUpdateType.REMOVED, {"pn-nid-1": {}})
-
-        hass.bus.async_fire.assert_called_once()
-        assert hass.bus.async_fire.call_args.args[0] == EVENT_NOTIFICATION_ACKNOWLEDGED
-
-    async def test_delivered_other_channel_not_added_to_pending(self):
-        """ans_notification_delivered for a non-mobile-app, non-pn channel does not add to pending."""
-        hass, entry, system, listeners, _ = await self._setup()
-
-        ev = self._make_event(
-            {"channel_id": "notify.signal", "notification_id": "nid-signal"}
-        )
-        await listeners[EVENT_NOTIFICATION_DELIVERED](ev)
-
-        action_ev = self._make_event({"tag": "nid-signal"})
-        await listeners["mobile_app_notification_action"](action_ev)
-
-        hass.bus.async_fire.assert_not_called()
-
-    async def test_mobile_app_action_fires_ack_event(self):
-        """mobile_app_notification_action fires ans_notification_acknowledged with correct fields."""
-        hass, entry, system, listeners, _ = await self._setup()
-
-        ev = self._make_event(
-            {"channel_id": "notify.mobile_app_phone", "notification_id": "nid-ack"}
-        )
-        await listeners[EVENT_NOTIFICATION_DELIVERED](ev)
-
-        action_ev = self._make_event({"tag": "nid-ack"})
-        await listeners["mobile_app_notification_action"](action_ev)
-
-        hass.bus.async_fire.assert_called_once()
-        event_name, payload = hass.bus.async_fire.call_args.args
-        assert event_name == EVENT_NOTIFICATION_ACKNOWLEDGED
-        assert payload["notification_id"] == "nid-ack"
-        assert payload["channel_id"] == "mobile_app"
-        assert "acknowledged_at" in payload
-
-    async def test_mobile_app_action_includes_action_field(self):
-        """ans_notification_acknowledged payload includes 'action' when present in the event."""
-        hass, entry, system, listeners, _ = await self._setup()
-
-        ev = self._make_event(
-            {"channel_id": "notify.mobile_app_phone", "notification_id": "nid-btn"}
-        )
-        await listeners[EVENT_NOTIFICATION_DELIVERED](ev)
-
-        action_ev = self._make_event({"tag": "nid-btn", "action": "CLOSE_GARAGE"})
-        await listeners["mobile_app_notification_action"](action_ev)
-
-        event_name, payload = hass.bus.async_fire.call_args.args
-        assert event_name == EVENT_NOTIFICATION_ACKNOWLEDGED
-        assert payload["action"] == "CLOSE_GARAGE"
-
-    async def test_mobile_app_action_includes_device_name(self):
-        """ans_notification_acknowledged payload includes 'device_name' derived from delivery channel."""
-        hass, entry, system, listeners, _ = await self._setup()
-
-        ev = self._make_event(
-            {"channel_id": "notify.mobile_app_my_phone", "notification_id": "nid-dev"}
-        )
-        await listeners[EVENT_NOTIFICATION_DELIVERED](ev)
-
-        action_ev = self._make_event({"tag": "nid-dev", "action": "OK"})
-        await listeners["mobile_app_notification_action"](action_ev)
-
-        event_name, payload = hass.bus.async_fire.call_args.args
-        assert event_name == EVENT_NOTIFICATION_ACKNOWLEDGED
-        assert payload["device_name"] == "my_phone"
-
-    async def test_mobile_app_action_no_action_key_absent_from_payload(self):
-        """When no 'action' key is in the event, 'action' is absent from the ack payload."""
-        hass, entry, system, listeners, _ = await self._setup()
-
-        ev = self._make_event(
-            {"channel_id": "notify.mobile_app_phone", "notification_id": "nid-noact"}
-        )
-        await listeners[EVENT_NOTIFICATION_DELIVERED](ev)
-
-        action_ev = self._make_event({"tag": "nid-noact"})  # no 'action' key
-        await listeners["mobile_app_notification_action"](action_ev)
-
-        event_name, payload = hass.bus.async_fire.call_args.args
-        assert event_name == EVENT_NOTIFICATION_ACKNOWLEDGED
-        assert "action" not in payload
-
-    async def test_mobile_app_action_no_tag_not_fired(self):
-        """mobile_app_notification_action with no 'tag' field does not fire any event."""
-        hass, entry, system, listeners, _ = await self._setup()
-
-        action_ev = self._make_event({"action": "OPEN"})  # no 'tag' key
-        await listeners["mobile_app_notification_action"](action_ev)
-
-        hass.bus.async_fire.assert_not_called()
-
-    async def test_mobile_app_action_unknown_tag_ignored(self):
-        """mobile_app_notification_action with an unknown tag does not fire any event."""
-        hass, entry, system, listeners, _ = await self._setup()
-
-        action_ev = self._make_event({"tag": "not-in-pending"})
-        await listeners["mobile_app_notification_action"](action_ev)
-
-        hass.bus.async_fire.assert_not_called()
-
-    async def test_persistent_notification_removed_fires_ack_event(self):
-        """Dispatcher REMOVED signal for a pending pn fires ans_notification_acknowledged."""
-        hass, entry, system, listeners, dispatcher_cbs = await self._setup()
-
-        ev = self._make_event(
-            {"channel_id": PERSISTENT_NOTIFICATION_CHANNEL, "notification_id": "pn-1"}
-        )
-        await listeners[EVENT_NOTIFICATION_DELIVERED](ev)
-
-        await dispatcher_cbs[0](PNUpdateType.REMOVED, {"pn-1": {}})
-
-        hass.bus.async_fire.assert_called_once()
-        event_name, payload = hass.bus.async_fire.call_args.args
-        assert event_name == EVENT_NOTIFICATION_ACKNOWLEDGED
-        assert payload["notification_id"] == "pn-1"
-        assert payload["channel_id"] == PERSISTENT_NOTIFICATION_CHANNEL
-        # action and device_name must be absent for persistent_notification
-        assert "action" not in payload
-        assert "device_name" not in payload
-
-    async def test_persistent_notification_removed_unknown_id_ignored(self):
-        """Dispatcher REMOVED signal for an unknown notification_id does nothing."""
-        hass, entry, system, listeners, dispatcher_cbs = await self._setup()
-
-        await dispatcher_cbs[0](PNUpdateType.REMOVED, {"not-pending": {}})
-
-        hass.bus.async_fire.assert_not_called()
-
-    async def test_second_ack_does_not_fire_event(self):
-        """When record_acknowledgement returns False (duplicate), no event is fired."""
-        hass, entry, system, listeners, _ = await self._setup()
-
-        system.acknowledgement_registry.record_acknowledgement = AsyncMock(
-            return_value=False
-        )
-
-        ev = self._make_event(
-            {"channel_id": "notify.mobile_app_phone", "notification_id": "nid-dup"}
-        )
-        await listeners[EVENT_NOTIFICATION_DELIVERED](ev)
-
-        action_ev = self._make_event({"tag": "nid-dup"})
-        await listeners["mobile_app_notification_action"](action_ev)
-
-        hass.bus.async_fire.assert_not_called()
-
-    async def test_delivered_calls_mark_pending(self):
-        """_on_notification_delivered calls mark_pending on the registry for mobile_app channel."""
-        hass, entry, system, listeners, _ = await self._setup()
-
-        ev = self._make_event(
-            {"channel_id": "notify.mobile_app_phone", "notification_id": "nid-mp"}
-        )
-        await listeners[EVENT_NOTIFICATION_DELIVERED](ev)
-
-        system.acknowledgement_registry.mark_pending.assert_awaited_once()
-        call_kwargs = system.acknowledgement_registry.mark_pending.call_args.kwargs
-        assert call_kwargs["notification_id"] == "nid-mp"
-        assert call_kwargs["channel_id"] == "notify.mobile_app_phone"
-
-    async def test_startup_restores_pending_from_registry(self):
-        """On setup, get_pending_channel_ids is called to restore persisted pending eligibility."""
-        pending = {"pre-restart-nid": "notify.mobile_app_old_phone"}
-        hass, entry, system, listeners, _ = await self._setup(
-            pending_channel_ids=pending
-        )
-
-        # The pre-restart notification should now be eligible for ack.
-        action_ev = self._make_event({"tag": "pre-restart-nid", "action": "OK"})
-        await listeners["mobile_app_notification_action"](action_ev)
-
-        hass.bus.async_fire.assert_called_once()
-        event_name, payload = hass.bus.async_fire.call_args.args
-        assert event_name == EVENT_NOTIFICATION_ACKNOWLEDGED
-        assert payload["notification_id"] == "pre-restart-nid"
-        assert payload["device_name"] == "old_phone"
-
-    # ------------------------------------------------------------------
-    # Custom mobile tag (channel_data.tag) scenarios
-    # ------------------------------------------------------------------
-
-    async def test_custom_tag_mobile_action_fires_ack_event(self):
-        """When channel_data.tag sets a custom tag, action with that tag fires ans_notification_acknowledged with the UUID notification_id."""
-        hass, entry, system, listeners, _ = await self._setup()
-
-        # Deliver with a custom mobile_tag (simulates channel_data.tag = "garage-door")
-        ev = self._make_event(
-            {
-                "channel_id": "notify.mobile_app_phone",
-                "notification_id": "uuid-garage-1",
-                "mobile_tag": "garage-door",
-            }
-        )
-        await listeners[EVENT_NOTIFICATION_DELIVERED](ev)
-
-        # Companion app echoes back the custom tag, not the UUID
-        action_ev = self._make_event({"tag": "garage-door", "action": "CLOSE"})
-        await listeners["mobile_app_notification_action"](action_ev)
-
-        hass.bus.async_fire.assert_called_once()
-        event_name, payload = hass.bus.async_fire.call_args.args
-        assert event_name == EVENT_NOTIFICATION_ACKNOWLEDGED
-        # notification_id must be the UUID, not the custom tag
-        assert payload["notification_id"] == "uuid-garage-1"
-        assert payload["channel_id"] == "mobile_app"
-        assert payload["action"] == "CLOSE"
-        assert "acknowledged_at" in payload
-
-    async def test_custom_tag_uuid_tag_still_works(self):
-        """When no custom tag is used (tag == notification_id UUID), existing behaviour is unaffected."""
-        hass, entry, system, listeners, _ = await self._setup()
-
-        ev = self._make_event(
-            {
-                "channel_id": "notify.mobile_app_phone",
-                "notification_id": "uuid-plain",
-                "mobile_tag": "uuid-plain",  # same as notification_id — no custom tag
-            }
-        )
-        await listeners[EVENT_NOTIFICATION_DELIVERED](ev)
-
-        action_ev = self._make_event({"tag": "uuid-plain", "action": "OK"})
-        await listeners["mobile_app_notification_action"](action_ev)
-
-        hass.bus.async_fire.assert_called_once()
-        event_name, payload = hass.bus.async_fire.call_args.args
-        assert event_name == EVENT_NOTIFICATION_ACKNOWLEDGED
-        assert payload["notification_id"] == "uuid-plain"
-
-    async def test_custom_tag_no_mobile_tag_field_uuid_fallback(self):
-        """Delivery event without mobile_tag field (legacy) still works when tag matches notification_id."""
-        hass, entry, system, listeners, _ = await self._setup()
-
-        # Delivery event has no mobile_tag key (older delivery path)
-        ev = self._make_event(
-            {"channel_id": "notify.mobile_app_phone", "notification_id": "uuid-legacy"}
-        )
-        await listeners[EVENT_NOTIFICATION_DELIVERED](ev)
-
-        action_ev = self._make_event({"tag": "uuid-legacy"})
-        await listeners["mobile_app_notification_action"](action_ev)
-
-        hass.bus.async_fire.assert_called_once()
-        event_name, payload = hass.bus.async_fire.call_args.args
-        assert event_name == EVENT_NOTIFICATION_ACKNOWLEDGED
-        assert payload["notification_id"] == "uuid-legacy"
-
-    async def test_custom_tag_restored_after_restart(self):
-        """Custom tag → notification_id mapping restored from get_pending_mobile_tags on startup."""
-        hass, entry, system, listeners, _ = await self._setup(
-            pending_channel_ids={"uuid-restart": "notify.mobile_app_old_phone"},
-            pending_mobile_tags={"ha_update": "uuid-restart"},
-        )
-
-        # User taps after restart — tag is the custom tag, not the UUID
-        action_ev = self._make_event({"tag": "ha_update", "action": "VIEW"})
-        await listeners["mobile_app_notification_action"](action_ev)
-
-        hass.bus.async_fire.assert_called_once()
-        event_name, payload = hass.bus.async_fire.call_args.args
-        assert event_name == EVENT_NOTIFICATION_ACKNOWLEDGED
-        assert payload["notification_id"] == "uuid-restart"
-        assert payload["device_name"] == "old_phone"
-
-    async def test_custom_tag_mark_pending_receives_mobile_tag(self):
-        """_on_notification_delivered passes mobile_tag to mark_pending when present."""
-        hass, entry, system, listeners, _ = await self._setup()
-
-        ev = self._make_event(
-            {
-                "channel_id": "notify.mobile_app_phone",
-                "notification_id": "uuid-mp-tag",
-                "mobile_tag": "custom-tag-value",
-            }
-        )
-        await listeners[EVENT_NOTIFICATION_DELIVERED](ev)
-
-        system.acknowledgement_registry.mark_pending.assert_awaited_once()
-        call_kwargs = system.acknowledgement_registry.mark_pending.call_args.kwargs
-        assert call_kwargs["notification_id"] == "uuid-mp-tag"
-        assert call_kwargs["mobile_tag"] == "custom-tag-value"
-
-    async def test_custom_tag_unknown_tag_ignored(self):
-        """Custom tag that was never registered as pending does not fire any event."""
-        hass, entry, system, listeners, _ = await self._setup()
-
-        action_ev = self._make_event({"tag": "unregistered-custom-tag"})
-        await listeners["mobile_app_notification_action"](action_ev)
-
-        hass.bus.async_fire.assert_not_called()
-
-    async def test_custom_tag_second_ack_ignored(self):
-        """Second action tap for a custom-tag notification does not fire a second event."""
-        hass, entry, system, listeners, _ = await self._setup()
-
-        ev = self._make_event(
-            {
-                "channel_id": "notify.mobile_app_phone",
-                "notification_id": "uuid-dup",
-                "mobile_tag": "dup-tag",
-            }
-        )
-        await listeners[EVENT_NOTIFICATION_DELIVERED](ev)
-
-        action_ev = self._make_event({"tag": "dup-tag"})
-        await listeners["mobile_app_notification_action"](action_ev)
-        assert hass.bus.async_fire.call_count == 1
-
-        # Second tap — record_acknowledgement returns False (already acked)
-        system.acknowledgement_registry.record_acknowledgement = AsyncMock(
-            return_value=False
-        )
-        await listeners["mobile_app_notification_action"](action_ev)
-        assert hass.bus.async_fire.call_count == 1  # still only one event
-
-    async def test_mobile_app_notification_tapped_fires_ack_event(self):
-        """mobile_app_notification_tapped fires ans_notification_acknowledged (body tap path)."""
-        hass, entry, system, listeners, _ = await self._setup()
-
-        ev = self._make_event(
-            {"channel_id": "notify.mobile_app_phone", "notification_id": "nid-tapped"}
-        )
-        await listeners[EVENT_NOTIFICATION_DELIVERED](ev)
-
-        tapped_ev = self._make_event({"tag": "nid-tapped"})
-        await listeners["mobile_app_notification_tapped"](tapped_ev)
-
-        hass.bus.async_fire.assert_called_once()
-        event_name, payload = hass.bus.async_fire.call_args.args
-        assert event_name == EVENT_NOTIFICATION_ACKNOWLEDGED
-        assert payload["notification_id"] == "nid-tapped"
-        assert payload["channel_id"] == "mobile_app"
-        assert "acknowledged_at" in payload
-        assert "action" not in payload
-
-    async def test_mobile_app_notification_tapped_no_tag_ignored(self):
-        """mobile_app_notification_tapped with no 'tag' field does not fire any event."""
-        hass, entry, system, listeners, _ = await self._setup()
-
-        tapped_ev = self._make_event({})  # no 'tag' key
-        await listeners["mobile_app_notification_tapped"](tapped_ev)
-
-        hass.bus.async_fire.assert_not_called()
-
-    async def test_mobile_app_notification_tapped_unknown_tag_ignored(self):
-        """mobile_app_notification_tapped with an unknown tag does not fire any event."""
-        hass, entry, system, listeners, _ = await self._setup()
-
-        tapped_ev = self._make_event({"tag": "ghost-tag"})
-        await listeners["mobile_app_notification_tapped"](tapped_ev)
-
-        hass.bus.async_fire.assert_not_called()
-
-    async def test_persistent_notification_removed_cleans_tag_mapping(self):
-        """Dismissing a persistent_notification removes stale custom-tag entries from _tag_to_notif_id."""
-        hass, entry, system, listeners, dispatcher_cbs = await self._setup()
-
-        # Deliver a mobile notification with a custom tag so _tag_to_notif_id is populated.
-        ev = self._make_event(
-            {
-                "channel_id": "notify.mobile_app_phone",
-                "notification_id": "uuid-pn-tag",
-                "mobile_tag": "custom-cross",
-            }
-        )
-        await listeners[EVENT_NOTIFICATION_DELIVERED](ev)
-
-        # Also deliver a persistent_notification for the same notification_id.
-        pn_ev = self._make_event(
-            {
-                "channel_id": PERSISTENT_NOTIFICATION_CHANNEL,
-                "notification_id": "uuid-pn-tag",
-            }
-        )
-        await listeners[EVENT_NOTIFICATION_DELIVERED](pn_ev)
-
-        # Dismiss the persistent notification.
-        await dispatcher_cbs[0](PNUpdateType.REMOVED, {"uuid-pn-tag": {}})
-
-        hass.bus.async_fire.assert_called_once()
-
-        # Now a mobile action with the custom tag must NOT fire a second ack event
-        # (the stale _tag_to_notif_id entry should have been cleaned up).
-        action_ev = self._make_event({"tag": "custom-cross"})
-        system.acknowledgement_registry.record_acknowledgement = AsyncMock(
-            return_value=False
-        )
-        await listeners["mobile_app_notification_action"](action_ev)
-
-        assert hass.bus.async_fire.call_count == 1  # no second event
-
-    # ------------------------------------------------------------------
-    # method field
-    # ------------------------------------------------------------------
-
-    async def test_mobile_app_action_includes_method_action_button(self):
-        """ans_notification_acknowledged includes method='action_button' when action is present."""
-        hass, entry, system, listeners, _ = await self._setup()
-
-        ev = self._make_event(
-            {
-                "channel_id": "notify.mobile_app_phone",
-                "notification_id": "nid-method-btn",
-            }
-        )
-        await listeners[EVENT_NOTIFICATION_DELIVERED](ev)
-
-        action_ev = self._make_event({"tag": "nid-method-btn", "action": "OPEN"})
-        await listeners["mobile_app_notification_action"](action_ev)
-
-        _, payload = hass.bus.async_fire.call_args.args
-        assert payload["method"] == "action_button"
-
-    async def test_mobile_app_notification_tapped_includes_method_tap(self):
-        """ans_notification_acknowledged includes method='notification_tap' on body tap."""
-        hass, entry, system, listeners, _ = await self._setup()
-
-        ev = self._make_event(
-            {
-                "channel_id": "notify.mobile_app_phone",
-                "notification_id": "nid-method-tap",
-            }
-        )
-        await listeners[EVENT_NOTIFICATION_DELIVERED](ev)
-
-        tap_ev = self._make_event({"tag": "nid-method-tap"})
-        await listeners["mobile_app_notification_tapped"](tap_ev)
-
-        _, payload = hass.bus.async_fire.call_args.args
-        assert payload["method"] == "notification_tap"
-
-    async def test_mobile_app_action_without_action_includes_method_tap(self):
-        """mobile_app_notification_action with no 'action' value → method='notification_tap'."""
-        hass, entry, system, listeners, _ = await self._setup()
-
-        ev = self._make_event(
-            {
-                "channel_id": "notify.mobile_app_phone",
-                "notification_id": "nid-method-noact",
-            }
-        )
-        await listeners[EVENT_NOTIFICATION_DELIVERED](ev)
-
-        action_ev = self._make_event({"tag": "nid-method-noact"})  # no 'action' key
-        await listeners["mobile_app_notification_action"](action_ev)
-
-        _, payload = hass.bus.async_fire.call_args.args
-        assert payload["method"] == "notification_tap"
-
-    async def test_persistent_notification_includes_method_dismiss(self):
-        """ans_notification_acknowledged includes method='persistent_notification_dismiss'."""
-        hass, entry, system, listeners, dispatcher_cbs = await self._setup()
-
-        ev = self._make_event(
-            {
-                "channel_id": PERSISTENT_NOTIFICATION_CHANNEL,
-                "notification_id": "pn-method",
-            }
-        )
-        await listeners[EVENT_NOTIFICATION_DELIVERED](ev)
-        await dispatcher_cbs[0](PNUpdateType.REMOVED, {"pn-method": {}})
-
-        _, payload = hass.bus.async_fire.call_args.args
-        assert payload["method"] == "persistent_notification_dismiss"
-
-    # ------------------------------------------------------------------
-    # user_id — mobile_app
-    # ------------------------------------------------------------------
-
-    async def test_mobile_app_action_context_carries_user_id(self):
-        """ans_notification_acknowledged is fired with context.user_id from the companion app event."""
-        hass, entry, system, listeners, _ = await self._setup()
-
-        ev = self._make_event(
-            {"channel_id": "notify.mobile_app_phone", "notification_id": "nid-uid"}
-        )
-        await listeners[EVENT_NOTIFICATION_DELIVERED](ev)
-
-        action_ev = self._make_event(
-            {"tag": "nid-uid", "action": "OK"}, user_id="user-abc"
-        )
-        await listeners["mobile_app_notification_action"](action_ev)
-
-        kwargs = hass.bus.async_fire.call_args.kwargs
-        assert kwargs.get("context") is action_ev.context
-        assert action_ev.context.user_id == "user-abc"
-        _, payload = hass.bus.async_fire.call_args.args
-        assert "user_id" not in payload
-
-    async def test_mobile_app_action_omits_user_id_when_none(self):
-        """ans_notification_acknowledged omits user_id when context carries no user."""
-        hass, entry, system, listeners, _ = await self._setup()
-
-        ev = self._make_event(
-            {"channel_id": "notify.mobile_app_phone", "notification_id": "nid-nouid"}
-        )
-        await listeners[EVENT_NOTIFICATION_DELIVERED](ev)
-
-        action_ev = self._make_event({"tag": "nid-nouid"}, user_id=None)
-        await listeners["mobile_app_notification_action"](action_ev)
-
-        _, payload = hass.bus.async_fire.call_args.args
-        assert "user_id" not in payload
-
-    async def test_mobile_app_fires_with_event_context(self):
-        """hass.bus.async_fire is called with context= taken from the companion app event."""
-        hass, entry, system, listeners, _ = await self._setup()
-
-        ev = self._make_event(
-            {"channel_id": "notify.mobile_app_phone", "notification_id": "nid-ctx"}
-        )
-        await listeners[EVENT_NOTIFICATION_DELIVERED](ev)
-
-        action_ev = self._make_event(
-            {"tag": "nid-ctx", "action": "ACK"}, user_id="user-ctx"
-        )
-        await listeners["mobile_app_notification_action"](action_ev)
-
-        kwargs = hass.bus.async_fire.call_args.kwargs
-        assert kwargs.get("context") is action_ev.context
-
-    async def test_mobile_tapped_context_carries_user_id(self):
-        """mobile_app_notification_tapped forwards event context (with user_id) to async_fire."""
-        hass, entry, system, listeners, _ = await self._setup()
-
-        ev = self._make_event(
-            {"channel_id": "notify.mobile_app_phone", "notification_id": "nid-tap-uid"}
-        )
-        await listeners[EVENT_NOTIFICATION_DELIVERED](ev)
-
-        tap_ev = self._make_event({"tag": "nid-tap-uid"}, user_id="user-tap")
-        await listeners["mobile_app_notification_tapped"](tap_ev)
-
-        kwargs = hass.bus.async_fire.call_args.kwargs
-        assert kwargs.get("context") is tap_ev.context
-        assert tap_ev.context.user_id == "user-tap"
-        _, payload = hass.bus.async_fire.call_args.args
-        assert "user_id" not in payload
-
-    # ------------------------------------------------------------------
-    # user_id — persistent_notification via call_service interception
-    # ------------------------------------------------------------------
-
-    async def test_persistent_notification_user_id_from_call_service(self):
-        """Context captured from call_service is forwarded to async_fire; user_id is not in data."""
-        hass, entry, system, listeners, dispatcher_cbs = await self._setup()
-
-        # Deliver the persistent notification so it's in _pending_meta.
-        ev = self._make_event(
-            {"channel_id": PERSISTENT_NOTIFICATION_CHANNEL, "notification_id": "pn-uid"}
-        )
-        await listeners[EVENT_NOTIFICATION_DELIVERED](ev)
-
-        # Simulate the frontend calling persistent_notification.dismiss (fires call_service first).
-        cs_event = self._make_event(
-            {
-                "domain": "persistent_notification",
-                "service": "dismiss",
-                "service_data": {"notification_id": "pn-uid"},
-            },
-            user_id="user-456",
-        )
-        await listeners["call_service"](cs_event)
-
-        # Now the SIGNAL fires (dismissal completes).
-        await dispatcher_cbs[0](PNUpdateType.REMOVED, {"pn-uid": {}})
-
-        kwargs = hass.bus.async_fire.call_args.kwargs
-        assert kwargs.get("context") is cs_event.context
-        assert cs_event.context.user_id == "user-456"
-        _, payload = hass.bus.async_fire.call_args.args
-        assert "user_id" not in payload
-
-    async def test_persistent_notification_omits_user_id_without_call_service(self):
-        """When no call_service event precedes the SIGNAL, user_id is absent from the payload."""
-        hass, entry, system, listeners, dispatcher_cbs = await self._setup()
-
-        ev = self._make_event(
-            {
-                "channel_id": PERSISTENT_NOTIFICATION_CHANNEL,
-                "notification_id": "pn-nouid",
-            }
-        )
-        await listeners[EVENT_NOTIFICATION_DELIVERED](ev)
-
-        # SIGNAL fires directly (e.g. automation called async_dismiss internally).
-        await dispatcher_cbs[0](PNUpdateType.REMOVED, {"pn-nouid": {}})
-
-        _, payload = hass.bus.async_fire.call_args.args
-        assert "user_id" not in payload
-        kwargs = hass.bus.async_fire.call_args.kwargs
-        assert kwargs.get("context") is None
-
-    async def test_call_service_for_non_pending_notification_ignored(self):
-        """call_service for a notification_id not in _pending_meta is not cached."""
-        hass, entry, system, listeners, dispatcher_cbs = await self._setup()
-
-        # Fire call_service for an ID that was never delivered via ANS.
-        cs_event = self._make_event(
-            {
-                "domain": "persistent_notification",
-                "service": "dismiss",
-                "service_data": {"notification_id": "unknown-pn"},
-            },
-            user_id="user-ghost",
-        )
-        await listeners["call_service"](cs_event)
-
-        # No pending notification → subsequent SIGNAL is also ignored.
-        await dispatcher_cbs[0](PNUpdateType.REMOVED, {"unknown-pn": {}})
-        hass.bus.async_fire.assert_not_called()
-
-    async def test_call_service_for_unrelated_domain_ignored(self):
-        """call_service for a domain other than persistent_notification is ignored."""
-        hass, entry, system, listeners, dispatcher_cbs = await self._setup()
-
-        ev = self._make_event(
-            {"channel_id": PERSISTENT_NOTIFICATION_CHANNEL, "notification_id": "pn-dom"}
-        )
-        await listeners[EVENT_NOTIFICATION_DELIVERED](ev)
-
-        # call_service for a different domain — should not cache any context.
-        cs_event = self._make_event(
-            {
-                "domain": "notify",
-                "service": "dismiss",
-                "service_data": {"notification_id": "pn-dom"},
-            },
-            user_id="user-wrong",
-        )
-        await listeners["call_service"](cs_event)
-
-        # Dismiss the PN — should fire without user_id.
-        await dispatcher_cbs[0](PNUpdateType.REMOVED, {"pn-dom": {}})
-
-        _, payload = hass.bus.async_fire.call_args.args
-        assert "user_id" not in payload
-
-    async def test_async_setup_entry_calls_acknowledgement_tracking(self):
-        """async_setup_entry() calls _setup_acknowledgement_tracking with hass, entry, system."""
-        hass = _make_hass()
-        entry = _make_entry()
-        config_repo = _make_config_repo()
-        system = _make_system()
-
-        with (
-            patch("custom_components.ans.VolumeRestorationRegistry") as mock_vol,
-            patch("custom_components.ans._setup_config", return_value=config_repo),
-            patch("custom_components.ans._setup_system", return_value=system),
-            patch("custom_components.ans._setup_persistence", return_value=([], [])),
-            patch("custom_components.ans._setup_tasks"),
-            patch("custom_components.ans._setup_services"),
-            patch("custom_components.ans._setup_listeners"),
-            patch("custom_components.ans._setup_repairs"),
-            patch(
-                "custom_components.ans._setup_acknowledgement_tracking",
-                new_callable=AsyncMock,
-            ) as mock_ack,
-            patch("custom_components.ans.ir"),
-        ):
-            mock_vol.return_value.async_load = AsyncMock()
-            await async_setup_entry(hass, entry)
-
-        mock_ack.assert_called_once_with(hass, entry, system)
+        mock_tracking.assert_awaited_once_with(hass, entry, system)

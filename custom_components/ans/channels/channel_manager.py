@@ -12,11 +12,24 @@ import asyncio
 import inspect
 import logging
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from homeassistant.core import HomeAssistant
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EVENT_SERVICE_REGISTERED
+from homeassistant.core import Event, EventStateChangedData, HomeAssistant
+from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers.entity_registry import (
+    EVENT_ENTITY_REGISTRY_UPDATED,
+    EventEntityRegistryUpdatedData,
+)
+from homeassistant.helpers.event import async_track_state_added_domain
 
-from ..const import PERSISTENT_NOTIFICATION_CHANNEL, REQUIRED_MP_FEATURES
+from ..const import (
+    DOMAIN,
+    PERSISTENT_NOTIFICATION_CHANNEL,
+    REPAIR_ISSUE_STALE_CHANNEL,
+    REQUIRED_MP_FEATURES,
+)
 from ..models import ChannelInfo, ChannelScope, RecipientType
 from .base import (
     AdapterFactory,
@@ -730,3 +743,183 @@ def detect_tts_entities(hass: HomeAssistant) -> list[str]:
             continue
         results.append(entity_id)
     return sorted(results)
+
+
+# ---------------------------------------------------------------------------
+# Module-level entry-lifecycle helpers (Repairs + resync listeners)
+# ---------------------------------------------------------------------------
+# Wired up once from __init__.py's async_setup_entry; registered for the
+# lifetime of the config entry.
+
+
+def register_stale_channel_repairs(
+    hass: HomeAssistant,
+    channel_manager: ChannelManager,
+) -> None:
+    """Register the channel lifecycle callback that creates and deletes Repairs issues.
+
+    Creates a HA Repairs issue whenever a channel transitions to STALE so the user
+    sees an actionable alert in the UI.  Deletes the issue when the channel recovers.
+
+    Parameters
+    ----------
+    hass : HomeAssistant
+        Home Assistant instance used to call the issue registry helpers.
+    channel_manager : ChannelManager
+        Channel manager on which the lifecycle callback is registered.
+
+    """
+
+    def _on_channel_lifecycle_change(
+        newly_staled: list[str], newly_recovered: list[str]
+    ) -> None:
+        for channel_id in newly_staled:
+            record = channel_manager.get_record(channel_id)
+            channel_label = record.info.label if record else channel_id
+            issue_id = f"{REPAIR_ISSUE_STALE_CHANNEL}_{channel_id.replace('.', '_')}"
+            _LOGGER.debug(
+                "Creating repair issue '%s' for stale channel '%s'",
+                issue_id,
+                channel_id,
+            )
+            ir.async_create_issue(
+                hass,
+                DOMAIN,
+                issue_id,
+                is_fixable=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key=REPAIR_ISSUE_STALE_CHANNEL,
+                translation_placeholders={
+                    "channel_label": channel_label,
+                    "channel_id": channel_id,
+                },
+            )
+        for channel_id in newly_recovered:
+            issue_id = f"{REPAIR_ISSUE_STALE_CHANNEL}_{channel_id.replace('.', '_')}"
+            _LOGGER.debug(
+                "Deleting repair issue '%s' for recovered channel '%s'",
+                issue_id,
+                channel_id,
+            )
+            ir.async_delete_issue(hass, DOMAIN, issue_id)
+
+    channel_manager.set_channel_lifecycle_callback(_on_channel_lifecycle_change)
+
+
+def register_channel_resync_listeners(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    channel_manager: ChannelManager,
+) -> None:
+    """Register all event listeners for the lifetime of this config entry.
+
+    Attaches four listeners to the config entry's unload callback so they
+    are automatically removed when the entry is unloaded:
+
+    - Options update → triggers a clean config-entry reload.
+    - ``EVENT_SERVICE_REGISTERED`` → resyncs channels when a new
+      ``notify.*`` service is registered.
+    - State-added for ``media_player`` domain → resyncs channels when a
+      capable media player appears.
+    - ``EVENT_ENTITY_REGISTRY_UPDATED`` → resyncs channels when a
+      ``media_player`` entity is removed from the registry.
+
+    Resync requests during setup are deferred via
+    :meth:`ChannelManager.request_resync` and flushed once
+    :meth:`ChannelManager.finalize_setup` is called.
+
+    Parameters
+    ----------
+    hass : HomeAssistant
+        Home Assistant instance used to register event bus and state listeners.
+    entry : ConfigEntry
+        Config entry whose unload callbacks own the listener lifecycle.
+    channel_manager : ChannelManager
+        Channel manager to resync channels when relevant HA events occur.
+
+    """
+
+    # L1 — Options update → clean reload (avoids partial-state in-place updates)
+    async def update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
+        await hass.config_entries.async_reload(entry.entry_id)
+
+    entry.async_on_unload(entry.add_update_listener(update_listener))
+
+    # Notify service registration → resync channels
+    async def _on_notify_service_registered(event: Event[Any]) -> None:
+        if event.data.get("domain") != "notify":
+            return
+        service = event.data.get("service", "")
+        if service in ("notify", "send_message"):
+            return
+        _LOGGER.debug(
+            "New notify service 'notify.%s' registered — refreshing ANS channels",
+            service,
+        )
+        try:
+            await channel_manager.request_resync()
+        except Exception:
+            _LOGGER.exception(
+                "Failed to refresh channels after notify service 'notify.%s' was registered",
+                service,
+            )
+
+    entry.async_on_unload(
+        hass.bus.async_listen(EVENT_SERVICE_REGISTERED, _on_notify_service_registered)
+    )
+
+    # New media_player added → resync only if it has required features
+    async def _on_media_player_added(event: Event[EventStateChangedData]) -> None:
+        entity_id = event.data["entity_id"]
+        new_state = event.data.get("new_state")
+        supported = (
+            new_state.attributes.get("supported_features", 0) if new_state else 0
+        )
+        if (supported & REQUIRED_MP_FEATURES) != REQUIRED_MP_FEATURES:
+            _LOGGER.debug(
+                "Ignoring media_player '%s': missing required features (0x%x)",
+                entity_id,
+                supported,
+            )
+            return
+        _LOGGER.debug(
+            "Capable media_player '%s' added — refreshing ANS channels", entity_id
+        )
+        try:
+            await channel_manager.request_resync()
+        except Exception:
+            _LOGGER.exception(
+                "Failed to refresh channels after media_player '%s' was added",
+                entity_id,
+            )
+
+    entry.async_on_unload(
+        async_track_state_added_domain(hass, "media_player", _on_media_player_added)
+    )
+
+    # media_player entity removed → resync to mark channel STALE
+    async def _on_entity_registry_updated(
+        event: Event[EventEntityRegistryUpdatedData],
+    ) -> None:
+        if event.data["action"] != "remove":
+            return
+        entity_id = event.data["entity_id"]
+        if not entity_id.startswith("media_player."):
+            return
+        _LOGGER.debug(
+            "media_player entity '%s' removed — refreshing ANS channels",
+            entity_id,
+        )
+        try:
+            await channel_manager.request_resync()
+        except Exception:
+            _LOGGER.exception(
+                "Failed to refresh channels after media_player '%s' was removed",
+                entity_id,
+            )
+
+    entry.async_on_unload(
+        hass.bus.async_listen(
+            EVENT_ENTITY_REGISTRY_UPDATED, _on_entity_registry_updated
+        )
+    )

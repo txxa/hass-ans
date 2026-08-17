@@ -53,12 +53,13 @@ The integration is organized into subpackages by responsibility:
 
 | Package | Responsibility |
 |---|---|
-| [custom_components/ans/__init__.py](custom_components/ans/__init__.py) | Integration bootstrap: `async_setup_entry`/`async_unload_entry`, event wiring, persistence init |
+| [custom_components/ans/__init__.py](custom_components/ans/__init__.py) | Integration bootstrap: `async_setup_entry`/`async_unload_entry`/`async_migrate_entry` and the `_setup_*` phase sequence they call. Each phase is a thin wrapper (log + delegate) — the substantive logic lives in the module it belongs to, not here |
 | [config_flow.py](custom_components/ans/config_flow.py), [config/](custom_components/ans/config/) | Config & options flows, recipient flow, forms, validation, config repository |
 | [models/](custom_components/ans/models/) | Dataclasses/enums for payloads, recipients, policies, channels, delivery state. Re-exported via [models/__init__.py](custom_components/ans/models/__init__.py) |
-| [delivery/](custom_components/ans/delivery/) | Delivery pipeline: `orchestrator`, `processor`, `queue`, `filter_engine`, `rate_limiter`, `retry_scheduler`, `deduplication`, `factory` (`create_system`/`ANSSystem`) |
-| [channels/](custom_components/ans/channels/) | Channel adapters behind a common `base` interface: `mobile_app`, `signal`, `persistent_notification`, `tts_mediaplayer`; coordinated by `channel_manager` |
+| [delivery/](custom_components/ans/delivery/) | Delivery pipeline: `orchestrator`, `processor`, `queue`, `filter_engine`, `rate_limiter`, `retry_scheduler`, `deduplication`, `factory` (`create_system`/`ANSSystem`, including `ANSSystem.start()` for background-worker startup and retry recovery) |
+| [channels/](custom_components/ans/channels/) | Channel adapters behind a common `base` interface: `mobile_app`, `signal`, `persistent_notification`, `tts_mediaplayer`; coordinated by `channel_manager`, which also owns the Repairs-issue and channel-resync entry-lifecycle listeners (`register_stale_channel_repairs`, `register_channel_resync_listeners`) |
 | [persistence/](custom_components/ans/persistence/) | Storage layer: `base`, `file`, `memory`, `recovery`, `housekeeping`, `volume_restoration` |
+| [acknowledgement.py](custom_components/ans/acknowledgement.py) | Registers the acknowledgement-tracking event listeners (mobile app taps, persistent-notification dismissals) that fire `ans_notification_acknowledged` |
 | [service.py](custom_components/ans/service.py) | Registers and handles the `ans.send_notification` service |
 | [const.py](custom_components/ans/const.py) | Domain, event names, config keys, limits/defaults, storage filenames |
 
@@ -122,7 +123,7 @@ These patterns are already consistently applied — follow them so new code stay
 
 ## Maintainability
 
-- **Prefer extracting over growing large files.** The largest modules ([tts_mediaplayer.py](custom_components/ans/channels/tts_mediaplayer.py) at ~1130 lines, [__init__.py](custom_components/ans/__init__.py) at ~1074 lines) are already at the edge — add to them only when strictly necessary; otherwise split out a new module.
+- **Prefer extracting over growing large files.** The largest modules ([tts_mediaplayer.py](custom_components/ans/channels/tts_mediaplayer.py) at ~1130 lines, [config/recipient_flow.py](custom_components/ans/config/recipient_flow.py) at ~1030 lines, [channels/channel_manager.py](custom_components/ans/channels/channel_manager.py) at ~925 lines) are already at the edge — add to them only when strictly necessary; otherwise split out a new module. `__init__.py` (~590 lines as of R7) is intentionally kept lean: it holds only the `_setup_*` phase sequence as thin wrappers, with the substantive logic living in the module it belongs to.
 - **New exceptions belong in [exceptions.py](custom_components/ans/exceptions.py)** and must slot into the existing hierarchy (`ANSException → ANSConfigError → specific`, or `TTSDeliveryError` for delivery failures). Don't raise bare `Exception` or `HomeAssistantError` for ANS-specific failure modes.
 - **Keep ruff's max-complexity (25) as a ceiling, not a target.** Functions approaching that limit are a signal to refactor, not a budget to spend.
 - **Internal helpers belong in [helper.py](custom_components/ans/helper.py).** UI/form helpers, URL validators, label formatters — keep them there, documented, and reused rather than re-implemented inline.

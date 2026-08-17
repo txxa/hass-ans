@@ -3,10 +3,12 @@
 Provides factory functions and dependency injection for complete system setup.
 """
 
+import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
+from uuid import UUID
 
 from homeassistant.core import HomeAssistant
 
@@ -25,7 +27,7 @@ from ..const import (
     SYS_DEDUP_WINDOW_SECONDS,
     SYS_STORAGE_HOUSEKEEPING_INTERVAL_HOURS,
 )
-from ..models import TaskOutcome
+from ..models import NotificationDeliveryTask, TaskOutcome
 from ..persistence.file import (
     AcknowledgementRegistry,
     DeliveryAttemptLog,
@@ -66,6 +68,70 @@ class ANSSystem:
     acknowledgement_registry: AcknowledgementRegistry
     housekeeping_scheduler: HousekeepingScheduler
     deduplication_service: DeduplicationService
+
+    async def start(
+        self,
+        pending_tasks: list[tuple[NotificationDeliveryTask, datetime]],
+        orphaned_retries: list[str],
+    ) -> None:
+        """Start background workers and schedule recovered retries.
+
+        Parameters
+        ----------
+        pending_tasks : list[tuple[NotificationDeliveryTask, datetime]]
+            ``(task, scheduled_time)`` pairs from persistence recovery.
+        orphaned_retries : list[str]
+            Job-ID strings whose task snapshots could not be recovered.
+
+        """
+        await asyncio.gather(
+            self.task_queue.start(),
+            self.housekeeping_scheduler.start(),
+            self.deduplication_service.start(),
+        )
+        _LOGGER.debug("ANS background workers started")
+
+        now = datetime.now(UTC)
+        pending_coros = []
+        for task, scheduled_time in pending_tasks:
+            delay_seconds = max((scheduled_time - now).total_seconds(), 0)
+            if delay_seconds == 0:
+                _LOGGER.info(
+                    "Retry for job %s is overdue, executing immediately",
+                    task.job_id,
+                )
+            pending_coros.append(
+                self.task_queue.add_task(task, delay=timedelta(seconds=delay_seconds))
+            )
+        if pending_coros:
+            enqueue_results = await asyncio.gather(
+                *pending_coros, return_exceptions=True
+            )
+            for result in enqueue_results:
+                if isinstance(result, BaseException):
+                    _LOGGER.error(
+                        "Failed to re-enqueue a recovered retry task: %s",
+                        result,
+                    )
+
+        remove_coros = []
+        for job_id_str in orphaned_retries:
+            _LOGGER.warning(
+                "Removing orphaned retry schedule for job %s (no task data)",
+                job_id_str,
+            )
+            try:
+                remove_coros.append(self.retry_queue.remove_retry(UUID(job_id_str)))
+            except ValueError:
+                _LOGGER.error("Invalid UUID for orphaned retry: %s", job_id_str)
+        if remove_coros:
+            remove_results = await asyncio.gather(*remove_coros, return_exceptions=True)
+            for result in remove_results:
+                if isinstance(result, BaseException):
+                    _LOGGER.error(
+                        "Failed to remove orphaned retry from queue: %s",
+                        result,
+                    )
 
 
 @dataclass(frozen=True)

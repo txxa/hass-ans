@@ -4,42 +4,28 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from uuid import UUID
 
-from homeassistant.components.persistent_notification import (
-    SIGNAL_PERSISTENT_NOTIFICATIONS_UPDATED,
-)
-from homeassistant.components.persistent_notification import (
-    UpdateType as PNUpdateType,
-)
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EVENT_CALL_SERVICE, EVENT_SERVICE_REGISTERED
-from homeassistant.core import Context, Event, EventStateChangedData, HomeAssistant
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import issue_registry as ir
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
-from homeassistant.helpers.entity_registry import (
-    EVENT_ENTITY_REGISTRY_UPDATED,
-    EventEntityRegistryUpdatedData,
-)
-from homeassistant.helpers.event import async_track_state_added_domain
 
 from custom_components.ans.config_flow import ANSConfigFlow
 
+from .acknowledgement import async_setup_acknowledgement_tracking
 from .channels.base import ChannelStatus
-from .channels.channel_manager import ChannelManager
-from .channels.mobile_app import MobileAppDeliveryAdapter
+from .channels.channel_manager import (
+    ChannelManager,
+    register_channel_resync_listeners,
+    register_stale_channel_repairs,
+)
 from .config.repository import ConfigRepository
 from .const import (
     DOMAIN,
-    EVENT_NOTIFICATION_ACKNOWLEDGED,
-    EVENT_NOTIFICATION_DELIVERED,
-    PERSISTENT_NOTIFICATION_CHANNEL,
     REPAIR_ISSUE_STALE_CHANNEL,
-    REQUIRED_MP_FEATURES,
     SYS_CONFIG_RETRY_BACKOFF_FACTOR_KEY,
     SYS_CONFIG_RETRY_BASE_DELAY_KEY,
     SYS_CONFIG_RETRY_MAX_DELAY_KEY,
@@ -197,52 +183,7 @@ async def _setup_tasks(
 
     """
     _LOGGER.info("[ANS setup] Phase 4/5 — starting background tasks")
-    await asyncio.gather(
-        system.task_queue.start(),
-        system.housekeeping_scheduler.start(),
-        system.deduplication_service.start(),
-    )
-    _LOGGER.debug("[ANS setup] Background workers started")
-
-    now = datetime.now(UTC)
-    pending_coros = []
-    for task, scheduled_time in pending_tasks:
-        delay_seconds = max((scheduled_time - now).total_seconds(), 0)
-        if delay_seconds == 0:
-            _LOGGER.info(
-                "[ANS setup] Retry for job %s is overdue, executing immediately",
-                task.job_id,
-            )
-        pending_coros.append(
-            system.task_queue.add_task(task, delay=timedelta(seconds=delay_seconds))
-        )
-    if pending_coros:
-        enqueue_results = await asyncio.gather(*pending_coros, return_exceptions=True)
-        for result in enqueue_results:
-            if isinstance(result, BaseException):
-                _LOGGER.error(
-                    "[ANS setup] Failed to re-enqueue a recovered retry task: %s",
-                    result,
-                )
-
-    remove_coros = []
-    for job_id_str in orphaned_retries:
-        _LOGGER.warning(
-            "[ANS setup] Removing orphaned retry schedule for job %s (no task data)",
-            job_id_str,
-        )
-        try:
-            remove_coros.append(system.retry_queue.remove_retry(UUID(job_id_str)))
-        except ValueError:
-            _LOGGER.error("[ANS setup] Invalid UUID for orphaned retry: %s", job_id_str)
-    if remove_coros:
-        remove_results = await asyncio.gather(*remove_coros, return_exceptions=True)
-        for result in remove_results:
-            if isinstance(result, BaseException):
-                _LOGGER.error(
-                    "[ANS setup] Failed to remove orphaned retry from queue: %s",
-                    result,
-                )
+    await system.start(pending_tasks, orphaned_retries)
 
 
 async def _setup_services(hass: HomeAssistant, system: ANSSystem) -> None:
@@ -258,9 +199,6 @@ def _setup_repairs(
 ) -> None:
     """Register the channel lifecycle callback that creates and deletes Repairs issues.
 
-    Creates a HA Repairs issue whenever a channel transitions to STALE so the user
-    sees an actionable alert in the UI.  Deletes the issue when the channel recovers.
-
     Parameters
     ----------
     hass : HomeAssistant
@@ -269,41 +207,7 @@ def _setup_repairs(
         Channel manager on which the lifecycle callback is registered.
 
     """
-
-    def _on_channel_lifecycle_change(
-        newly_staled: list[str], newly_recovered: list[str]
-    ) -> None:
-        for channel_id in newly_staled:
-            record = channel_manager.get_record(channel_id)
-            channel_label = record.info.label if record else channel_id
-            issue_id = f"{REPAIR_ISSUE_STALE_CHANNEL}_{channel_id.replace('.', '_')}"
-            _LOGGER.debug(
-                "Creating repair issue '%s' for stale channel '%s'",
-                issue_id,
-                channel_id,
-            )
-            ir.async_create_issue(
-                hass,
-                DOMAIN,
-                issue_id,
-                is_fixable=False,
-                severity=ir.IssueSeverity.WARNING,
-                translation_key=REPAIR_ISSUE_STALE_CHANNEL,
-                translation_placeholders={
-                    "channel_label": channel_label,
-                    "channel_id": channel_id,
-                },
-            )
-        for channel_id in newly_recovered:
-            issue_id = f"{REPAIR_ISSUE_STALE_CHANNEL}_{channel_id.replace('.', '_')}"
-            _LOGGER.debug(
-                "Deleting repair issue '%s' for recovered channel '%s'",
-                issue_id,
-                channel_id,
-            )
-            ir.async_delete_issue(hass, DOMAIN, issue_id)
-
-    channel_manager.set_channel_lifecycle_callback(_on_channel_lifecycle_change)
+    register_stale_channel_repairs(hass, channel_manager)
 
 
 def _setup_listeners(
@@ -312,21 +216,6 @@ def _setup_listeners(
     channel_manager: ChannelManager,
 ) -> None:
     """Register all event listeners for the lifetime of this config entry.
-
-    Attaches four listeners to the config entry's unload callback so they
-    are automatically removed when the entry is unloaded:
-
-    - Options update → triggers a clean config-entry reload.
-    - ``EVENT_SERVICE_REGISTERED`` → resyncs channels when a new
-      ``notify.*`` service is registered.
-    - State-added for ``media_player`` domain → resyncs channels when a
-      capable media player appears.
-    - ``EVENT_ENTITY_REGISTRY_UPDATED`` → resyncs channels when a
-      ``media_player`` entity is removed from the registry.
-
-    Resync requests during setup are deferred via
-    :meth:`ChannelManager.request_resync` and flushed once
-    :meth:`ChannelManager.finalize_setup` is called.
 
     Parameters
     ----------
@@ -338,98 +227,7 @@ def _setup_listeners(
         Channel manager to resync channels when relevant HA events occur.
 
     """
-
-    # L1 — Options update → clean reload (avoids partial-state in-place updates)
-    async def update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
-        await hass.config_entries.async_reload(entry.entry_id)
-
-    entry.async_on_unload(entry.add_update_listener(update_listener))
-
-    # Notify service registration → resync channels
-    async def _on_notify_service_registered(event: Event[Any]) -> None:
-        if event.data.get("domain") != "notify":
-            return
-        service = event.data.get("service", "")
-        if service in ("notify", "send_message"):
-            return
-        _LOGGER.debug(
-            "New notify service 'notify.%s' registered — refreshing ANS channels",
-            service,
-        )
-        try:
-            await channel_manager.request_resync()
-        except Exception:
-            _LOGGER.exception(
-                "Failed to refresh channels after notify service 'notify.%s' was registered",
-                service,
-            )
-
-    entry.async_on_unload(
-        hass.bus.async_listen(EVENT_SERVICE_REGISTERED, _on_notify_service_registered)
-    )
-
-    # New media_player added → resync only if it has required features
-    async def _on_media_player_added(event: Event[EventStateChangedData]) -> None:
-        entity_id = event.data["entity_id"]
-        new_state = event.data.get("new_state")
-        supported = (
-            new_state.attributes.get("supported_features", 0) if new_state else 0
-        )
-        if (supported & REQUIRED_MP_FEATURES) != REQUIRED_MP_FEATURES:
-            _LOGGER.debug(
-                "Ignoring media_player '%s': missing required features (0x%x)",
-                entity_id,
-                supported,
-            )
-            return
-        _LOGGER.debug(
-            "Capable media_player '%s' added — refreshing ANS channels", entity_id
-        )
-        try:
-            await channel_manager.request_resync()
-        except Exception:
-            _LOGGER.exception(
-                "Failed to refresh channels after media_player '%s' was added",
-                entity_id,
-            )
-
-    entry.async_on_unload(
-        async_track_state_added_domain(hass, "media_player", _on_media_player_added)
-    )
-
-    # media_player entity removed → resync to mark channel STALE
-    async def _on_entity_registry_updated(
-        event: Event[EventEntityRegistryUpdatedData],
-    ) -> None:
-        if event.data["action"] != "remove":
-            return
-        entity_id = event.data["entity_id"]
-        if not entity_id.startswith("media_player."):
-            return
-        _LOGGER.debug(
-            "media_player entity '%s' removed — refreshing ANS channels",
-            entity_id,
-        )
-        try:
-            await channel_manager.request_resync()
-        except Exception:
-            _LOGGER.exception(
-                "Failed to refresh channels after media_player '%s' was removed",
-                entity_id,
-            )
-
-    entry.async_on_unload(
-        hass.bus.async_listen(
-            EVENT_ENTITY_REGISTRY_UPDATED, _on_entity_registry_updated
-        )
-    )
-
-
-def _mobile_device_name(channel_id: str) -> str | None:
-    """Return the device-name slug for a mobile_app channel_id, or None for other channels."""
-    if not channel_id.startswith(MobileAppDeliveryAdapter.CHANNEL_PREFIX):
-        return None
-    return channel_id.removeprefix(MobileAppDeliveryAdapter.CHANNEL_PREFIX) or None
+    register_channel_resync_listeners(hass, entry, channel_manager)
 
 
 async def _setup_acknowledgement_tracking(
@@ -438,29 +236,6 @@ async def _setup_acknowledgement_tracking(
     system: ANSSystem,
 ) -> None:
     """Register event listeners for notification acknowledgement tracking (NH-3).
-
-    Four listeners are registered:
-
-    1. ``ans_notification_delivered`` — when a mobile_app or
-       persistent_notification delivery succeeds, persist a ``pending`` record
-       via :meth:`AcknowledgementRegistry.mark_pending` so that eligibility
-       survives HA restarts.
-
-    2. ``mobile_app_notification_action`` — fired by the HA mobile companion app
-       when the user taps an action button.  If the ``tag`` field matches a
-       pending notification the acknowledgement is recorded and
-       ``ans_notification_acknowledged`` is fired with ``action`` and
-       ``device_name`` included when available.
-
-    3. ``mobile_app_notification_tapped`` — fired by the HA mobile companion app
-       when the user taps the notification body.  Treated identically to an
-       action tap for acknowledgement purposes (no ``action`` field in payload).
-
-    4. ``persistent_notification.removed`` — fired when a persistent notification
-       is dismissed in the HA frontend.  If ``notification_id`` matches a pending
-       entry the same acknowledgement flow runs.
-
-    All listeners are unloaded automatically when the config entry is unloaded.
 
     Parameters
     ----------
@@ -472,270 +247,7 @@ async def _setup_acknowledgement_tracking(
         Active ANS system; provides ``acknowledgement_registry``.
 
     """
-    acknowledgement_registry = system.acknowledgement_registry
-
-    # Restore eligibility from the durable store so that notifications delivered
-    # before an HA restart remain acknowledgeable in the current session.
-    # _pending_meta maps notification_id → delivery channel_id; used for
-    # membership checks and for deriving device_name on acknowledgement.
-    _pending_meta: dict[
-        str, str
-    ] = await acknowledgement_registry.get_pending_channel_ids()
-    # Restore custom-tag → notification_id mapping so notifications sent with
-    # channel_data.tag can still be correlated after a restart.
-    _tag_to_notif_id: dict[
-        str, str
-    ] = await acknowledgement_registry.get_pending_mobile_tags()
-    # Temporary store for the HA Context captured from call_service events for
-    # persistent_notification.dismiss — keyed by ANS notification_id (UUID).
-    # Populated just before the service executes; consumed when the dispatcher
-    # signal fires (within the same synchronous call chain).
-    _pn_dismiss_context: dict[str, Context] = {}
-    if _pending_meta:
-        _LOGGER.debug(
-            "Restored %d pending ack(s) from persistent store on startup",
-            len(_pending_meta),
-        )
-
-    async def _on_notification_delivered(event: Event[Any]) -> None:
-        """Persist a pending-ack record when a mobile_app or persistent_notification delivers."""
-        channel_id: str = event.data.get("channel_id", "")
-        notification_id: str = event.data.get("notification_id", "")
-        if not notification_id:
-            return
-        if (
-            channel_id.startswith(MobileAppDeliveryAdapter.CHANNEL_PREFIX)
-            or channel_id == PERSISTENT_NOTIFICATION_CHANNEL
-        ):
-            # mobile_tag is set by MobileAppDeliveryAdapter only when the
-            # effective data.tag is a custom value (differs from the UUID).
-            mobile_tag: str | None = event.data.get("mobile_tag")
-            recorded = await acknowledgement_registry.mark_pending(
-                notification_id=notification_id,
-                channel_id=channel_id,
-                delivered_at=datetime.now(UTC),
-                mobile_tag=mobile_tag,
-            )
-            if recorded:
-                _pending_meta[notification_id] = channel_id
-                _LOGGER.debug(
-                    "Pending ack registered for notification_id '%s' (channel=%s)",
-                    notification_id,
-                    channel_id,
-                )
-            # Always register the mobile_tag regardless of whether a new pending
-            # record was created.  When persistent_notification delivers before
-            # mobile, mark_pending returns False for the mobile delivery (one
-            # record per notification_id), but we still need the
-            # tag → notification_id mapping so mobile events can be resolved.
-            # The adapter only sets mobile_tag when it differs from notification_id
-            # (custom channel_data.tag), so no equality guard is needed here.
-            if mobile_tag:
-                _tag_to_notif_id[mobile_tag] = notification_id
-                if not recorded:
-                    _LOGGER.debug(
-                        "Mobile tag '%s' registered for already-tracked notification '%s'",
-                        mobile_tag,
-                        notification_id,
-                    )
-        else:
-            _LOGGER.debug(
-                "Delivered notification '%s' on channel '%s' is not tracked for acknowledgement",
-                notification_id,
-                channel_id,
-            )
-
-    entry.async_on_unload(
-        hass.bus.async_listen(EVENT_NOTIFICATION_DELIVERED, _on_notification_delivered)
-    )
-
-    async def _handle_mobile_ack(
-        tag: str | None, action: str | None, event_context: Context
-    ) -> None:
-        """Shared acknowledgement logic for action-button taps and notification-body taps."""
-        if not tag:
-            _LOGGER.debug(
-                "Mobile notification event ignored: event data contains no 'tag' field"
-            )
-            return
-
-        # Resolve custom tag → canonical notification_id UUID.  When the
-        # notification was sent with channel_data.tag, the companion app echoes
-        # that custom tag back; _tag_to_notif_id maps it to the UUID stored in
-        # _pending_meta.  Falls back to tag itself for the common case where
-        # tag == notification_id (no custom tag).
-        notification_id: str = _tag_to_notif_id.get(tag, tag)
-
-        if notification_id not in _pending_meta:
-            _LOGGER.debug(
-                "Mobile notification event ignored: tag '%s' (resolved to '%s') "
-                "is not in pending acks (notification unknown or already acknowledged)",
-                tag,
-                notification_id,
-            )
-            return
-
-        acknowledged_at = datetime.now(UTC)
-
-        # notification_id is in _pending_meta (early-returned above if not), so
-        # direct key access is safe and avoids an unnecessary fallback expression.
-        delivery_channel: str = _pending_meta[notification_id]
-        device_name: str | None = _mobile_device_name(delivery_channel)
-
-        recorded = await acknowledgement_registry.record_acknowledgement(
-            notification_id=notification_id,
-            channel_id=delivery_channel,
-            acknowledged_at=acknowledged_at,
-        )
-        if recorded:
-            _pending_meta.pop(notification_id, None)
-            _tag_to_notif_id.pop(tag, None)
-            payload: dict[str, Any] = {
-                "notification_id": notification_id,
-                "channel_id": "mobile_app",
-                "acknowledged_at": acknowledged_at.isoformat(),
-            }
-            if action:
-                payload["method"] = "action_button"
-                payload["action"] = action
-            else:
-                payload["method"] = "notification_tap"
-            if device_name is not None:
-                payload["device_name"] = device_name
-            hass.bus.async_fire(
-                EVENT_NOTIFICATION_ACKNOWLEDGED, payload, context=event_context
-            )
-            _LOGGER.debug(
-                "Notification '%s' acknowledged via mobile_app "
-                "(action=%s device_name=%s user_id=%s)",
-                notification_id,
-                action,
-                device_name,
-                event_context.user_id,
-            )
-        else:
-            _LOGGER.debug(
-                "Mobile notification event for tag '%s' (notification_id='%s'): "
-                "acknowledgement not recorded (already acknowledged or registry write failed)",
-                tag,
-                notification_id,
-            )
-
-    async def _on_mobile_app_event(event: Event[Any]) -> None:
-        """Handle mobile_app action-button and notification-tap events.
-
-        Both event types are routed through the same handler.  For
-        ``mobile_app_notification_action`` the ``action`` field carries the
-        identifier of the tapped button; for ``mobile_app_notification_tapped``
-        the field is absent so ``event.data.get("action")`` returns ``None``,
-        which ``_handle_mobile_ack`` maps to method ``notification_tap``.
-        """
-        await _handle_mobile_ack(
-            tag=event.data.get("tag"),
-            action=event.data.get("action"),
-            event_context=event.context,
-        )
-
-    entry.async_on_unload(
-        hass.bus.async_listen("mobile_app_notification_action", _on_mobile_app_event)
-    )
-    entry.async_on_unload(
-        hass.bus.async_listen("mobile_app_notification_tapped", _on_mobile_app_event)
-    )
-
-    async def _on_call_service(event: Event[Any]) -> None:
-        """Capture the HA context from persistent_notification.dismiss service calls.
-
-        EVENT_CALL_SERVICE fires with the caller's context before the service
-        executes, which is the only point at which user identity is available for
-        persistent notification dismissals.  The context is stored temporarily
-        and consumed when SIGNAL_PERSISTENT_NOTIFICATIONS_UPDATED fires (within
-        the same synchronous call chain).
-        """
-        if (
-            event.data.get("domain") == "persistent_notification"
-            and event.data.get("service") == "dismiss"
-        ):
-            # .get(..., "") means an absent key yields "" which is never in _pending_meta.
-            nid: str = event.data.get("service_data", {}).get("notification_id", "")
-            if nid in _pending_meta:
-                _pn_dismiss_context[nid] = event.context
-
-    entry.async_on_unload(hass.bus.async_listen(EVENT_CALL_SERVICE, _on_call_service))
-
-    async def _on_persistent_notification_removed(
-        update_type: PNUpdateType, notifications: dict
-    ) -> None:
-        """Handle persistent notification dismissal — counts as acknowledgement.
-
-        Called by the HA dispatcher with UpdateType.REMOVED when the user dismisses
-        a persistent notification.  ``notifications`` is the dict of removed entries
-        keyed by notification_id.
-        """
-        if update_type != PNUpdateType.REMOVED:
-            return
-
-        for notification_id in notifications:
-            if notification_id not in _pending_meta:
-                _LOGGER.debug(
-                    "persistent_notification removal ignored for '%s': not in pending acks",
-                    notification_id,
-                )
-                continue
-
-            # Retrieve and discard the context captured by _on_call_service (if any).
-            # Present when dismissed via the service (e.g. frontend); absent when
-            # dismissed programmatically via async_dismiss directly.
-            dismiss_context: Context | None = _pn_dismiss_context.pop(
-                notification_id, None
-            )
-
-            acknowledged_at = datetime.now(UTC)
-            recorded = await acknowledgement_registry.record_acknowledgement(
-                notification_id=notification_id,
-                channel_id=PERSISTENT_NOTIFICATION_CHANNEL,
-                acknowledged_at=acknowledged_at,
-            )
-            if recorded:
-                _pending_meta.pop(notification_id, None)
-                # Clean up any custom-tag mappings that pointed to this notification
-                # so stale entries don't linger in _tag_to_notif_id.
-                kept = {
-                    t: v for t, v in _tag_to_notif_id.items() if v != notification_id
-                }
-                _tag_to_notif_id.clear()
-                _tag_to_notif_id.update(kept)
-                pn_payload: dict[str, Any] = {
-                    "notification_id": notification_id,
-                    "channel_id": PERSISTENT_NOTIFICATION_CHANNEL,
-                    "acknowledged_at": acknowledged_at.isoformat(),
-                    "method": "persistent_notification_dismiss",
-                }
-                hass.bus.async_fire(
-                    EVENT_NOTIFICATION_ACKNOWLEDGED,
-                    pn_payload,
-                    context=dismiss_context,
-                )
-                _LOGGER.debug(
-                    "Notification '%s' acknowledged via persistent_notification dismissal "
-                    "(user_id=%s)",
-                    notification_id,
-                    getattr(dismiss_context, "user_id", None),
-                )
-            else:
-                _LOGGER.debug(
-                    "persistent_notification dismissal for '%s': acknowledgement not recorded "
-                    "(already acknowledged or registry write failed)",
-                    notification_id,
-                )
-
-    entry.async_on_unload(
-        async_dispatcher_connect(
-            hass,
-            SIGNAL_PERSISTENT_NOTIFICATIONS_UPDATED,
-            _on_persistent_notification_removed,
-        )
-    )
+    await async_setup_acknowledgement_tracking(hass, entry, system)
 
 
 # ---------------------------------------------------------------------------
